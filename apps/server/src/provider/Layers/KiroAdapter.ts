@@ -17,12 +17,16 @@ import {
   type KiroSettings,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
+  type ProviderSendTurnInput,
   type ProviderSession,
+  type ProviderSessionStartInput,
+  type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ProviderDriverKind,
   ProviderInstanceId,
+  RuntimeRequestId,
   type ThreadId,
-  type TurnId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -38,12 +42,16 @@ import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
+import type * as EffectAcpErrors from "effect-acp/errors";
+
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import { acpPermissionOutcome } from "../acp/AcpAdapterSupport.ts";
+import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
@@ -51,9 +59,11 @@ import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
+  makeAcpRequestOpenedEvent,
+  makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
-import { makeKiroAcpRuntime } from "../acp/KiroAcpSupport.ts";
+import { makeKiroAcpRuntime, resolveKiroAcpModelId } from "../acp/KiroAcpSupport.ts";
 
 const PROVIDER = ProviderDriverKind.make("kiro");
 
@@ -209,11 +219,31 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
     // stream because an id could not be generated would be a far worse
     // outcome than a fallback id.
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+    const nextRawUuid = crypto.randomUUIDv4.pipe(Effect.orDie);
     const nextEventId = crypto.randomUUIDv4.pipe(
       Effect.map((id) => EventId.make(id)),
       Effect.orDie,
     );
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
+
+    /** Wrap an ACP failure in the adapter's process-error shape. */
+    const acpFailable = <A>(
+      ctx: KiroSessionContext,
+      effect: Effect.Effect<A, EffectAcpErrors.AcpError>,
+    ): Effect.Effect<A, ProviderAdapterProcessError> =>
+      effect.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              detail: cause.message,
+              cause,
+            }),
+        ),
+      );
+
+    const acpSetModel = (ctx: KiroSessionContext, model: string) => ctx.acp.setModel(model);
 
     /**
      * Translate one ACP runtime event into T3's runtime events.
@@ -350,6 +380,284 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             // consumer.
             return;
         }
+      });
+
+    /**
+     * Start a Kiro session for a thread.
+     *
+     * An existing live session for the same thread is torn down first: T3 owns
+     * the mapping thread -> session, and leaving a second ACP child alive for
+     * one thread means two processes both think they are it.
+     *
+     * The session scope is created here and only transferred into the context
+     * once construction has fully succeeded. Until then a finalizer closes it,
+     * so a failure part-way through cannot leak a running child.
+     */
+    const startSession = (
+      input: ProviderSessionStartInput,
+    ): Effect.Effect<
+      ProviderSession,
+      ProviderAdapterProcessError | ProviderAdapterValidationError
+    > =>
+      withThreadLock(
+        input.threadId,
+        Effect.gen(function* () {
+          if (input.provider !== undefined && input.provider !== PROVIDER) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
+            });
+          }
+          if (!input.cwd?.trim()) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: "cwd is required and must be non-empty.",
+            });
+          }
+
+          const cwd = path.resolve(input.cwd.trim());
+          const existing = sessions.get(input.threadId);
+          if (existing && !existing.stopped) {
+            yield* stopSessionInternal(existing);
+          }
+
+          // Selections are only honored for this instance: another instance's
+          // model id means nothing to this CLI.
+          const modelSelection =
+            input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
+          const model = resolveKiroAcpModelId(modelSelection?.model);
+
+          const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
+          const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
+
+          const sessionScope = yield* Scope.make("sequential");
+          let sessionScopeTransferred = false;
+          yield* Effect.addFinalizer(() =>
+            sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
+          );
+
+          let ctx!: KiroSessionContext;
+
+          const effectiveSettings = options?.resolveSettings
+            ? yield* options.resolveSettings
+            : kiroSettings;
+
+          const acpNativeLoggers = makeAcpNativeLoggers({
+            nativeEventLogger: options?.nativeEventLogger,
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
+
+          const acp = yield* makeKiroAcpRuntime({
+            kiroSettings: effectiveSettings,
+            ...(options?.environment ? { environment: options.environment } : {}),
+            childProcessSpawner,
+            cwd,
+            runtimeMode: input.runtimeMode,
+            clientInfo: { name: "t3-code", version: "0.0.0" },
+            ...acpNativeLoggers,
+          }).pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(Scope.Scope, sessionScope),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterProcessError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+
+          /**
+           * Permission requests arrive here. In `full-access` the agent should
+           * never be asked, so the trust flags handle it at spawn time and
+           * anything still arriving is surfaced rather than auto-approved —
+           * silently approving an unexpected request would defeat the point of
+           * the modes.
+           *
+           * The Deferred is registered BEFORE the event is emitted, so a very
+           * fast UI response cannot arrive before there is anything to settle.
+           */
+          yield* acp
+            .handleRequestPermission((params) =>
+              Effect.gen(function* () {
+                const permissionRequest = parsePermissionRequest(params);
+                const requestId = ApprovalRequestId.make(yield* nextRawUuid);
+                const runtimeRequestId = RuntimeRequestId.make(requestId);
+                const decision = yield* Deferred.make<ProviderApprovalDecision>();
+                pendingApprovals.set(requestId, {
+                  decision,
+                  kind: permissionRequest.kind,
+                });
+                yield* offerRuntimeEvent(
+                  makeAcpRequestOpenedEvent({
+                    stamp: yield* makeEventStamp(),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId: ctx?.activeTurnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    detail: permissionRequest.detail ?? "Kiro requested permission.",
+                    args: params,
+                    source: "acp.jsonrpc",
+                    method: "session/request_permission",
+                    rawPayload: params,
+                  }),
+                );
+                const resolved = yield* Deferred.await(decision);
+                pendingApprovals.delete(requestId);
+                yield* offerRuntimeEvent(
+                  makeAcpRequestResolvedEvent({
+                    stamp: yield* makeEventStamp(),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId: ctx?.activeTurnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    decision: resolved,
+                  }),
+                );
+                return {
+                  outcome:
+                    resolved === "cancel"
+                      ? ({ outcome: "cancelled" } as const)
+                      : ({
+                          outcome: "selected" as const,
+                          optionId: acpPermissionOutcome(resolved),
+                        } as const),
+                };
+              }),
+            )
+            .pipe(Effect.provideService(Scope.Scope, sessionScope));
+
+          const started = yield* acp.start().pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterProcessError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+
+          const createdAt = yield* nowIso;
+          ctx = {
+            threadId: input.threadId,
+            session: {
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              status: "ready",
+              runtimeMode: input.runtimeMode,
+              cwd,
+              model,
+              threadId: input.threadId,
+              resumeCursor: { version: 1, sessionId: started.sessionId },
+              createdAt,
+              updatedAt: createdAt,
+            },
+            scope: sessionScope,
+            acp,
+            notificationFiber: undefined,
+            pendingApprovals,
+            pendingUserInputs,
+            turns: [],
+            activeTurnId: undefined,
+            promptsInFlight: 0,
+            stopped: false,
+          };
+
+          // The pump runs for the session's lifetime, in the session scope, so
+          // closing that scope is all teardown needs to do.
+          ctx.notificationFiber = yield* Effect.forkIn(
+            Stream.runDrain(Stream.mapEffect(acp.getEvents(), (event) => pumpAcpEvent(ctx, event))),
+            sessionScope,
+          );
+
+          sessions.set(input.threadId, ctx);
+          sessionScopeTransferred = true;
+          return ctx.session;
+        }).pipe(Effect.scoped),
+      );
+
+    /**
+     * Send a turn.
+     *
+     * A `sendTurn` arriving while a turn is already running is a STEER, not a
+     * new turn: it continues the active turn id, and `promptsInFlight` makes
+     * sure only the last prompt to finish settles it. Treating it as a new turn
+     * would split one conversational exchange across two T3 turns.
+     */
+    const sendTurn = (
+      input: ProviderSendTurnInput,
+    ): Effect.Effect<
+      ProviderTurnStartResult,
+      | ProviderAdapterSessionNotFoundError
+      | ProviderAdapterProcessError
+      | ProviderAdapterValidationError
+    > =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(input.threadId);
+
+        const text = input.input?.trim();
+        if (!text) {
+          // kiro-cli has no promptless continuation, which is why
+          // `capabilities.promptlessTurnContinuation` is not declared. Failing
+          // loudly beats sending an empty prompt the agent cannot act on.
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Kiro requires prompt text; it does not support promptless continuation.",
+          });
+        }
+
+        const isSteer = ctx.promptsInFlight > 0 && ctx.activeTurnId !== undefined;
+        const turnId = isSteer ? ctx.activeTurnId! : TurnId.make(yield* nextRawUuid);
+        if (!isSteer) {
+          ctx.activeTurnId = turnId;
+          ctx.turns.push({ id: turnId, items: [] });
+        }
+
+        // Model switching is in-session, so a selection is applied before the
+        // prompt rather than requiring a new thread.
+        const requestedModel =
+          input.modelSelection?.instanceId === boundInstanceId
+            ? resolveKiroAcpModelId(input.modelSelection.model)
+            : undefined;
+        if (requestedModel && requestedModel !== ctx.session.model) {
+          yield* acpFailable(ctx, acpSetModel(ctx, requestedModel));
+          ctx.session = { ...ctx.session, model: requestedModel };
+        }
+
+        ctx.promptsInFlight += 1;
+        const updatedAt = yield* nowIso;
+        ctx.session = { ...ctx.session, status: "running", activeTurnId: turnId, updatedAt };
+
+        // The prompt is forked: `sendTurn` returns as soon as the turn is
+        // registered, and the answer arrives through the event pump. Awaiting
+        // it here would block the caller for the whole model turn.
+        yield* Effect.forkIn(
+          ctx.acp.prompt({ prompt: [{ type: "text", text }] }).pipe(
+            Effect.ignore,
+            Effect.ensuring(
+              Effect.sync(() => {
+                ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);
+                if (ctx.promptsInFlight === 0) {
+                  ctx.activeTurnId = undefined;
+                  ctx.session = { ...ctx.session, status: "ready" };
+                }
+              }),
+            ),
+          ),
+          ctx.scope,
+        );
+
+        return { threadId: input.threadId, turnId, resumeCursor: ctx.session.resumeCursor };
       });
 
     /** Look up a live session, or fail with the shape T3 expects. */
@@ -496,6 +804,8 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
       stopSession,
       stopAll,
       streamEvents,
+      startSession,
+      sendTurn,
       interruptTurn,
       respondToRequest,
       respondToUserInput,
