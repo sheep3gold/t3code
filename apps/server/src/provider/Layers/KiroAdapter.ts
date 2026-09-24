@@ -587,6 +587,34 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
       );
 
     /**
+     * 结算一轮：冲刷残余事件，再发 `turn.completed`。
+     *
+     * 只有**最后一条** prompt 才结算。被 steer 顶替的那条通常以 cancelled 收尾，
+     * 若它也结算，合并后的这一轮会在回答中途解锁输入框。
+     *
+     * 先 `drainEvents` 再发完成事件，保证最后几个增量不会落在结束之后。
+     */
+    const settleTurn = (
+      ctx: KiroSessionContext,
+      threadId: ThreadId,
+      turnId: TurnId,
+      state: "completed" | "cancelled" | "failed",
+      stopReason: string | null,
+    ) =>
+      Effect.gen(function* () {
+        yield* ctx.acp.drainEvents.pipe(Effect.ignore);
+        if (ctx.promptsInFlight > 0) return;
+        yield* offerRuntimeEvent({
+          type: "turn.completed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId,
+          turnId,
+          payload: { state, stopReason },
+        });
+      });
+
+    /**
      * Send a turn.
      *
      * A `sendTurn` arriving while a turn is already running is a STEER, not a
@@ -649,46 +677,69 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
         const updatedAt = yield* nowIso;
         ctx.session = { ...ctx.session, status: "running", activeTurnId: turnId, updatedAt };
 
-        // The prompt is AWAITED, not forked. `sendTurn` running for the whole
-        // model turn is the adapter contract: the turn's completion signal is
-        // this call's own result, so returning early left T3 with a turn that
-        // never settled — the UI sat on "Working" forever and its composer
-        // stayed locked even though the ACP side had finished.
-        const result = yield* acpFailable(
-          ctx,
-          ctx.acp.prompt({ prompt: [{ type: "text", text }] }),
-        ).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);
-              if (ctx.promptsInFlight === 0) {
-                ctx.activeTurnId = undefined;
-                ctx.session = { ...ctx.session, status: "ready" };
-              }
-            }),
-          ),
-        );
-
-        // Flush whatever the agent emitted before declaring the turn over, so
-        // the last deltas cannot land after `turn.completed`.
-        yield* ctx.acp.drainEvents;
-
-        // Only the LAST prompt settles the turn. A steer-superseded prompt
-        // resolving (usually cancelled) while another is still in flight must
-        // leave the merged turn running, or the UI would unlock mid-answer.
-        if (ctx.promptsInFlight === 0) {
+        /**
+         * 宣告这一轮开始。
+         *
+         * 光把 `ctx.session.status` 改成 running 不够：那只是适配器自己的内存状态，
+         * 前端的运行态是由事件流推的。缺了这条事件，界面拿不到「这一轮开始了」，
+         * `phase` 停在 `ready`，于是输入框右下角一直是发送箭头而不是停止按钮——
+         * 卡住了也没有终止入口。steer（并入已有轮次）不重发，否则界面会以为
+         * 又开了一轮。
+         */
+        if (!isSteer) {
           yield* offerRuntimeEvent({
-            type: "turn.completed",
+            type: "turn.started",
             ...(yield* makeEventStamp()),
             provider: PROVIDER,
             threadId: input.threadId,
             turnId,
-            payload: {
-              state: result.stopReason === "cancelled" ? "cancelled" : "completed",
-              stopReason: result.stopReason ?? null,
-            },
+            payload: ctx.session.model ? { model: ctx.session.model } : {},
           });
         }
+
+        /**
+         * 整轮在**后台 fiber** 里跑，`sendTurn` 启动完就返回。
+         *
+         * 这是 T3 的 adapter 契约：`ProviderService` 在 `sendTurn` 返回之后才
+         * 把会话写成 `status: "running"`，而前端的 `phase === "running"` 正是
+         * 由它推导、也正是「停止」按钮的显示条件。曾把整轮 await 在这里，于是
+         * 那次写入直到整轮结束才发生——界面全程只有一个不可点的转圈，卡住了
+         * 也没法终止。Claude adapter 同样只入队就返回，可作对照。
+         *
+         * 但 fork 本身不够：更早一版只 fork、从不发 `turn.completed`，界面就会
+         * 一直转圈、输入框锁死。两件事必须同时成立——**立即返回**让「运行中」
+         * 被看见，**fiber 收尾发事件**让这一轮真正结束。
+         *
+         * fork 进 `ctx.scope`：会话销毁时这条 fiber 随之中断，不会留下孤儿。
+         */
+        yield* Effect.forkIn(
+          acpFailable(ctx, ctx.acp.prompt({ prompt: [{ type: "text", text }] })).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);
+                if (ctx.promptsInFlight === 0) {
+                  ctx.activeTurnId = undefined;
+                  ctx.session = { ...ctx.session, status: "ready" };
+                }
+              }),
+            ),
+            // 失败也必须结算这一轮。让错误静默会把界面永久留在「运行中」，
+            // 那比报错更难处理：用户既看不到原因，也等不到结束。
+            Effect.matchEffect({
+              onSuccess: (result) =>
+                settleTurn(
+                  ctx,
+                  input.threadId,
+                  turnId,
+                  result.stopReason === "cancelled" ? "cancelled" : "completed",
+                  result.stopReason ?? null,
+                ),
+              onFailure: (cause) =>
+                settleTurn(ctx, input.threadId, turnId, "failed", cause.detail ?? null),
+            }),
+          ),
+          ctx.scope,
+        );
 
         return { threadId: input.threadId, turnId, resumeCursor: ctx.session.resumeCursor };
       });
