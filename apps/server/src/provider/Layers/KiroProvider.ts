@@ -69,34 +69,123 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const AUTH_PROBE_TIMEOUT_MS = 10_000;
+const MODEL_LIST_PROBE_TIMEOUT_MS = 6_000;
 
 /**
- * Credit multipliers are from `kiro-cli chat --list-models` and are shown in
- * the picker so an expensive choice is a deliberate one. They are presentation
- * only — billing happens on the AWS side regardless of what this says.
+ * Curated presentation for the models kiro-cli shipped when this was written.
+ *
+ * This table has two jobs, and neither is "the list of models":
+ *
+ *   * Fallback catalog when `--list-models` cannot be read — an older binary,
+ *     an offline probe, or an output format that stops parsing.
+ *   * Label source when the live list DOES parse. kiro-cli's own descriptions
+ *     are sentences ("Experimental preview of OpenAI GPT 5.6 Sol with 1M
+ *     context window"), far too long for a picker row.
+ *
+ * A slug absent from here is still offered: the live list decides membership
+ * and this table only supplies nicer names. That is the entire point of
+ * reading the list at probe time — a model AWS adds next month shows up
+ * without a code change here.
+ *
+ * Credit multipliers are presentation only. Billing happens on the AWS side
+ * regardless of what this says, so they exist to make an expensive choice a
+ * deliberate one.
  */
-const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
-  { slug: "auto", name: "Auto (1.00x)" },
-  { slug: "claude-opus-5", name: "Claude Opus 5 (2.20x)" },
-  { slug: "claude-sonnet-5", name: "Claude Sonnet 5 (1.30x)" },
-  { slug: "claude-opus-4.6", name: "Claude Opus 4.6 (2.20x)" },
-  { slug: "claude-haiku-4.5", name: "Claude Haiku 4.5 (0.40x)" },
+const KIRO_KNOWN_MODELS: ReadonlyArray<{
+  readonly slug: string;
+  readonly label: string;
+  readonly multiplier: string;
+  readonly retainsIo?: true;
+}> = [
+  { slug: "auto", label: "Auto", multiplier: "1.00x" },
+  { slug: "claude-opus-5", label: "Claude Opus 5", multiplier: "2.20x" },
+  { slug: "claude-sonnet-5", label: "Claude Sonnet 5", multiplier: "1.30x" },
+  { slug: "claude-opus-4.6", label: "Claude Opus 4.6", multiplier: "2.20x" },
+  { slug: "claude-haiku-4.5", label: "Claude Haiku 4.5", multiplier: "0.40x" },
   // Retained inputs/outputs: AWS keeps traffic for automated abuse detection
   // and may human-review anything it flags. Said plainly in the label so it
   // is not discovered after the fact.
-  { slug: "claude-fable-5.1", name: "Claude Fable 5.1 (6.00x · AWS retains I/O)" },
-  { slug: "gpt-5.6-sol", name: "GPT 5.6 Sol (4.40x)" },
-  { slug: "gpt-5.6-terra", name: "GPT 5.6 Terra (2.20x)" },
-  { slug: "gpt-5.6-luna", name: "GPT 5.6 Luna (1.10x)" },
-  { slug: "deepseek-3.2", name: "DeepSeek V3.2 (0.25x)" },
-  { slug: "minimax-m2.5", name: "MiniMax M2.5 (0.25x)" },
-  { slug: "glm-5", name: "GLM-5 (0.50x)" },
-].map((model) => ({ ...model, isCustom: false, capabilities: EMPTY_CAPABILITIES }));
+  { slug: "claude-fable-5.1", label: "Claude Fable 5.1", multiplier: "6.00x", retainsIo: true },
+  { slug: "gpt-5.6-sol", label: "GPT 5.6 Sol", multiplier: "4.40x" },
+  { slug: "gpt-5.6-terra", label: "GPT 5.6 Terra", multiplier: "2.20x" },
+  { slug: "gpt-5.6-luna", label: "GPT 5.6 Luna", multiplier: "1.10x" },
+  { slug: "deepseek-3.2", label: "DeepSeek V3.2", multiplier: "0.25x" },
+  { slug: "minimax-m2.5", label: "MiniMax M2.5", multiplier: "0.25x" },
+  { slug: "glm-5", label: "GLM-5", multiplier: "0.50x" },
+];
+
+const KIRO_MODEL_LABELS = new Map(KIRO_KNOWN_MODELS.map((model) => [model.slug, model.label]));
+
+const formatKiroModelName = (label: string, multiplier: string, retainsIo: boolean): string =>
+  retainsIo ? `${label} (${multiplier} · AWS retains I/O)` : `${label} (${multiplier})`;
+
+const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = KIRO_KNOWN_MODELS.map((model) => ({
+  slug: model.slug,
+  name: formatKiroModelName(model.label, model.multiplier, model.retainsIo === true),
+  isCustom: false,
+  capabilities: EMPTY_CAPABILITIES,
+}));
+
+/**
+ * One row of `kiro-cli chat --list-models`, e.g.
+ *
+ * ```
+ * * claude-sonnet-5     1.30x credits      Claude Sonnet 5 model with 1M context window
+ * ```
+ *
+ * The leading `*` marks kiro-cli's own default and is ignored here: T3 carries
+ * its own per-provider default, which the user may have chosen differently.
+ *
+ * Text parsing is not a shortcut — `--output-format` accepts only `text` and
+ * `stream-json`, and `--list-models` has no JSON form, so this is the only
+ * shape on offer.
+ */
+const KIRO_MODEL_LIST_LINE =
+  /^\s*\*?\s*([A-Za-z0-9._:-]+)\s{2,}([0-9]+(?:\.[0-9]+)?x)\s+credits\s{2,}(.*)$/;
+
+/** Readable name for a slug this build has never heard of. */
+const humanizeKiroSlug = (slug: string): string =>
+  slug
+    .split("-")
+    .map((part) => (/^[a-z]/.test(part) ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(" ");
+
+export function parseKiroModelList(stdout: string): ReadonlyArray<ServerProviderModel> {
+  const models: ServerProviderModel[] = [];
+  const seen = new Set<string>();
+
+  for (const line of stdout.split("\n")) {
+    const match = KIRO_MODEL_LIST_LINE.exec(line);
+    if (match === null) continue;
+    const [, slug, multiplier, description] = match;
+    if (slug === undefined || multiplier === undefined) continue;
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+
+    // Detect retained-I/O from kiro-cli's own wording rather than a hardcoded
+    // slug, so a future model carrying the same terms is flagged too.
+    const retainsIo = /retain inputs and outputs/i.test(description ?? "");
+    const label = KIRO_MODEL_LABELS.get(slug) ?? humanizeKiroSlug(slug);
+    models.push({
+      slug,
+      name: formatKiroModelName(label, multiplier, retainsIo),
+      isCustom: false,
+      capabilities: EMPTY_CAPABILITIES,
+    });
+  }
+
+  return models;
+}
 
 function kiroModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting>,
+  discovered?: ReadonlyArray<ServerProviderModel> | undefined,
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(KIRO_BUILT_IN_MODELS, customModels, EMPTY_CAPABILITIES);
+  return providerModelsFromSettings(
+    discovered ?? KIRO_BUILT_IN_MODELS,
+    customModels,
+    EMPTY_CAPABILITIES,
+  );
 }
 
 /** Snapshot shown before any probe has run, so the UI has something truthful. */
@@ -149,14 +238,15 @@ export function checkKiroProviderStatus(
 ): Effect.Effect<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    const models = kiroModelsFromSettings(settings.customModels);
 
     if (!settings.enabled) {
       return buildServerProvider({
         presentation: KIRO_PRESENTATION,
         enabled: false,
         checkedAt,
-        models,
+        // Fallback catalog: a disabled provider is never probed, so there is
+        // no live list to read.
+        models: kiroModelsFromSettings(settings.customModels),
         probe: {
           installed: false,
           version: null,
@@ -170,6 +260,26 @@ export function checkKiroProviderStatus(
     const binaryPath = settings.binaryPath?.trim() || "kiro-cli";
     const probe = yield* probeKiro(binaryPath, environment, cwd);
 
+    // Only ask for the model list once the CLI is both present and signed in:
+    // `--list-models` reports the entitled set for the signed-in account, and
+    // asking an unauthenticated binary risks it blocking on auth during what
+    // is supposed to be a health check.
+    const discovered =
+      probe.status === "ready" ? yield* listKiroModels(binaryPath, environment, cwd) : undefined;
+    const models = kiroModelsFromSettings(settings.customModels, discovered);
+
+    yield* Effect.logDebug("kiro.probe", {
+      binaryPath,
+      installed: probe.installed,
+      status: probe.status,
+      auth: probe.auth.status,
+      // Which catalog the picker is about to show. `fallback` means the live
+      // list could not be read, so the models on offer are this build's
+      // hardcoded set and may be stale.
+      catalog: discovered === undefined ? "fallback" : "live",
+      modelCount: models.length,
+    });
+
     return buildServerProvider({
       presentation: KIRO_PRESENTATION,
       enabled: true,
@@ -177,6 +287,38 @@ export function checkKiroProviderStatus(
       models,
       probe,
     });
+  });
+}
+
+/**
+ * Read kiro-cli's own model list.
+ *
+ * Returns `undefined` rather than failing on every unhappy path — a stale
+ * catalog is a far better outcome than a provider that reports itself broken
+ * because an auxiliary command changed its output.
+ */
+function listKiroModels(
+  binaryPath: string,
+  environment: NodeJS.ProcessEnv,
+  cwd: string,
+): Effect.Effect<
+  ReadonlyArray<ServerProviderModel> | undefined,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.gen(function* () {
+    const result = yield* runKiro(binaryPath, ["chat", "--list-models"], environment, cwd).pipe(
+      Effect.timeout(MODEL_LIST_PROBE_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(result)) return undefined;
+    if (result.success.code !== 0) return undefined;
+
+    const parsed = parseKiroModelList(result.success.stdout);
+    // An empty parse means the output shape moved; treat it as unreadable
+    // instead of publishing a provider with zero selectable models.
+    return parsed.length > 0 ? parsed : undefined;
   });
 }
 
