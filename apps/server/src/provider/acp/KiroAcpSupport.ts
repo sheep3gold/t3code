@@ -165,3 +165,19 @@ export function resolveKiroAcpModelId(model: string | null | undefined): string 
   const base = trimmed && trimmed.length > 0 ? trimmed : KIRO_DEFAULT_MODEL_SLUG;
   return normalizeModelSlug(base, KIRO_DRIVER_KIND) ?? KIRO_DEFAULT_MODEL_SLUG;
 }
+
+/**
+ * Cheapest sensible model for one-shot text generation (titles, commit
+ * messages, branch names).
+ *
+ * Kept separate from `resolveKiroAcpModelId` on purpose: the thread default is
+ * `claude-opus-5` at 2.20x credits, and billing a six-word thread title at that
+ * rate is waste. An explicit selection still wins — if the caller named a
+ * model, that choice is honored.
+ */
+export const KIRO_TEXT_GENERATION_MODEL_SLUG = "claude-haiku-4.5";
+
+export function kiroTextGenerationModel(model: string | null | undefined): string {
+  const trimmed = model?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : KIRO_TEXT_GENERATION_MODEL_SLUG;
+}
