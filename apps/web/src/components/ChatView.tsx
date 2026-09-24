@@ -9425,6 +9425,39 @@ export default function ChatView(props: ChatViewProps) {
   }, [cancelWorktreeSetup, draftId, routeThreadRef.environmentId, worktreeSetup]);
   const onSendRef = useRef(onSend);
   onSendRef.current = onSend;
+
+  /**
+   * `[OPTIONS:]` chip 的两个动作。
+   *
+   * 追加而不是覆盖：用户可能连点几个候选凑成一句，也可能点完再自己补字。
+   * 分隔用两个换行，与 checkpoint 回滚恢复草稿时的拼接方式保持一致。
+   */
+  const handleOptionAppend = useCallback(
+    (label: string) => {
+      const store = useComposerDraftStore.getState();
+      const current = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
+      store.setPrompt(
+        composerDraftTarget,
+        current.trim().length === 0 ? label : `${current}\n\n${label}`,
+      );
+    },
+    [composerDraftTarget],
+  );
+
+  /**
+   * 右侧箭头：写入后立即发送。
+   *
+   * 刻意覆盖而非追加——箭头的语义是「就发这一条」，把输入框里已有的草稿
+   * 一起送出去会发出用户没打算发的内容。走 `onSendRef` 而不是直接调
+   * `onSend`，因为本回调定义处早于 `onSend` 的最终引用。
+   */
+  const handleOptionSend = useCallback(
+    (label: string) => {
+      useComposerDraftStore.getState().setPrompt(composerDraftTarget, label);
+      void onSendRef.current();
+    },
+    [composerDraftTarget],
+  );
   // Resend once the cancelled dispatch has settled and the composer is free.
   // Every state that makes `onSend` bail and wait is part of the readiness
   // check, so the flag survives a reconnect, a reverting checkpoint, or a
@@ -9935,6 +9968,8 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 isRevertingCheckpoint={!paintOnlyDisplayedTimeline && isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
+                onOptionAppend={handleOptionAppend}
+                onOptionSend={handleOptionSend}
                 onFileOpen={paintOnlyDisplayedTimeline ? noopHeldAttachment : openFileAttachment}
                 onFileDownload={
                   paintOnlyDisplayedTimeline ? noopHeldAttachment : downloadFileAttachment

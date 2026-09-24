@@ -103,6 +103,7 @@ import {
 } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
+import { AssistantOptionChips, parseAssistantOptions } from "./AssistantOptionChips";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Root, RootContent } from "mdast";
@@ -278,6 +279,12 @@ interface TimelineRowSharedState {
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  /**
+   * `[OPTIONS:]` chip 的两种动作。可选：宿主没提供时整块不渲染，
+   * 正文里的标记行仍原样显示，不会凭空吞掉内容。
+   */
+  onOptionAppend?: ((label: string) => void) | undefined;
+  onOptionSend?: ((label: string) => void) | undefined;
   onFileOpen: (attachment: ChatFileAttachment) => void;
   onFileDownload: (attachment: ChatFileAttachment) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
@@ -427,6 +434,8 @@ interface MessagesTimelineProps {
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  onOptionAppend?: ((label: string) => void) | undefined;
+  onOptionSend?: ((label: string) => void) | undefined;
   onFileOpen?: (attachment: ChatFileAttachment) => void;
   onFileDownload?: (attachment: ChatFileAttachment) => void;
   activeThreadEnvironmentId: EnvironmentId;
@@ -496,6 +505,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   isRevertingCheckpoint,
   onImageExpand,
+  onOptionAppend,
+  onOptionSend,
   onFileOpen = NOOP_OPEN_ATTACHMENT,
   onFileDownload = NOOP_OPEN_ATTACHMENT,
   activeThreadEnvironmentId,
@@ -1139,6 +1150,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertToTurnCount,
       onUseArtifactTemplate,
       onImageExpand,
+      onOptionAppend,
+      onOptionSend,
       onFileOpen,
       onFileDownload,
       openPullRequest,
@@ -1174,6 +1187,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertToTurnCount,
       onUseArtifactTemplate,
       onImageExpand,
+      onOptionAppend,
+      onOptionSend,
       onFileOpen,
       onFileDownload,
       openPullRequest,
@@ -2350,7 +2365,12 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const rawText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+
+  // 流式输出期间不解析：标记行可能只吐了一半（`[OPTIONS: 甲 | 乙`），
+  // 那会先渲染出残缺的 chip 再跳变。等这一段收尾再认。
+  const parsedOptions = row.message.streaming ? null : parseAssistantOptions(rawText);
+  const messageText = parsedOptions?.body ?? rawText;
 
   return (
     <>
@@ -2375,6 +2395,13 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             onImageExpand={ctx.onImageExpand}
           />
         </AssistantCitationSource>
+        {parsedOptions && ctx.onOptionAppend && ctx.onOptionSend ? (
+          <AssistantOptionChips
+            options={parsedOptions.options}
+            onAppend={ctx.onOptionAppend}
+            onSend={ctx.onOptionSend}
+          />
+        ) : null}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}
