@@ -13,6 +13,7 @@
 
 import {
   ApprovalRequestId,
+  EventId,
   type KiroSettings,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
@@ -24,6 +25,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -45,6 +47,12 @@ import {
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
+import {
+  makeAcpAssistantItemEvent,
+  makeAcpContentDeltaEvent,
+  makeAcpPlanUpdatedEvent,
+  makeAcpToolCallEvent,
+} from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeKiroAcpRuntime } from "../acp/KiroAcpSupport.ts";
 
 const PROVIDER = ProviderDriverKind.make("kiro");
@@ -191,6 +199,158 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
 
     const streamEvents: Stream.Stream<ProviderRuntimeEvent> = Stream.fromPubSub(runtimeEventPubSub);
+
+    const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+      PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+
+    // `crypto.randomUUIDv4` is an Effect, not a method — it is combined, not
+    // called. It can fail with a PlatformError, which must not propagate into
+    // the event pump: a stamp is bookkeeping, and losing the whole event
+    // stream because an id could not be generated would be a far worse
+    // outcome than a fallback id.
+    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+    const nextEventId = crypto.randomUUIDv4.pipe(
+      Effect.map((id) => EventId.make(id)),
+      Effect.orDie,
+    );
+    const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
+
+    /**
+     * Translate one ACP runtime event into T3's runtime events.
+     *
+     * Every branch is listed rather than defaulted: a new ACP event variant
+     * should surface as a compile error here, not be silently dropped at
+     * runtime where the symptom is "the UI stopped showing something".
+     *
+     * `turnId` comes from `ctx.activeTurnId` rather than the event, because ACP
+     * has no turn concept — the adapter is the only thing that knows which T3
+     * turn these deltas belong to.
+     */
+    const pumpAcpEvent = (
+      ctx: KiroSessionContext,
+      event: AcpSessionRuntime.AcpSessionRuntimeEvent,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        switch (event._tag) {
+          case "EventStreamBarrier":
+            // A barrier is a synchronisation point, not content: acknowledging
+            // it is what lets the producer know this consumer has caught up.
+            yield* Deferred.succeed(event.acknowledge, undefined).pipe(Effect.ignore);
+            return;
+
+          case "ConnectionTerminated":
+            // The child died or the protocol broke. Settle everything waiting
+            // on a decision so no caller is left hanging, then mark the session
+            // dead — a later sendTurn must fail fast rather than write into a
+            // closed pipe.
+            yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+            yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+            ctx.pendingApprovals.clear();
+            ctx.pendingUserInputs.clear();
+            ctx.stopped = true;
+            ctx.activeTurnId = undefined;
+            ctx.promptsInFlight = 0;
+            yield* Effect.logWarning("Kiro ACP connection terminated", {
+              threadId: ctx.threadId,
+              detail: event.error.message,
+            });
+            return;
+
+          case "AssistantItemStarted":
+            yield* offerRuntimeEvent(
+              makeAcpAssistantItemEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId: ctx.activeTurnId,
+                itemId: event.itemId,
+                lifecycle: "item.started",
+              }),
+            );
+            return;
+
+          case "AssistantItemCompleted":
+            yield* offerRuntimeEvent(
+              makeAcpAssistantItemEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId: ctx.activeTurnId,
+                itemId: event.itemId,
+                lifecycle: "item.completed",
+              }),
+            );
+            return;
+
+          case "ContentDelta":
+            yield* offerRuntimeEvent(
+              makeAcpContentDeltaEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId: ctx.activeTurnId,
+                streamKind: "assistant_text",
+                text: event.text,
+                rawPayload: event.rawPayload,
+              }),
+            );
+            return;
+
+          case "ThoughtDelta":
+            // Reasoning narration, not the answer. Kept on a separate stream
+            // kind so a replayed turn shows the reply rather than the thinking.
+            yield* offerRuntimeEvent(
+              makeAcpContentDeltaEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId: ctx.activeTurnId,
+                streamKind: "reasoning_text",
+                text: event.text,
+                rawPayload: event.rawPayload,
+              }),
+            );
+            return;
+
+          case "ToolCallUpdated":
+            yield* offerRuntimeEvent(
+              makeAcpToolCallEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId: ctx.activeTurnId,
+                toolCall: event.toolCall,
+                rawPayload: event.rawPayload,
+              }),
+            );
+            return;
+
+          case "PlanUpdated":
+            yield* offerRuntimeEvent(
+              makeAcpPlanUpdatedEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId: ctx.activeTurnId,
+                payload: event.payload,
+                source: "acp.jsonrpc",
+                method: "session/update",
+                rawPayload: event.rawPayload,
+              }),
+            );
+            return;
+
+          case "ModeChanged":
+          case "AvailableCommandsUpdated":
+          case "ConfigOptionsUpdated":
+            // Session-configuration echoes. The runtime already folds these
+            // into its own mode/config state (`getModeState`,
+            // `getConfigOptions`), and T3 reads them from there, so
+            // re-emitting them as thread events would duplicate state with no
+            // consumer.
+            return;
+        }
+      });
 
     /** Look up a live session, or fail with the shape T3 expects. */
     const requireSession = (
