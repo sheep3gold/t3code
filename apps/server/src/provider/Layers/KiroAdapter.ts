@@ -43,6 +43,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
+import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import { makeKiroAcpRuntime } from "../acp/KiroAcpSupport.ts";
 
@@ -191,6 +192,131 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
 
     const streamEvents: Stream.Stream<ProviderRuntimeEvent> = Stream.fromPubSub(runtimeEventPubSub);
 
+    /** Look up a live session, or fail with the shape T3 expects. */
+    const requireSession = (
+      threadId: ThreadId,
+    ): Effect.Effect<KiroSessionContext, ProviderAdapterSessionNotFoundError> =>
+      Effect.suspend(() => {
+        const ctx = sessions.get(threadId);
+        if (!ctx || ctx.stopped) {
+          return Effect.fail(
+            new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
+          );
+        }
+        return Effect.succeed(ctx);
+      });
+
+    /**
+     * Interrupt the active turn.
+     *
+     * `turnId` is advisory: when it names a turn that is not the active one the
+     * call is a no-op rather than an error. A stale interrupt is normal —
+     * the user hits stop just as the turn settles — and failing it would
+     * surface a spurious error for something that already finished.
+     *
+     * Cancelling is fire-and-forget by protocol (`session/cancel` is an ACP
+     * notification, not a request). The turn's own completion path is what
+     * settles state; this only asks.
+     */
+    const interruptTurn = (
+      threadId: ThreadId,
+      turnId?: TurnId,
+    ): Effect.Effect<void, ProviderAdapterSessionNotFoundError | ProviderAdapterProcessError> =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(threadId);
+        if (turnId !== undefined && ctx.activeTurnId !== undefined && ctx.activeTurnId !== turnId) {
+          return;
+        }
+        yield* ctx.acp.cancel.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId,
+                detail: cause.message,
+                cause,
+              }),
+          ),
+        );
+      });
+
+    /**
+     * Answer an approval request the agent raised.
+     *
+     * The Deferred is removed from the map BEFORE being settled, so a double
+     * response (two clicks, or a click racing session teardown) cannot settle
+     * the same request twice. An unknown id resolves quietly: by the time a
+     * user clicks, the request may already have been cancelled by teardown,
+     * and that is not an error worth surfacing.
+     */
+    const respondToRequest = (
+      threadId: ThreadId,
+      requestId: ApprovalRequestId,
+      decision: ProviderApprovalDecision,
+    ): Effect.Effect<void, ProviderAdapterSessionNotFoundError> =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(threadId);
+        const pending = ctx.pendingApprovals.get(requestId);
+        if (!pending) return;
+        ctx.pendingApprovals.delete(requestId);
+        yield* Deferred.succeed(pending.decision, decision).pipe(Effect.ignore);
+      });
+
+    /** Same contract as respondToRequest, for structured user-input requests. */
+    const respondToUserInput = (
+      threadId: ThreadId,
+      requestId: ApprovalRequestId,
+      answers: ProviderUserInputAnswers,
+    ): Effect.Effect<void, ProviderAdapterSessionNotFoundError> =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(threadId);
+        const pending = ctx.pendingUserInputs.get(requestId);
+        if (!pending) return;
+        ctx.pendingUserInputs.delete(requestId);
+        yield* Deferred.succeed(pending.answers, answers).pipe(Effect.ignore);
+      });
+
+    /**
+     * Return the turns this adapter has observed.
+     *
+     * This is the adapter's own record, not a query to kiro-cli: ACP has no
+     * "read history" call, and kiro-cli's session store is its own business.
+     * Items are copied out so a caller cannot mutate live session state.
+     */
+    const readThread = (
+      threadId: ThreadId,
+    ): Effect.Effect<ProviderThreadSnapshot, ProviderAdapterSessionNotFoundError> =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(threadId);
+        return {
+          threadId,
+          turns: ctx.turns.map((turn) => ({ id: turn.id, items: [...turn.items] })),
+        };
+      });
+
+    /**
+     * Rejected, always.
+     *
+     * kiro-cli's ACP session cannot rewind its conversation, and
+     * `capabilities.supportsConversationRollback` says so. T3's checkpoint
+     * boundary is supposed to refuse revert before touching the filesystem, but
+     * this second refusal is not redundant: if that check is ever bypassed,
+     * failing here keeps the filesystem consistent with the provider
+     * conversation instead of reverting files while the agent still believes
+     * the old turn happened.
+     */
+    const rollbackThread = (
+      threadId: ThreadId,
+      numTurns: number,
+    ): Effect.Effect<ProviderThreadSnapshot, ProviderAdapterValidationError> =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "rollbackThread",
+          issue: `Kiro cannot roll back its conversation, so refusing to rewind ${numTurns} turn(s) on thread ${threadId}. Start a new thread instead.`,
+        }),
+      );
+
     return {
       provider: PROVIDER,
       capabilities: {
@@ -210,6 +336,11 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
       stopSession,
       stopAll,
       streamEvents,
+      interruptTurn,
+      respondToRequest,
+      respondToUserInput,
+      readThread,
+      rollbackThread,
     };
   });
 }
