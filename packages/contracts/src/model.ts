@@ -148,6 +148,7 @@ const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
+const KIRO_DRIVER_KIND = ProviderDriverKind.make("kiro");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
 
@@ -173,6 +174,10 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   // Product slug, not an ACP model id. The Grok adapter treats it as "the session's current model".
   [GROK_DRIVER_KIND]: "grok-build",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  // kiro-cli's own slug, passed through verbatim. Its list uses dots
+  // (`claude-haiku-4.5`, `deepseek-3.2`) where T3's Claude catalog uses
+  // dashes — do not "normalize" these or kiro-cli rejects the model.
+  [KIRO_DRIVER_KIND]: "claude-opus-5",
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
 };
 
@@ -185,6 +190,9 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
   [CURSOR_DRIVER_KIND]: "composer-2",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  // Titles are one short call, so take the cheapest sane model rather than
+  // the thread default (claude-opus-5 bills 2.20x credits).
+  [KIRO_DRIVER_KIND]: "claude-haiku-4.5",
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
