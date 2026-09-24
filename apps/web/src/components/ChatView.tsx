@@ -1,4 +1,9 @@
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
+import {
+  AssistantOptionChips,
+  parseAssistantOptions,
+  toggleOptionInPrompt,
+} from "./chat/AssistantOptionChips";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import {
@@ -9427,36 +9432,72 @@ export default function ChatView(props: ChatViewProps) {
   onSendRef.current = onSend;
 
   /**
-   * `[OPTIONS:]` chip 的两个动作。
+   * 输入框上方那组 `[OPTIONS:]` chip 的候选，取自最后一条助手消息。
    *
-   * 追加而不是覆盖：用户可能连点几个候选凑成一句，也可能点完再自己补字。
-   * 分隔用两个换行，与 checkpoint 回滚恢复草稿时的拼接方式保持一致。
+   * 只认最后一条：候选的语义是「这一轮的收尾选项」，翻出历史里的旧候选会让
+   * 用户点到一个早已过时的动作。流式输出期间不取，避免标记只吐了一半
+   * （`[OPTIONS: 甲 | 乙`）时先渲染出残缺的 chip 再跳变。
    */
-  const handleOptionAppend = useCallback(
+  const activeOptionLabels = useMemo<ReadonlyArray<string>>(() => {
+    for (let i = displayServerMessages.length - 1; i >= 0; i -= 1) {
+      const message = displayServerMessages[i];
+      if (!message || message.role !== "assistant") continue;
+      if (message.streaming) return [];
+      return parseAssistantOptions(message.text ?? "")?.options ?? [];
+    }
+    return [];
+  }, [displayServerMessages]);
+
+  /**
+   * chip 的选中态要跟着输入框实时变，所以这里单独订阅草稿文本。
+   * 用户手动删掉某段，对应 chip 会立刻回到未选中。
+   */
+  const composerPromptForOptions = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.prompt ?? "",
+  );
+
+  /**
+   * 点 chip 本体：已在输入框里就撤销，否则追加。
+   *
+   * 选中态由输入框内容推导（见 `isOptionSelected`），所以这里只需改草稿，
+   * 不必另存一份选中集合——两份真相不同步的问题从根上不存在。
+   */
+  const handleOptionToggle = useCallback(
     (label: string) => {
       const store = useComposerDraftStore.getState();
       const current = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
-      store.setPrompt(
-        composerDraftTarget,
-        current.trim().length === 0 ? label : `${current}\n\n${label}`,
-      );
+      store.setPrompt(composerDraftTarget, toggleOptionInPrompt(current, label));
     },
     [composerDraftTarget],
   );
 
   /**
-   * 右侧箭头：写入后立即发送。
+   * 点箭头：只发这一条。
    *
-   * 刻意覆盖而非追加——箭头的语义是「就发这一条」，把输入框里已有的草稿
-   * 一起送出去会发出用户没打算发的内容。走 `onSendRef` 而不是直接调
-   * `onSend`，因为本回调定义处早于 `onSend` 的最终引用。
+   * 走 `onSend` 的 queuedMessage 形参而不是「改草稿再发」，这样输入框里用户
+   * 自己打的内容与已选的其它候选**原样保留**，不会被一起发出去、也不会被清掉。
+   *
+   * 必须先 `enqueue` 再发：send 路径拿到 queuedMessage 后会用 `take()` 去队列里
+   * 认领它，认领不到就**静默 return**（那是防「Stop 之后队列消息又起一轮」的
+   * 守卫）。凭空构造一条没入队的消息交进去，表现就是点了箭头毫无反应。
    */
   const handleOptionSend = useCallback(
     (label: string) => {
-      useComposerDraftStore.getState().setPrompt(composerDraftTarget, label);
-      void onSendRef.current();
+      if (!activeThreadKey) return;
+      const queued = useQueuedMessageStore.getState().enqueue(activeThreadKey, {
+        prompt: label,
+        images: [],
+        files: [],
+        terminalContexts: [],
+        previewAnnotations: [],
+        reviewComments: [],
+        submissionIntent: "foreground",
+        queuedAfterToolActivityId: null,
+        createdAt: new Date().toISOString(),
+      });
+      void onSendRef.current(undefined, "foreground", undefined, queued);
     },
-    [composerDraftTarget],
+    [activeThreadKey],
   );
   // Resend once the cancelled dispatch has settled and the composer is free.
   // Every state that makes `onSend` bail and wait is part of the readiness
@@ -9968,8 +10009,6 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 isRevertingCheckpoint={!paintOnlyDisplayedTimeline && isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
-                onOptionAppend={handleOptionAppend}
-                onOptionSend={handleOptionSend}
                 onFileOpen={paintOnlyDisplayedTimeline ? noopHeldAttachment : openFileAttachment}
                 onFileDownload={
                   paintOnlyDisplayedTimeline ? noopHeldAttachment : downloadFileAttachment
@@ -10086,6 +10125,14 @@ export default function ChatView(props: ChatViewProps) {
                   >
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
+                        {activeOptionLabels.length > 0 ? (
+                          <AssistantOptionChips
+                            options={activeOptionLabels}
+                            prompt={composerPromptForOptions}
+                            onToggle={handleOptionToggle}
+                            onSend={handleOptionSend}
+                          />
+                        ) : null}
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
                             multipleModelSelections={multipleModelSelections}
