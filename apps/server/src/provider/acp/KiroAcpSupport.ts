@@ -53,6 +53,11 @@ interface KiroAcpRuntimeInput extends Omit<
   readonly kiroSettings: KiroAcpRuntimeSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
+  /**
+   * Model the session runs on for its whole life. kiro-cli takes one only at
+   * spawn, so this cannot be changed later — see `kiroAcpSpawnArgs`.
+   */
+  readonly model?: string | undefined;
 }
 
 /**
@@ -74,16 +79,29 @@ interface KiroAcpRuntimeInput extends Omit<
  * `--trust-tools=` with an empty value is kiro-cli's documented way to trust
  * nothing; it is not the same as omitting the flag, which would fall back to
  * the CLI's own defaults.
+ *
+ * The model is passed here, at spawn, because that is the ONLY place kiro-cli
+ * accepts one over ACP. Its `initialize` reply advertises an empty
+ * `sessionCapabilities`, so `session/set_model` does not exist and calling it
+ * answers JSON-RPC -32601 "Method not found" — measured against 2.21.1. A
+ * session therefore runs on whichever model it was started with, which is why
+ * the provider declares `requiresNewThreadForModelChange`.
  */
 export function kiroAcpSpawnArgs(
   settings: KiroAcpRuntimeSettings | null | undefined,
   runtimeMode?: RuntimeMode,
+  model?: string | undefined,
 ): ReadonlyArray<string> {
   const args: string[] = ["acp", "--agent-engine", settings?.agentEngine ?? "v2"];
 
   const agent = settings?.agent?.trim();
   if (agent) {
     args.push("--agent", agent);
+  }
+
+  const resolvedModel = model?.trim();
+  if (resolvedModel) {
+    args.push("--model", resolvedModel);
   }
 
   switch (runtimeMode) {
@@ -110,10 +128,11 @@ export function buildKiroAcpSpawnInput(
   cwd: string,
   environment?: NodeJS.ProcessEnv,
   runtimeMode?: RuntimeMode,
+  model?: string | undefined,
 ): AcpSessionRuntime.AcpSpawnInput {
   return {
     command: settings?.binaryPath || "kiro-cli",
-    args: [...kiroAcpSpawnArgs(settings, runtimeMode)],
+    args: [...kiroAcpSpawnArgs(settings, runtimeMode, model)],
     cwd,
     env: { ...environment },
   };
@@ -135,6 +154,7 @@ export const makeKiroAcpRuntime = (
           input.cwd,
           input.environment,
           input.runtimeMode,
+          input.model,
         ),
         authMethodId: KIRO_AUTH_METHOD_CACHED_TOKEN,
       }).pipe(

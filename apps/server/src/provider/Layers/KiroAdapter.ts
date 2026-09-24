@@ -243,8 +243,6 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
         ),
       );
 
-    const acpSetModel = (ctx: KiroSessionContext, model: string) => ctx.acp.setModel(model);
-
     /**
      * Translate one ACP runtime event into T3's runtime events.
      *
@@ -456,6 +454,9 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
+            // Spawn-time only: kiro-cli has no `session/set_model`, so the
+            // model must be fixed before the process starts.
+            ...(model ? { model } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...acpNativeLoggers,
           }).pipe(
@@ -623,39 +624,71 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
           ctx.turns.push({ id: turnId, items: [] });
         }
 
-        // Model switching is in-session, so a selection is applied before the
-        // prompt rather than requiring a new thread.
+        // kiro-cli fixes the model at spawn: its `initialize` reply carries an
+        // empty `sessionCapabilities`, so `session/set_model` answers -32601
+        // "Method not found" (measured against 2.21.1). Failing loudly is the
+        // only honest option — running the turn on the old model would show the
+        // user a model they did not choose, and silence about it is worse than
+        // an error. The provider declares `requiresNewThreadForModelChange` so
+        // the UI steers to a new thread before it gets here.
         const requestedModel =
           input.modelSelection?.instanceId === boundInstanceId
             ? resolveKiroAcpModelId(input.modelSelection.model)
             : undefined;
         if (requestedModel && requestedModel !== ctx.session.model) {
-          yield* acpFailable(ctx, acpSetModel(ctx, requestedModel));
-          ctx.session = { ...ctx.session, model: requestedModel };
+          return yield* new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            detail:
+              `Kiro cannot change model mid-session (this one runs ${ctx.session.model ?? "its start model"}, ` +
+              `requested ${requestedModel}). Start a new thread to use a different model.`,
+          });
         }
 
         ctx.promptsInFlight += 1;
         const updatedAt = yield* nowIso;
         ctx.session = { ...ctx.session, status: "running", activeTurnId: turnId, updatedAt };
 
-        // The prompt is forked: `sendTurn` returns as soon as the turn is
-        // registered, and the answer arrives through the event pump. Awaiting
-        // it here would block the caller for the whole model turn.
-        yield* Effect.forkIn(
-          ctx.acp.prompt({ prompt: [{ type: "text", text }] }).pipe(
-            Effect.ignore,
-            Effect.ensuring(
-              Effect.sync(() => {
-                ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);
-                if (ctx.promptsInFlight === 0) {
-                  ctx.activeTurnId = undefined;
-                  ctx.session = { ...ctx.session, status: "ready" };
-                }
-              }),
-            ),
+        // The prompt is AWAITED, not forked. `sendTurn` running for the whole
+        // model turn is the adapter contract: the turn's completion signal is
+        // this call's own result, so returning early left T3 with a turn that
+        // never settled — the UI sat on "Working" forever and its composer
+        // stayed locked even though the ACP side had finished.
+        const result = yield* acpFailable(
+          ctx,
+          ctx.acp.prompt({ prompt: [{ type: "text", text }] }),
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);
+              if (ctx.promptsInFlight === 0) {
+                ctx.activeTurnId = undefined;
+                ctx.session = { ...ctx.session, status: "ready" };
+              }
+            }),
           ),
-          ctx.scope,
         );
+
+        // Flush whatever the agent emitted before declaring the turn over, so
+        // the last deltas cannot land after `turn.completed`.
+        yield* ctx.acp.drainEvents;
+
+        // Only the LAST prompt settles the turn. A steer-superseded prompt
+        // resolving (usually cancelled) while another is still in flight must
+        // leave the merged turn running, or the UI would unlock mid-answer.
+        if (ctx.promptsInFlight === 0) {
+          yield* offerRuntimeEvent({
+            type: "turn.completed",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            turnId,
+            payload: {
+              state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+              stopReason: result.stopReason ?? null,
+            },
+          });
+        }
 
         return { threadId: input.threadId, turnId, resumeCursor: ctx.session.resumeCursor };
       });
@@ -788,9 +821,13 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
     return {
       provider: PROVIDER,
       capabilities: {
-        // kiro-cli accepts a model id per prompt, so switching does not need a
-        // new thread.
-        sessionModelSwitch: "in-session" as const,
+        // kiro-cli takes a model only at spawn (`acp --model`). Its
+        // `initialize` reply advertises an empty `sessionCapabilities`, so
+        // `session/set_model` answers -32601 "Method not found" — measured
+        // against 2.21.1. Declaring "in-session" here is what produced that
+        // error on the first real turn, so it is `unsupported` and the model is
+        // chosen when the thread starts.
+        sessionModelSwitch: "unsupported" as const,
         // The ACP session cannot roll back its conversation. Declared honestly
         // so T3's checkpoint boundary rejects revert BEFORE touching files —
         // claiming otherwise would leave the filesystem reverted while the

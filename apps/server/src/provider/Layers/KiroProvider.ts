@@ -61,6 +61,10 @@ const KIRO_PRESENTATION = {
   // kiro-cli reports `contextUsagePercentage` on every turn, so T3 can show
   // real context pressure instead of guessing.
   reportsContextWindow: true,
+  // The model is fixed when the ACP process spawns (`acp --model`); kiro-cli
+  // exposes no `session/set_model`. Telling the UI up front is what keeps a
+  // mid-thread switch from becoming a failed turn.
+  requiresNewThreadForModelChange: true,
 } as const;
 
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({

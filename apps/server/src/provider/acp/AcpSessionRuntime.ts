@@ -737,15 +737,25 @@ export const make = (
     const startOnce = Effect.gen(function* () {
       const initializeResult = yield* sendInitialize;
 
-      const authenticatePayload = {
-        methodId: options.authMethodId,
-      } satisfies EffectAcpSchema.AuthenticateRequest;
+      // `authenticate` selects ONE of the methods the agent advertised in its
+      // `initialize` reply, so an agent that advertises none has nothing to
+      // select and need not implement the method at all. kiro-cli is such an
+      // agent: it returns `authMethods: []` because sign-in happens out of
+      // band (`kiro-cli login`), and calling `authenticate` against it answers
+      // JSON-RPC -32601 "Method not found", which surfaced as every first turn
+      // failing. Every agent that DOES advertise methods keeps the previous
+      // path exactly.
+      if ((initializeResult.authMethods?.length ?? 0) > 0) {
+        const authenticatePayload = {
+          methodId: options.authMethodId,
+        } satisfies EffectAcpSchema.AuthenticateRequest;
 
-      yield* runLoggedRequest(
-        "authenticate",
-        authenticatePayload,
-        acp.agent.authenticate(authenticatePayload),
-      );
+        yield* runLoggedRequest(
+          "authenticate",
+          authenticatePayload,
+          acp.agent.authenticate(authenticatePayload),
+        );
+      }
 
       let sessionId: string;
       let sessionSetupResult:
