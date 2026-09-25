@@ -13,9 +13,6 @@
  *     uses dots (`claude-haiku-4.5`, `deepseek-3.2`, `gpt-5.6-sol`) where
  *     T3's Claude catalog uses dashes (`claude-fable-5-1`). Rewriting them to
  *     match T3's house style makes kiro-cli reject the model.
- *   * `auto` is not a model but a router ("models chosen by task"), which is
- *     why it is listed first and billed at 1.00x.
- *
  * @module provider/Layers/KiroProvider
  */
 import {
@@ -123,7 +120,22 @@ const KIRO_MODEL_LABELS = new Map(KIRO_KNOWN_MODELS.map((model) => [model.slug, 
 const formatKiroModelName = (label: string, multiplier: string, retainsIo: boolean): string =>
   retainsIo ? `${label} (${multiplier} · AWS retains I/O)` : `${label} (${multiplier})`;
 
-const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = KIRO_KNOWN_MODELS.map((model) => ({
+// The fallback must not knowingly offer models the current Kiro account no
+// longer advertises. Keep the larger table above for labels if those models
+// return in a future live catalog, but only these concrete ids are safe when
+// discovery temporarily fails.
+const KIRO_FALLBACK_MODEL_SLUGS = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "deepseek-3.2",
+  "minimax-m2.5",
+  "glm-5",
+]);
+
+const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = KIRO_KNOWN_MODELS.filter((model) =>
+  KIRO_FALLBACK_MODEL_SLUGS.has(model.slug),
+).map((model) => ({
   slug: model.slug,
   name: formatKiroModelName(model.label, model.multiplier, model.retainsIo === true),
   isCustom: false,

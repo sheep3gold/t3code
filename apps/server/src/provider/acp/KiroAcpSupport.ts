@@ -40,8 +40,8 @@ const KIRO_DRIVER_KIND = ProviderDriverKind.make("kiro");
  */
 const KIRO_AUTH_METHOD_CACHED_TOKEN = "cached_token";
 
-/** Thread default. Deliberately the strongest model rather than the cheapest. */
-export const KIRO_DEFAULT_MODEL_SLUG = "claude-opus-5";
+/** Fallback thread default; must be a concrete model accepted by ACP. */
+export const KIRO_DEFAULT_MODEL_SLUG = "gpt-5.6-sol";
 
 type KiroAcpRuntimeSettings = Pick<KiroSettings, "binaryPath" | "agentEngine" | "agent">;
 
@@ -100,8 +100,11 @@ export function kiroAcpSpawnArgs(
   }
 
   const resolvedModel = model?.trim();
+  // Older T3 clients may retain the former `auto` router in a thread draft.
+  // Kiro no longer advertises or accepts that id, so resolve it to the current
+  // concrete fallback instead of letting session/prompt hang or fail later.
   if (resolvedModel) {
-    args.push("--model", resolvedModel);
+    args.push("--model", resolvedModel === "auto" ? KIRO_DEFAULT_MODEL_SLUG : resolvedModel);
   }
 
   switch (runtimeMode) {
@@ -182,7 +185,8 @@ export const makeKiroAcpRuntime = (
  */
 export function resolveKiroAcpModelId(model: string | null | undefined): string {
   const trimmed = model?.trim();
-  const base = trimmed && trimmed.length > 0 ? trimmed : KIRO_DEFAULT_MODEL_SLUG;
+  const base =
+    trimmed && trimmed.length > 0 && trimmed !== "auto" ? trimmed : KIRO_DEFAULT_MODEL_SLUG;
   return normalizeModelSlug(base, KIRO_DRIVER_KIND) ?? KIRO_DEFAULT_MODEL_SLUG;
 }
 
@@ -190,12 +194,11 @@ export function resolveKiroAcpModelId(model: string | null | undefined): string 
  * Cheapest sensible model for one-shot text generation (titles, commit
  * messages, branch names).
  *
- * Kept separate from `resolveKiroAcpModelId` on purpose: the thread default is
- * `claude-opus-5` at 2.20x credits, and billing a six-word thread title at that
- * rate is waste. An explicit selection still wins — if the caller named a
+ * Kept separate from `resolveKiroAcpModelId` so short metadata jobs use a
+ * low-cost model. An explicit selection still wins — if the caller named a
  * model, that choice is honored.
  */
-export const KIRO_TEXT_GENERATION_MODEL_SLUG = "claude-haiku-4.5";
+export const KIRO_TEXT_GENERATION_MODEL_SLUG = "deepseek-3.2";
 
 export function kiroTextGenerationModel(model: string | null | undefined): string {
   const trimmed = model?.trim();
