@@ -167,6 +167,17 @@ Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
 
+## Keep durable work state
+
+Agents can use `thread_ledger_record` to keep a compact goal, phase, concrete next step, artifact
+pointers, and progress events outside the conversation transcript. `thread_ledger_read` returns the
+current record. T3 Code injects a bounded ledger snapshot before later turns, so a restarted
+provider or compacted conversation can resume from the recorded step without re-deriving the whole
+history. Changing the phase requires a classified progress event in the same write.
+
+The ledger is for resumable work state, not source code, secrets, or a second copy of the chat. Its
+injected snapshot is capped and carries only the eight most recent events.
+
 ## Snooze until later
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your

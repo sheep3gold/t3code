@@ -65,6 +65,7 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { readThreadLedgerContext } from "../ThreadLedger.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -851,7 +852,18 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const ledgerContext = yield* readThreadLedgerContext(input.threadId).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider turn could not read thread ledger", {
+          threadId: input.threadId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as("")),
+      ),
+    );
+    const messageWithLedger = ledgerContext
+      ? `${ledgerContext}\n\n[Current turn request]\n${input.messageText}`
+      : input.messageText;
+    const normalizedInput = toNonEmptyProviderInput(messageWithLedger);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()

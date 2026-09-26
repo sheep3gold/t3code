@@ -40,6 +40,10 @@ import {
   ThreadScheduleToolkitHandlersLive,
 } from "../orchestration/ThreadSchedules.ts";
 import {
+  ThreadLedgerToolkit,
+  ThreadLedgerToolkitHandlersLive,
+} from "../orchestration/ThreadLedger.ts";
+import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
 } from "./toolkits/device/handlers.ts";
@@ -624,6 +628,10 @@ export const ThreadScheduleToolkitRegistrationLive = McpServer.toolkit(
   ThreadScheduleToolkit,
 ).pipe(Layer.provide(ThreadScheduleToolkitHandlersLive));
 
+export const ThreadLedgerToolkitRegistrationLive = McpServer.toolkit(
+  ThreadLedgerToolkit,
+).pipe(Layer.provide(ThreadLedgerToolkitHandlersLive));
+
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
   Layer.provide(DeviceStandardToolkitHandlersLive),
 );
@@ -649,5 +657,6 @@ export const layer = Layer.mergeAll(
   PullRequestsToolkitRegistrationLive,
   ThreadWebhookToolkitRegistrationLive,
   ThreadScheduleToolkitRegistrationLive,
+  ThreadLedgerToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));
