@@ -68,6 +68,7 @@ import {
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import * as ThreadLedgerPersistence from "../../persistence/ThreadLedger.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -491,6 +492,7 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ThreadLedgerPersistence.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -848,6 +850,53 @@ describe("ProviderCommandReactor", () => {
       );
     }),
   );
+
+  it("injects the durable thread ledger before the current provider request", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    await harness.runEffect(
+      ThreadLedgerPersistence.ThreadLedgerRepository.pipe(
+        Effect.flatMap((repository) =>
+          repository.record({
+            threadId,
+            state: {
+              goal: "Ship the feature",
+              phase: "validating",
+              next: "Run focused tests",
+              artifacts: { branch: "feat/ledger" },
+            },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            event: { kind: "progress", message: "Implementation completed" },
+          }),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-ledger-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-ledger"),
+          role: "user",
+          text: "Continue now",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0].input ?? "";
+    expect(input).toContain("[Persistent thread ledger — durable resume state]");
+    expect(input).toContain("Goal: Ship the feature");
+    expect(input).toContain("Next: Run focused tests");
+    expect(input).toContain("[Current turn request]\nContinue now");
+    expect(input.indexOf("Goal: Ship the feature")).toBeLessThan(input.indexOf("Continue now"));
+  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
