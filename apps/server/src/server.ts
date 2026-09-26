@@ -154,6 +154,7 @@ import {
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import { threadWebhookRouteLayer } from "./orchestration/ThreadWebhook.ts";
 import * as ThreadSchedulesRepository from "./persistence/ThreadSchedules.ts";
+import * as ThreadPullRequestMonitors from "./persistence/ThreadPullRequestMonitors.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -276,6 +277,9 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 const ThreadScheduleRepositoryLayerLive = ThreadSchedulesRepository.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const ThreadPullRequestMonitorRepositoryLayerLive = ThreadPullRequestMonitors.layer.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
@@ -506,6 +510,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(ThreadScheduleRepositoryLayerLive),
+  Layer.provideMerge(ThreadPullRequestMonitorRepositoryLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
   Layer.provideMerge(
