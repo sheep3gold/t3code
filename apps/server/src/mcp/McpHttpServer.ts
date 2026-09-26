@@ -48,6 +48,10 @@ import {
   AgentMemoryToolkitHandlersLive,
 } from "../orchestration/AgentMemory.ts";
 import {
+  ArtifactToolkit,
+  ArtifactToolkitHandlersLive,
+} from "../orchestration/ArtifactLibrary.ts";
+import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
 } from "./toolkits/device/handlers.ts";
@@ -640,6 +644,10 @@ export const AgentMemoryToolkitRegistrationLive = McpServer.toolkit(
   AgentMemoryToolkit,
 ).pipe(Layer.provide(AgentMemoryToolkitHandlersLive));
 
+export const ArtifactToolkitRegistrationLive = McpServer.toolkit(
+  ArtifactToolkit,
+).pipe(Layer.provide(ArtifactToolkitHandlersLive));
+
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
   Layer.provide(DeviceStandardToolkitHandlersLive),
 );
@@ -667,5 +675,6 @@ export const layer = Layer.mergeAll(
   ThreadScheduleToolkitRegistrationLive,
   ThreadLedgerToolkitRegistrationLive,
   AgentMemoryToolkitRegistrationLive,
+  ArtifactToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

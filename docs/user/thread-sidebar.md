@@ -185,6 +185,13 @@ until an agent calls `memory_search`. Search uses local deterministic keyword sc
 `memory_remove` deletes only the specified entry ID. T3 Code does not automatically archive whole
 conversations into memory or send project text to an embedding provider.
 
+Agents can save generated text, Markdown, JSON, HTML, and SVG with `artifact_save`. Artifacts are
+shared by threads in the same project and addressed by a stable slug. `artifact_update` creates a
+new immutable version when content changes, `artifact_versions` lists history, and
+`artifact_revert` restores an older version as a new current version without deleting later
+history. `artifact_delete` permanently removes one artifact and all versions. Stored HTML and SVG
+are returned as data and are never executed by the server.
+
 ## Snooze until later
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
