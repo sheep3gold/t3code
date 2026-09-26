@@ -27,6 +27,7 @@ import {
 import {
   DpopFailureReason,
   AuthSessionId,
+  ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -191,7 +192,10 @@ export class EnvironmentInternalError extends Schema.TaggedError<EnvironmentInte
   }
 }
 
-export const EnvironmentResourceNotFoundReason = Schema.Literals(["thread_not_found"]);
+export const EnvironmentResourceNotFoundReason = Schema.Literals([
+  "thread_not_found",
+  "artifact_not_found",
+]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
 export class EnvironmentResourceNotFoundError extends Schema.TaggedError<EnvironmentResourceNotFoundError>()(
@@ -505,6 +509,46 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
   beforeCursor: Schema.optional(TrimmedNonEmptyString),
 };
 
+const EnvironmentArtifactKind = Schema.Literals(["text", "markdown", "json", "html", "svg"]);
+export const EnvironmentArtifactSummary = Schema.Struct({
+  id: Schema.String,
+  slug: Schema.String,
+  projectId: ProjectId,
+  name: Schema.String,
+  kind: EnvironmentArtifactKind,
+  description: Schema.NullOr(Schema.String),
+  tags: Schema.Array(Schema.String),
+  currentVersion: Schema.Number,
+  sourceThreadId: ThreadId,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type EnvironmentArtifactSummary = typeof EnvironmentArtifactSummary.Type;
+export const EnvironmentArtifactDetail = Schema.Struct({
+  ...EnvironmentArtifactSummary.fields,
+  version: Schema.Number,
+  content: Schema.String,
+  versionReason: Schema.String,
+  versionCreatedAt: Schema.String,
+});
+export type EnvironmentArtifactDetail = typeof EnvironmentArtifactDetail.Type;
+export const EnvironmentArtifactVersion = Schema.Struct({
+  version: Schema.Number,
+  reason: Schema.String,
+  sourceThreadId: ThreadId,
+  createdAt: Schema.String,
+});
+export type EnvironmentArtifactVersion = typeof EnvironmentArtifactVersion.Type;
+
+const EnvironmentArtifactProjectQuery = { projectId: ProjectId };
+const EnvironmentArtifactGetParams = Schema.Struct({ slug: TrimmedNonEmptyString });
+const EnvironmentArtifactGetQuery = {
+  projectId: ProjectId,
+  version: Schema.optional(
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+};
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
@@ -535,6 +579,34 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       payload: ClientOrchestrationCommand,
       success: DispatchResult,
       error: EnvironmentOrchestrationDispatchErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+export class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
+  .add(
+    HttpApiEndpoint.get("list", "/api/artifacts", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentArtifactProjectQuery,
+      success: Schema.Struct({ artifacts: Schema.Array(EnvironmentArtifactSummary) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("get", "/api/artifacts/:slug", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactGetQuery,
+      success: EnvironmentArtifactDetail,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("versions", "/api/artifacts/:slug/versions", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactProjectQuery,
+      success: Schema.Struct({ versions: Schema.Array(EnvironmentArtifactVersion) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
@@ -619,5 +691,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentArtifactsHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}
