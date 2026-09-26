@@ -48,6 +48,7 @@ import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDi
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { forkParked } from "./serverActivation.ts";
 import { publishTurnCompletionNotification } from "./notifications/MsgHubTurnCompletion.ts";
+import { startThreadScheduleRunner } from "./orchestration/ThreadSchedules.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import {
@@ -999,6 +1000,7 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+          yield* startThreadScheduleRunner.pipe(Scope.provide(reactorScope));
         }),
       );
 

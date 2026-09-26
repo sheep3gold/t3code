@@ -97,6 +97,18 @@ continues. T3 Code does not call a quiet thread stuck just because it produced n
 long builds and tools can legitimately stay silent, so recovery requires an explicit provider exit
 or error signal.
 
+## Schedule agent work
+
+Agents can use `schedule_thread_task` to run a prompt in the current thread at a future time or on
+a recurring interval. Schedules live on the environment server, survive restarts, and continue when
+web, desktop, and mobile clients are closed. Use `list_thread_schedules`,
+`pause_thread_schedule`, `resume_thread_schedule`, or `delete_thread_schedule` to manage them.
+
+A scheduled run never overlaps an active turn or a pending approval or question; the server defers
+it and tries again. After downtime, a recurring schedule runs once and advances to the next future
+slot instead of replaying every missed interval. One-shot schedules remain visible as completed
+after they run.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list
