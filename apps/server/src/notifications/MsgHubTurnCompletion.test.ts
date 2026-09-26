@@ -4,6 +4,7 @@ import {
   buildMsgHubTurnCompletionRequest,
   publishTurnCompletionNotification,
   resolveMsgHubTurnCompletionConfig,
+  resolveUnexpectedTurnInterruption,
   type MsgHubTurnCompletionConfig,
   type TurnCompletionNotificationInput,
 } from "./MsgHubTurnCompletion.ts";
@@ -80,6 +81,43 @@ describe("MsgHubTurnCompletion", () => {
     expect(payload.title).toContain("❌");
     expect(payload.text).toBe("Provider unavailable");
     expect(payload.level).toBe("failed");
+  });
+
+  it("only classifies a session exit while a turn is still active", () => {
+    expect(resolveUnexpectedTurnInterruption(null, "normal shutdown")).toBeNull();
+    expect(resolveUnexpectedTurnInterruption(undefined)).toBeNull();
+    expect(resolveUnexpectedTurnInterruption("turn-active", "provider process exited")).toEqual({
+      turnId: "turn-active",
+      errorMessage: "provider process exited",
+    });
+    expect(resolveUnexpectedTurnInterruption("turn-active", "   ")).toEqual({
+      turnId: "turn-active",
+      errorMessage: "Provider session exited before the active turn reported completion.",
+    });
+  });
+
+  it("renders interruption evidence as a warning", () => {
+    const request = buildMsgHubTurnCompletionRequest(
+      {
+        ...input,
+        state: "interrupted",
+        text: "",
+        errorMessage: "Provider session exited before reporting completion.",
+      },
+      config,
+    );
+    const envelope = JSON.parse(request.body) as { payload: string };
+    const payload = JSON.parse(envelope.payload) as {
+      title: string;
+      text: string;
+      level: string;
+      fields: Record<string, string>;
+    };
+
+    expect(payload.title).toContain("⚠️");
+    expect(payload.text).toBe("Provider session exited before reporting completion.");
+    expect(payload.level).toBe("warning");
+    expect(payload.fields.状态).toBe("interrupted");
   });
 
   it("does not touch the network while disabled", async () => {

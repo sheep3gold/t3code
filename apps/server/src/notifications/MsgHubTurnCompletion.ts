@@ -23,6 +23,23 @@ export interface TurnCompletionNotificationInput {
   readonly createdAt: string;
 }
 
+export interface UnexpectedTurnInterruption {
+  readonly turnId: string;
+  readonly errorMessage: string;
+}
+
+export function resolveUnexpectedTurnInterruption(
+  activeTurnId: string | null | undefined,
+  reason?: string,
+): UnexpectedTurnInterruption | null {
+  if (!activeTurnId) return null;
+  return {
+    turnId: activeTurnId,
+    errorMessage:
+      reason?.trim() || "Provider session exited before the active turn reported completion.",
+  };
+}
+
 export interface MsgHubTurnCompletionConfig {
   readonly baseUrl: string;
   readonly token: string;
