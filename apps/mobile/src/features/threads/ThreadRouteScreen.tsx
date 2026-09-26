@@ -1,4 +1,6 @@
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import { canRetryThread, THREAD_RETRY_PROMPT } from "@t3tools/client-runtime/operations";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import {
   getComposerDraftSnapshot,
@@ -355,6 +357,7 @@ function ThreadRouteContent(
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
+  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, "thread retry");
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const navigation = useNavigation();
   const params = props.route.params;
@@ -647,6 +650,51 @@ function ThreadRouteContent(
       },
     });
   }, [interruptThreadTurn, selectedThread]);
+
+  const [retryingThread, setRetryingThread] = useState(false);
+  const retryableThread = canRetryThread({
+    session: selectedThread?.session ?? null,
+    hasUserMessage:
+      selectedThreadDetail?.messages.some((message) => message.role === "user") ?? false,
+    hasPendingRequest:
+      requests.activePendingApproval !== null || requests.activePendingUserInput !== null,
+  });
+  const threadRetryError = retryableThread
+    ? (selectedThread?.session?.lastError ?? "The previous turn was interrupted.")
+    : null;
+  const handleRetryThread = useCallback(async () => {
+    if (!selectedThread || !retryableThread || retryingThread) return;
+    const metadata = makeTurnCommandMetadata();
+    setRetryingThread(true);
+    try {
+      const result = await startThreadTurn({
+        environmentId: selectedThread.environmentId,
+        input: {
+          commandId: CommandId.make(metadata.commandId),
+          threadId: selectedThread.id,
+          message: {
+            messageId: MessageId.make(metadata.messageId),
+            role: "user",
+            text: THREAD_RETRY_PROMPT,
+            attachments: [],
+          },
+          modelSelection: selectedThread.modelSelection,
+          runtimeMode: selectedThread.runtimeMode,
+          interactionMode: selectedThread.interactionMode,
+          createdAt: metadata.createdAt,
+        },
+      });
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        Alert.alert(
+          "Could not retry thread",
+          error instanceof Error ? error.message : "Please try again.",
+        );
+      }
+    } finally {
+      setRetryingThread(false);
+    }
+  }, [retryableThread, retryingThread, selectedThread, startThreadTurn]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -962,6 +1010,9 @@ function ThreadRouteContent(
           contentPresentation={contentPresentation}
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}
+          threadError={threadRetryError}
+          retryingThread={retryingThread}
+          onRetryThread={() => void handleRetryThread()}
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}

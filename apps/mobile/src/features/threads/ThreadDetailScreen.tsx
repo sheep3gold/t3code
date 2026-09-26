@@ -92,6 +92,7 @@ import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
+import { ThreadRetryCard } from "./ThreadRetryCard";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
@@ -120,6 +121,9 @@ export interface ThreadDetailScreenProps {
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
   readonly connectionError: string | null;
+  readonly threadError: string | null;
+  readonly retryingThread: boolean;
+  readonly onRetryThread: () => void;
   readonly environmentLabel: string | null;
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
@@ -1058,6 +1062,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       report={usageLimitsReport}
                       environmentId={props.environmentId}
                       onClose={dismissUsageLimits}
+                    />
+                  </Animated.View>
+                ) : null}
+                {props.threadError !== null && props.creationState === null ? (
+                  <Animated.View
+                    className="shrink-0 px-4 pb-3"
+                    entering={FadeInDown.duration(220)}
+                    exiting={FadeOut.duration(140)}
+                  >
+                    <ThreadRetryCard
+                      error={props.threadError}
+                      retrying={props.retryingThread}
+                      onRetry={props.onRetryThread}
                     />
                   </Animated.View>
                 ) : null}

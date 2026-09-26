@@ -9,6 +9,7 @@ import {
   EventId,
   isToolLifecycleItemType,
   ThreadId,
+  THREAD_RETRY_PROMPT,
   type ThreadTokenUsageSnapshot,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -129,6 +130,11 @@ const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 // as soon as it is done.
 const MIN_ASSISTANT_DELIVERY_INTERVAL_MS = 400;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+const RECOVERABLE_TURN_RETRY_DELAYS_MS = [2_000, 5_000, 15_000] as const;
+
+export function recoverableTurnRetryDelayMs(attempt: number): number | null {
+  return RECOVERABLE_TURN_RETRY_DELAYS_MS[attempt - 1] ?? null;
+}
 
 type TurnStartRequestedDomainEvent = Extract<
   OrchestrationEvent,
@@ -1119,6 +1125,87 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadRuntimeContext(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const recoverableRetryAttempts = new Map<string, number>();
+  const scheduledRecoverableRetries = new Set<string>();
+
+  const scheduleRecoverableTurnRetry = Effect.fn("scheduleRecoverableTurnRetry")(function* (
+    threadId: ThreadId,
+    reason: string,
+  ) {
+    const key = String(threadId);
+    if (scheduledRecoverableRetries.has(key)) return;
+    const attempt = (recoverableRetryAttempts.get(key) ?? 0) + 1;
+    const delayMs = recoverableTurnRetryDelayMs(attempt);
+    if (delayMs === null) {
+      yield* Effect.logWarning("recoverable provider turn exhausted automatic retries", {
+        threadId,
+        attempts: recoverableRetryAttempts.get(key) ?? 0,
+        reason,
+      });
+      return;
+    }
+    recoverableRetryAttempts.set(key, attempt);
+    scheduledRecoverableRetries.add(key);
+
+    yield* forkParked(
+      Effect.sleep(Duration.millis(delayMs)).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const latest = yield* projectionSnapshotQuery
+              .getThreadShellById(threadId)
+              .pipe(Effect.map(Option.getOrUndefined));
+            const retryableStatus =
+              latest?.session?.status === "stopped" || latest?.session?.status === "error";
+            if (!latest || latest.session?.activeTurnId !== null || !retryableStatus) {
+              recoverableRetryAttempts.delete(key);
+              return;
+            }
+            const commandId = CommandId.make(yield* crypto.randomUUIDv4);
+            const messageId = MessageId.make(yield* crypto.randomUUIDv4);
+            const createdAt = DateTime.formatIso(yield* DateTime.now);
+            yield* orchestrationEngine.dispatch({
+              type: "thread.turn.start",
+              commandId,
+              threadId,
+              message: {
+                messageId,
+                role: "user",
+                text: `[Automatic retry ${attempt}/${RECOVERABLE_TURN_RETRY_DELAYS_MS.length} after a recoverable provider disconnect]\n\n${THREAD_RETRY_PROMPT}`,
+                attachments: [],
+              },
+              modelSelection: latest.modelSelection,
+              runtimeMode: latest.runtimeMode,
+              interactionMode: latest.interactionMode,
+              createdAt,
+            });
+            yield* Effect.logInfo("recoverable provider turn retry dispatched", {
+              threadId,
+              attempt,
+              delayMs,
+              reason,
+            });
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("recoverable provider turn retry failed", {
+                threadId,
+                attempt,
+                delayMs,
+                reason,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            scheduledRecoverableRetries.delete(key);
+          }),
+        ),
+      ),
+    );
   });
 
   const getThreadMessageById = Effect.fn("getThreadMessageById")(function* (
@@ -2555,6 +2642,20 @@ const make = Effect.gen(function* () {
           turnId: TurnId.make(unexpectedInterruption.turnId),
           errorMessage: unexpectedInterruption.errorMessage,
         });
+        if (event.payload.recoverable === true) {
+          yield* scheduleRecoverableTurnRetry(
+            thread.id,
+            event.payload.reason ?? "recoverable provider disconnect",
+          );
+        }
+      }
+
+      if (
+        event.type === "turn.aborted" ||
+        (event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "completed")
+      ) {
+        recoverableRetryAttempts.delete(String(thread.id));
       }
 
       if (event.type === "request.opened" || event.type === "user-input.requested") {

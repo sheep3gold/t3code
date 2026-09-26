@@ -1498,7 +1498,9 @@ function mapToRuntimeEvents(
         type: "session.exited",
         payload: {
           ...(event.message ? { reason: event.message } : {}),
-          ...(event.method === "session/closed" ? { exitKind: "graceful" } : {}),
+          ...(event.method === "session/closed"
+            ? { exitKind: "graceful" as const }
+            : { exitKind: "error" as const, recoverable: true }),
         },
       },
     ];

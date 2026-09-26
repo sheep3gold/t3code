@@ -136,6 +136,8 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
+export const THREAD_RETRY_PROMPT =
+  "Retry the previous request. Continue from the last confirmed step, verify existing results before acting, and do not repeat work that already completed.";
 export const ProviderRequestKind = Schema.Literals([
   "command",
   "file-read",
