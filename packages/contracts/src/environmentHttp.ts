@@ -68,6 +68,7 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_scope",
   "scope_not_granted",
   "invalid_command",
+  "invalid_schedule",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -611,6 +612,82 @@ export class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export const EnvironmentThreadSchedule = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  threadTitle: Schema.String,
+  prompt: Schema.String,
+  scheduleKind: Schema.Literals(["once", "interval"]),
+  intervalSeconds: Schema.NullOr(Schema.Number),
+  nextRunAt: Schema.String,
+  status: Schema.Literals(["active", "paused", "completed"]),
+  lastRunAt: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type EnvironmentThreadSchedule = typeof EnvironmentThreadSchedule.Type;
+
+const EnvironmentScheduleProjectQuery = { projectId: ProjectId };
+const EnvironmentScheduleProjectPayload = Schema.Struct({ projectId: ProjectId });
+const EnvironmentScheduleParams = Schema.Struct({ scheduleId: TrimmedNonEmptyString });
+const EnvironmentScheduleCreatePayload = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  prompt: TrimmedNonEmptyString,
+  at: Schema.optional(TrimmedNonEmptyString),
+  delaySeconds: Schema.optional(
+    Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+  everySeconds: Schema.optional(
+    Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+});
+
+export class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")
+  .add(
+    HttpApiEndpoint.get("list", "/api/schedules", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentScheduleProjectQuery,
+      success: Schema.Struct({ schedules: Schema.Array(EnvironmentThreadSchedule) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("create", "/api/schedules", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentScheduleCreatePayload,
+      success: EnvironmentThreadSchedule,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("pause", "/api/schedules/:scheduleId/pause", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentScheduleParams,
+      payload: EnvironmentScheduleProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("resume", "/api/schedules/:scheduleId/resume", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentScheduleParams,
+      payload: EnvironmentScheduleProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete("remove", "/api/schedules/:scheduleId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentScheduleParams,
+      payload: EnvironmentScheduleProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 /** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
@@ -693,5 +770,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentArtifactsHttpApi)
+  .add(EnvironmentSchedulesHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}
