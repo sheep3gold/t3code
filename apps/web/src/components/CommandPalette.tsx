@@ -48,6 +48,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   LinkIcon,
+  LibraryBigIcon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
@@ -2016,6 +2017,17 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:artifacts",
+    searchTerms: ["artifacts", "library", "saved", "versions", "documents"],
+    title: "Open artifact library",
+    icon: <LibraryBigIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/artifacts" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

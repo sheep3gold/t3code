@@ -509,7 +509,8 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
   beforeCursor: Schema.optional(TrimmedNonEmptyString),
 };
 
-const EnvironmentArtifactKind = Schema.Literals(["text", "markdown", "json", "html", "svg"]);
+export const EnvironmentArtifactKind = Schema.Literals(["text", "markdown", "json", "html", "svg"]);
+export type EnvironmentArtifactKind = typeof EnvironmentArtifactKind.Type;
 export const EnvironmentArtifactSummary = Schema.Struct({
   id: Schema.String,
   slug: Schema.String,
