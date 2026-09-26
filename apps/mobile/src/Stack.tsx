@@ -29,6 +29,10 @@ import {
   type RenderFailureProps,
 } from "./components/RenderErrorBoundary";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
+import {
+  SettingsArtifactDetailRouteScreen,
+  SettingsArtifactsRouteScreen,
+} from "./features/artifacts/ArtifactLibraryRouteScreens";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
@@ -321,6 +325,16 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "License notice",
       },
+    }),
+    SettingsArtifacts: createNativeStackScreen({
+      screen: SettingsArtifactsRouteScreen,
+      linking: "artifacts",
+      options: { title: "Artifacts" },
+    }),
+    SettingsArtifactDetail: createNativeStackScreen({
+      screen: SettingsArtifactDetailRouteScreen,
+      linking: "artifacts/:slug",
+      options: { title: "Artifact" },
     }),
     SettingsUsage: createNativeStackScreen({
       screen: UsageRouteScreen,
