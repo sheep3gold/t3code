@@ -27,6 +27,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
 import { PullRequestService } from "../pullRequest/PullRequestService.ts";
+import { ThreadPullRequestMonitorRepository } from "../persistence/ThreadPullRequestMonitors.ts";
 import { ServerActivation } from "../serverActivation.ts";
 import {
   OrchestrationEngineService,
@@ -216,6 +217,10 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
       summary,
       stack,
       invalidate: options.invalidate ?? (() => Effect.void),
+    }),
+    Layer.mock(ThreadPullRequestMonitorRepository)({
+      get: () => Effect.succeed(Option.none()),
+      set: () => Effect.void,
     }),
     Layer.mock(OrchestrationEngineService)({
       readEvents: () => Stream.empty,

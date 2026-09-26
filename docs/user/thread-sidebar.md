@@ -141,7 +141,12 @@ automatic branch links do not appear.
 On web and desktop, right-click a pull request link in a thread and choose
 **Link to thread** to select a different PR. Use **Unlink from thread** on the
 same link to return to the branch PR, if one exists.
-The linked pull request participates in automatic settlement.
+The linked pull request participates in automatic settlement. Pull requests created or linked by an
+agent are also monitored while their thread is active. A new failing CI rollup, changes-requested
+review decision, or merge conflict wakes the thread so the agent can inspect the latest provider
+evidence and address verified findings. Pending checks and review-required states do not wake the
+agent, and each provider-state fingerprint wakes at most once across server restarts. Manually
+linked pull requests remain status-only so adding one for reference never starts the agent.
 
 ## Find and reference work
 

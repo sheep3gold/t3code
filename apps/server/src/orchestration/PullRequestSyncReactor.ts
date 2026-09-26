@@ -1,6 +1,9 @@
+import * as NodeCrypto from "node:crypto";
+
 import { siblingPullRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import {
   CommandId,
+  MessageId,
   type OrchestrationThreadShell,
   type PullRequestSummary,
   type ThreadPullRequestKey,
@@ -27,6 +30,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as ThreadPullRequestMonitors from "../persistence/ThreadPullRequestMonitors.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
@@ -81,6 +85,40 @@ function snapshotFieldsEqual(left: SnapshotFields, right: SnapshotFields): boole
   );
 }
 
+export function pullRequestActionableReasons(
+  snapshot: Pick<
+    ThreadPullRequestSnapshot,
+    "state" | "checksState" | "reviewDecision" | "mergeability"
+  >,
+): ReadonlyArray<string> {
+  if (snapshot.state !== "open") return [];
+  return [
+    ...(snapshot.checksState === "failing" ? ["CI checks are failing"] : []),
+    ...(snapshot.reviewDecision === "changes-requested" ? ["review changes were requested"] : []),
+    ...(snapshot.mergeability === "conflicting" ? ["the pull request has merge conflicts"] : []),
+  ];
+}
+
+export function pullRequestMonitorFingerprint(
+  snapshot: Pick<
+    ThreadPullRequestSnapshot,
+    "state" | "updatedAt" | "checksState" | "reviewDecision" | "mergeability"
+  >,
+): string {
+  return NodeCrypto.createHash("sha256")
+    .update(
+      JSON.stringify([
+        snapshot.state,
+        snapshot.updatedAt,
+        snapshot.checksState ?? null,
+        snapshot.reviewDecision ?? null,
+        snapshot.mergeability ?? null,
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 20);
+}
+
 function stacksEqual(
   left: ThreadPullRequestStack | null,
   right: ThreadPullRequestStack | null,
@@ -129,6 +167,7 @@ export const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const pullRequests = yield* PullRequestService.PullRequestService;
+  const monitors = yield* ThreadPullRequestMonitors.ThreadPullRequestMonitorRepository;
   const crypto = yield* Crypto.Crypto;
 
   const lastSyncedAt = new Map<string, number>();
@@ -177,6 +216,76 @@ export const make = Effect.gen(function* () {
     // stack do not both try to add the same sibling.
     const linkedThisSweep = new Set<string>();
     const persistence = yield* Semaphore.make(1);
+
+    const monitorEntry = Effect.fn("PullRequestSyncReactor.monitorEntry")(function* (
+      entry: LinkEntry,
+      fields: SnapshotFields,
+    ) {
+      const { thread, link } = entry;
+      if (link.source !== "agent" && link.source !== "created") return;
+      const host = normalizeThreadPullRequestKey(link).host;
+      const key = {
+        threadId: thread.id,
+        host,
+        repository: link.repository,
+        number: link.number,
+      };
+      const fingerprint = pullRequestMonitorFingerprint(fields);
+      const previous = yield* monitors.get(key).pipe(Effect.map(Option.getOrUndefined));
+      const terminal = fields.state === "merged" || fields.state === "closed";
+      if (terminal) {
+        if (previous?.fingerprint !== fingerprint || previous.status !== "terminal") {
+          yield* monitors.set(key, { fingerprint, status: "terminal", updatedAt: nowIso });
+        }
+        return;
+      }
+      const reasons = pullRequestActionableReasons(fields);
+      if (reasons.length === 0) {
+        if (previous?.fingerprint !== fingerprint || previous.status !== "active") {
+          yield* monitors.set(key, { fingerprint, status: "active", updatedAt: nowIso });
+        }
+        return;
+      }
+      if (previous?.fingerprint === fingerprint) return;
+      const blocked =
+        thread.session?.activeTurnId != null ||
+        thread.session?.status === "starting" ||
+        thread.session?.status === "running" ||
+        thread.hasPendingApprovals ||
+        thread.hasPendingUserInput;
+      if (blocked) return;
+
+      const dispatchHash = NodeCrypto.createHash("sha256")
+        .update(`${thread.id}|${host}|${link.repository}|${link.number}|${fingerprint}`)
+        .digest("hex")
+        .slice(0, 20);
+      yield* engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(`pr-monitor:${dispatchHash}`),
+        threadId: thread.id,
+        message: {
+          messageId: MessageId.make(`pr-monitor:${dispatchHash}`),
+          role: "user",
+          text: [
+            "[Pull request monitor wake — verify current provider evidence before acting]",
+            `Pull request: ${link.url}`,
+            `Signals: ${reasons.join("; ")}.`,
+            "Inspect the latest checks, review decision, review threads, and comments. Fix only verified actionable issues, keep changes on the feature branch, run targeted validation, and push the feature branch. If a signal is stale or advisory, report that instead of changing code.",
+          ].join("\n\n"),
+          attachments: [],
+        },
+        modelSelection: thread.modelSelection,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        createdAt: nowIso,
+      });
+      yield* monitors.set(key, { fingerprint, status: "active", updatedAt: nowIso });
+      yield* Effect.logInfo("pull request monitor woke thread", {
+        threadId: thread.id,
+        pullRequest: link.url,
+        reasons,
+      });
+    });
 
     const syncEntry = Effect.fn("PullRequestSyncReactor.syncEntry")(function* (
       entry: LinkEntry,
@@ -230,6 +339,7 @@ export const make = Effect.gen(function* () {
           stack: nextStack,
         });
       }
+      yield* monitorEntry(entry, fields);
     });
 
     const syncGroup = Effect.fn("PullRequestSyncReactor.syncGroup")(function* (
