@@ -113,8 +113,10 @@ Agents can create a sequential multi-step workflow with `workflow_start`. Each s
 turn and must finish with `workflow_complete_step` or `workflow_fail_step`; the next pending step
 starts only after the thread is idle. Workflow and step state, attempts, and concise results persist
 across restarts. A running step left orphaned for five minutes is retried from its recorded state,
-up to three attempts, then the workflow stops as failed. Use `workflow_list`, `workflow_get`,
-`workflow_pause`, `workflow_resume`, `workflow_retry_step`, or `workflow_cancel` to manage it.
+up to three attempts, then the workflow stops as failed. `workflow_restart_from` reuses the
+completed prefix and clears the selected step plus every later result before re-executing them. Use
+`workflow_list`, `workflow_get`, `workflow_pause`, `workflow_resume`, `workflow_retry_step`, or
+`workflow_cancel` to manage it.
 
 ## Settle finished work
 

@@ -60,6 +60,31 @@ layer("ThreadWorkflowRepository", (it) => {
       assert.equal(workflow.status, "running");
       assert.equal(workflow.steps[1]?.status, "pending");
       assert.equal(workflow.steps[1]?.attempt, 2);
+      assert.equal(yield* repository.markRunning(workflow, "2026-09-26T12:06:00.000Z"), true);
+      workflow = Option.getOrThrow(
+        yield* repository.completeCurrent(
+          workflow.id,
+          threadId,
+          "Validated",
+          "2026-09-26T12:07:00.000Z",
+        ),
+      );
+      assert.equal(workflow.status, "completed");
+      workflow = Option.getOrThrow(
+        yield* repository.restartFrom(
+          workflow.id,
+          threadId,
+          1,
+          "2026-09-26T12:08:00.000Z",
+        ),
+      );
+      assert.equal(workflow.status, "running");
+      assert.equal(workflow.currentStep, 1);
+      assert.equal(workflow.steps[0]?.status, "completed");
+      assert.equal(workflow.steps[0]?.result, "Implemented");
+      assert.equal(workflow.steps[1]?.status, "pending");
+      assert.equal(workflow.steps[1]?.attempt, 1);
+      assert.equal(workflow.steps[1]?.result, null);
     }),
   );
 });

@@ -35,6 +35,10 @@ const StartWorkflowInput = Schema.Struct({
   steps: Schema.Array(StepInput),
 });
 const WorkflowIdInput = Schema.Struct({ workflowId: TrimmedNonEmptyString });
+const RestartWorkflowInput = Schema.Struct({
+  workflowId: TrimmedNonEmptyString,
+  fromStep: Schema.Int,
+});
 const WorkflowResultInput = Schema.Struct({
   workflowId: TrimmedNonEmptyString,
   result: TrimmedNonEmptyString,
@@ -164,6 +168,15 @@ const RetryWorkflowTool = Tool.make("workflow_retry_step", {
   dependencies,
 }).annotate(Tool.Title, "Retry workflow step").annotate(Tool.Readonly, false).annotate(Tool.Destructive, false).annotate(Tool.Idempotent, false).annotate(Tool.OpenWorld, false);
 
+const RestartWorkflowTool = Tool.make("workflow_restart_from", {
+  description:
+    "Restart a workflow from a 1-based step number. Completed prefix steps and their results are reused unchanged; the selected step and every later step are reset and re-executed.",
+  parameters: RestartWorkflowInput,
+  success: Workflow,
+  failure: WorkflowToolError,
+  dependencies,
+}).annotate(Tool.Title, "Restart workflow from step").annotate(Tool.Readonly, false).annotate(Tool.Destructive, false).annotate(Tool.Idempotent, false).annotate(Tool.OpenWorld, false);
+
 const CancelWorkflowTool = Tool.make("workflow_cancel", {
   description: "Cancel a running, paused, or failed workflow. Completed step history remains readable.",
   parameters: WorkflowIdInput,
@@ -181,6 +194,7 @@ export const ThreadWorkflowToolkit = Toolkit.make(
   PauseWorkflowTool,
   ResumeWorkflowTool,
   RetryWorkflowTool,
+  RestartWorkflowTool,
   CancelWorkflowTool,
 );
 
@@ -276,6 +290,31 @@ const makeToolkit = Effect.gen(function* () {
       const now = new Date(yield* Clock.currentTimeMillis).toISOString();
       const value = yield* repository.retryCurrent(workflowId, scope.threadId, now, MAX_ATTEMPTS).pipe(opError("retry-step"));
       return yield* required(workflowId, value);
+    }),
+    workflow_restart_from: ({ workflowId, fromStep }) => Effect.gen(function* () {
+      const scope = yield* context;
+      if (fromStep < 1) {
+        return yield* new WorkflowInputInvalidError({ detail: "fromStep must be at least 1." });
+      }
+      const current = yield* repository.get(workflowId, scope.threadId).pipe(
+        opError("get"),
+        Effect.flatMap((value) => required(workflowId, value)),
+      );
+      if (fromStep > current.steps.length) {
+        return yield* new WorkflowInputInvalidError({
+          detail: `fromStep must be between 1 and ${current.steps.length}.`,
+        });
+      }
+      if (current.steps.slice(0, fromStep - 1).some((step) => step.status !== "completed")) {
+        return yield* new WorkflowInputInvalidError({
+          detail: "Every step before fromStep must already be completed.",
+        });
+      }
+      const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+      const restarted = yield* repository
+        .restartFrom(workflowId, scope.threadId, fromStep - 1, now)
+        .pipe(opError("restart-from"));
+      return yield* required(workflowId, restarted);
     }),
   });
 });

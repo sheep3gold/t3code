@@ -99,6 +99,12 @@ export class ThreadWorkflowRepository extends Context.Service<
       now: string,
       maxAttempts: number,
     ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
+    readonly restartFrom: (
+      id: string,
+      threadId: ThreadId,
+      fromStep: number,
+      now: string,
+    ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
   }
 >()("t3/persistence/ThreadWorkflowRepository") {}
 
@@ -292,6 +298,41 @@ const make = Effect.gen(function* () {
         .pipe(
           Effect.flatMap((changed) => changed ? get(id, threadId) : Effect.succeed(Option.none())),
           Effect.mapError(sqlError("retryThreadWorkflowStep")),
+        ),
+    restartFrom: (id, threadId, fromStep, now) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const workflows = yield* sql<{ readonly id: string }>`
+              SELECT id FROM thread_workflows WHERE id = ${id} AND thread_id = ${threadId} LIMIT 1
+            `;
+            if (workflows.length === 0) return false;
+            const bounds = yield* sql<{ readonly count: number }>`
+              SELECT COUNT(*) AS count FROM thread_workflow_steps WHERE workflow_id = ${id}
+            `;
+            if (fromStep < 0 || fromStep >= (bounds[0]?.count ?? 0)) return false;
+            const incompletePrefix = yield* sql<{ readonly count: number }>`
+              SELECT COUNT(*) AS count FROM thread_workflow_steps
+              WHERE workflow_id = ${id} AND step_index < ${fromStep} AND status <> 'completed'
+            `;
+            if ((incompletePrefix[0]?.count ?? 0) > 0) return false;
+            yield* sql`
+              UPDATE thread_workflow_steps
+              SET status = 'pending', attempt = 1, result = NULL,
+                  started_at = NULL, completed_at = NULL
+              WHERE workflow_id = ${id} AND step_index >= ${fromStep}
+            `;
+            yield* sql`
+              UPDATE thread_workflows
+              SET status = 'running', current_step = ${fromStep}, updated_at = ${now}
+              WHERE id = ${id}
+            `;
+            return true;
+          }),
+        )
+        .pipe(
+          Effect.flatMap((changed) => changed ? get(id, threadId) : Effect.succeed(Option.none())),
+          Effect.mapError(sqlError("restartThreadWorkflowFromStep")),
         ),
   });
 });
