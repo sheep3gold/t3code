@@ -808,6 +808,37 @@ export const KiroSettings = makeProviderSettingsSchema(
 );
 export type KiroSettings = typeof KiroSettings.Type;
 
+/** MiniMax Code native ACP provider (`mcode acp`). */
+export const MiniMaxSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("mcode").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the MiniMax Code CLI binary.",
+        providerSettingsForm: { placeholder: "mcode", clearWhenEmpty: "omit" },
+      }),
+    ),
+    dataDir: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Data directory",
+        description: "MiniMax Code data directory containing config.yaml and sign-in state.",
+        providerSettingsForm: { placeholder: "~/.minimax", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["binaryPath", "dataDir"] },
+);
+export type MiniMaxSettings = typeof MiniMaxSettings.Type;
+
 /**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
  * in the browser. The API key and Agent Platform methods take credentials from

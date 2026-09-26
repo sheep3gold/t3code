@@ -5,6 +5,7 @@ import {
   CursorSettings,
   GrokSettings,
   KiroSettings,
+  MiniMaxSettings,
   OpenCodeSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
@@ -15,6 +16,7 @@ import {
   ClaudeAI,
   CursorIcon,
   GrokIcon,
+  MiniMaxIcon,
   type Icon,
   OpenAI,
   OpenCodeIcon,
@@ -71,6 +73,13 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     icon: GrokIcon,
     badgeLabel: "Early Access",
     settingsSchema: GrokSettings,
+  },
+  {
+    value: ProviderDriverKind.make("minimax"),
+    label: "MiniMax Code",
+    icon: MiniMaxIcon,
+    badgeLabel: "Fork",
+    settingsSchema: MiniMaxSettings,
   },
   {
     value: ProviderDriverKind.make("opencode"),
