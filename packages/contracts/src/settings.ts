@@ -749,6 +749,97 @@ export const GrokSettings = makeProviderSettingsSchema(
 export type GrokSettings = typeof GrokSettings.Type;
 
 /**
+ * Kiro CLI (AWS) — driven over ACP via its `acp` subcommand.
+ *
+ * Off by default like the other opt-in CLI providers: probing for a binary
+ * that most installs do not have would show a broken provider to everyone.
+ *
+ * `agentEngine` is exposed because it is version-dependent rather than a
+ * preference: kiro-cli 2.21 still defaults to the v1 engine, which cannot
+ * speak ACP at all ("--output-format stream-json is not supported on the v1
+ * engine"), while 2.23 defaults to v2. Pinning it here keeps one setting
+ * working across both instead of silently failing on the older binary.
+ */
+export const KiroSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("kiro-cli").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Kiro CLI binary.",
+        providerSettingsForm: { placeholder: "kiro-cli", clearWhenEmpty: "omit" },
+      }),
+    ),
+    agentEngine: Schema.Literals(["v2", "v3"]).pipe(
+      Schema.withDecodingDefault(Effect.succeed("v2" as const)),
+      Schema.annotateKey({
+        title: "Agent engine",
+        description: "Kiro agent engine to run. v1 cannot speak ACP and is deliberately absent.",
+        providerSettingsForm: {
+          control: "select",
+          options: [
+            { value: "v2", label: "v2 (default)" },
+            { value: "v3", label: "v3" },
+          ],
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    agent: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Agent",
+        description:
+          "Named kiro agent to start sessions with (its MCP servers and skills come along). Empty uses the default agent.",
+        providerSettingsForm: { placeholder: "default", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "agentEngine", "agent"],
+  },
+);
+export type KiroSettings = typeof KiroSettings.Type;
+
+/** MiniMax Code native ACP provider (`mcode acp`). */
+export const MiniMaxSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("mcode").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the MiniMax Code CLI binary.",
+        providerSettingsForm: { placeholder: "mcode", clearWhenEmpty: "omit" },
+      }),
+    ),
+    dataDir: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Data directory",
+        description: "MiniMax Code data directory containing config.yaml and sign-in state.",
+        providerSettingsForm: { placeholder: "~/.minimax", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["binaryPath", "dataDir"] },
+);
+export type MiniMaxSettings = typeof MiniMaxSettings.Type;
+
+/**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
  * in the browser. The API key and Agent Platform methods take credentials from
  * the instance config and never open a browser.
@@ -1262,6 +1353,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    kiro: KiroSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),

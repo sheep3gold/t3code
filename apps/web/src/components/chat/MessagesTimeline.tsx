@@ -103,6 +103,7 @@ import {
 } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
+import { parseAssistantOptions } from "./AssistantOptionChips";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Root, RootContent } from "mdast";
@@ -2350,7 +2351,12 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const rawText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+
+  // 标记行从正文剥掉，chip 由输入框上方那一组渲染（见 ChatView）。候选是
+  // 「接下来要发什么」，属于输入区；留在气泡里会随消息滚走而点不到。
+  const parsedOptions = row.message.streaming ? null : parseAssistantOptions(rawText);
+  const messageText = parsedOptions?.body ?? rawText;
 
   return (
     <>
