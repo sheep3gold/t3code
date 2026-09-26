@@ -56,7 +56,10 @@ import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
-import { publishTurnCompletionNotification } from "../../notifications/MsgHubTurnCompletion.ts";
+import {
+  publishTurnCompletionNotification,
+  resolveUnexpectedTurnInterruption,
+} from "../../notifications/MsgHubTurnCompletion.ts";
 import {
   publishAttentionNotification,
   resolveMsgHubAttentionConfig,
@@ -1760,11 +1763,21 @@ const make = Effect.gen(function* () {
     },
   );
 
+  type TurnNotificationJob =
+    | {
+        readonly event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>;
+        readonly turnId: TurnId;
+      }
+    | {
+        readonly event: Extract<ProviderRuntimeEvent, { type: "session.exited" }>;
+        readonly turnId: TurnId;
+        readonly errorMessage: string;
+      };
+
   const notificationWorker = yield* makeDrainableWorker(
-    (event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>) =>
+    (job: TurnNotificationJob) =>
       Effect.gen(function* () {
-        const turnId = toTurnId(event.turnId);
-        if (!turnId) return;
+        const { event, turnId } = job;
         const thread = yield* projectionSnapshotQuery
           .getThreadDetailById(event.threadId, { activityKinds: [] })
           .pipe(Effect.map(Option.getOrUndefined));
@@ -1784,9 +1797,13 @@ const make = Effect.gen(function* () {
             project: project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project",
             threadTitle: thread.title,
             provider: event.provider,
-            state: normalizeRuntimeTurnState(event.payload.state),
+            state:
+              event.type === "turn.completed"
+                ? normalizeRuntimeTurnState(event.payload.state)
+                : "interrupted",
             text,
-            errorMessage: event.payload.errorMessage,
+            errorMessage:
+              "errorMessage" in job ? job.errorMessage : event.payload.errorMessage,
             createdAt: event.createdAt,
           }),
         );
@@ -1795,8 +1812,8 @@ const make = Effect.gen(function* () {
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
             : Effect.logWarning("failed to publish turn completion notification", {
-                threadId: event.threadId,
-                turnId: event.turnId ?? null,
+                threadId: job.event.threadId,
+                turnId: job.turnId,
                 cause: Cause.pretty(cause),
               }),
         ),
@@ -2517,8 +2534,27 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (event.type === "turn.completed" && shouldApplyThreadLifecycle) {
-        yield* notificationWorker.enqueue(event);
+      if (
+        event.type === "turn.completed" &&
+        shouldApplyThreadLifecycle &&
+        eventTurnId !== undefined
+      ) {
+        yield* notificationWorker.enqueue({ event, turnId: eventTurnId });
+      }
+
+      // A normal completion or user abort clears activeTurnId before the later
+      // session.exited event arrives. If it is still present here, the provider
+      // process disappeared without reporting a terminal turn state.
+      const unexpectedInterruption =
+        event.type === "session.exited"
+          ? resolveUnexpectedTurnInterruption(activeTurnId, event.payload.reason)
+          : null;
+      if (event.type === "session.exited" && unexpectedInterruption !== null) {
+        yield* notificationWorker.enqueue({
+          event,
+          turnId: TurnId.make(unexpectedInterruption.turnId),
+          errorMessage: unexpectedInterruption.errorMessage,
+        });
       }
 
       if (event.type === "request.opened" || event.type === "user-input.requested") {
