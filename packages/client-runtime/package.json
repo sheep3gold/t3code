@@ -115,6 +115,10 @@
       "types": "./src/state/artifactHttp.ts",
       "default": "./src/state/artifactHttp.ts"
     },
+    "./state/schedules": {
+      "types": "./src/state/scheduleHttp.ts",
+      "default": "./src/state/scheduleHttp.ts"
+    },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"

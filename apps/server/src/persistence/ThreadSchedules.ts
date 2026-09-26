@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -35,6 +35,16 @@ interface ThreadScheduleRow {
   readonly updatedAt: string;
 }
 
+export interface ProjectThreadSchedule extends ThreadSchedule {
+  readonly projectId: ProjectId;
+  readonly threadTitle: string;
+}
+
+interface ProjectThreadScheduleRow extends ThreadScheduleRow {
+  readonly projectId: string;
+  readonly threadTitle: string;
+}
+
 export interface CreateThreadScheduleInput {
   readonly id: string;
   readonly threadId: ThreadId;
@@ -50,6 +60,12 @@ const fromRow = (row: ThreadScheduleRow): ThreadSchedule => ({
   threadId: ThreadId.make(row.threadId),
 });
 
+const fromProjectRow = (row: ProjectThreadScheduleRow): ProjectThreadSchedule => ({
+  ...fromRow(row),
+  projectId: ProjectId.make(row.projectId),
+  threadTitle: row.threadTitle,
+});
+
 const sqlError = (operation: string) => (cause: unknown) =>
   new PersistenceSqlError({ operation, cause });
 
@@ -62,6 +78,9 @@ export class ThreadScheduleRepository extends Context.Service<
     readonly list: (
       threadId: ThreadId,
     ) => Effect.Effect<ReadonlyArray<ThreadSchedule>, PersistenceSqlError>;
+    readonly listProject: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ReadonlyArray<ProjectThreadSchedule>, PersistenceSqlError>;
     readonly listDue: (
       now: string,
     ) => Effect.Effect<ReadonlyArray<ThreadSchedule>, PersistenceSqlError>;
@@ -71,9 +90,19 @@ export class ThreadScheduleRepository extends Context.Service<
       paused: boolean,
       now: string,
     ) => Effect.Effect<boolean, PersistenceSqlError>;
+    readonly setPausedForProject: (
+      id: string,
+      projectId: ProjectId,
+      paused: boolean,
+      now: string,
+    ) => Effect.Effect<boolean, PersistenceSqlError>;
     readonly remove: (
       id: string,
       threadId: ThreadId,
+    ) => Effect.Effect<boolean, PersistenceSqlError>;
+    readonly removeForProject: (
+      id: string,
+      projectId: ProjectId,
     ) => Effect.Effect<boolean, PersistenceSqlError>;
     readonly defer: (
       id: string,
@@ -145,6 +174,30 @@ const make = Effect.gen(function* () {
         Effect.mapError(sqlError("listThreadSchedules")),
       ),
 
+    listProject: (projectId) =>
+      sql<ProjectThreadScheduleRow>`
+        SELECT s.id,
+               s.thread_id AS "threadId",
+               t.project_id AS "projectId",
+               t.title AS "threadTitle",
+               s.prompt,
+               s.schedule_kind AS "scheduleKind",
+               s.interval_seconds AS "intervalSeconds",
+               s.next_run_at AS "nextRunAt",
+               s.status,
+               s.last_run_at AS "lastRunAt",
+               s.created_at AS "createdAt",
+               s.updated_at AS "updatedAt"
+        FROM thread_schedules s
+        INNER JOIN projection_threads t ON t.thread_id = s.thread_id
+        WHERE t.project_id = ${projectId} AND t.deleted_at IS NULL
+        ORDER BY s.created_at DESC
+        LIMIT 500
+      `.pipe(
+        Effect.map((rows) => rows.map(fromProjectRow)),
+        Effect.mapError(sqlError("listProjectThreadSchedules")),
+      ),
+
     listDue: (now) =>
       sql<ThreadScheduleRow>`
         SELECT id,
@@ -187,10 +240,55 @@ const make = Effect.gen(function* () {
         Effect.mapError(sqlError("setThreadSchedulePaused")),
       ),
 
+    setPausedForProject: (id, projectId, paused, now) =>
+      (paused
+        ? sql`
+            UPDATE thread_schedules
+            SET status = 'paused', updated_at = ${now}
+            WHERE id = ${id}
+              AND status = 'active'
+              AND thread_id IN (
+                SELECT thread_id FROM projection_threads
+                WHERE project_id = ${projectId} AND deleted_at IS NULL
+              )
+            RETURNING id
+          `
+        : sql`
+            UPDATE thread_schedules
+            SET status = 'active',
+                next_run_at = CASE WHEN next_run_at < ${now} THEN ${now} ELSE next_run_at END,
+                updated_at = ${now}
+            WHERE id = ${id}
+              AND status = 'paused'
+              AND thread_id IN (
+                SELECT thread_id FROM projection_threads
+                WHERE project_id = ${projectId} AND deleted_at IS NULL
+              )
+            RETURNING id
+          `
+      ).pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError(sqlError("setProjectThreadSchedulePaused")),
+      ),
+
     remove: (id, threadId) =>
       sql`DELETE FROM thread_schedules WHERE id = ${id} AND thread_id = ${threadId} RETURNING id`.pipe(
         Effect.map((rows) => rows.length > 0),
         Effect.mapError(sqlError("removeThreadSchedule")),
+      ),
+
+    removeForProject: (id, projectId) =>
+      sql`
+        DELETE FROM thread_schedules
+        WHERE id = ${id}
+          AND thread_id IN (
+            SELECT thread_id FROM projection_threads
+            WHERE project_id = ${projectId} AND deleted_at IS NULL
+          )
+        RETURNING id
+      `.pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError(sqlError("removeProjectThreadSchedule")),
       ),
 
     defer: (id, expectedRunAt, nextRunAt, updatedAt) =>
