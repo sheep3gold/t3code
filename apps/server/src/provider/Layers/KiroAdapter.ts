@@ -266,11 +266,12 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             yield* Deferred.succeed(event.acknowledge, undefined).pipe(Effect.ignore);
             return;
 
-          case "ConnectionTerminated":
-            // The child died or the protocol broke. Settle everything waiting
-            // on a decision so no caller is left hanging, then mark the session
-            // dead — a later sendTurn must fail fast rather than write into a
-            // closed pipe.
+          case "ConnectionTerminated": {
+            // The child died or the protocol broke. Preserve the active turn
+            // long enough to emit canonical failure evidence; ingestion uses
+            // it to settle the projection and schedule a bounded retry.
+            const activeTurnId = ctx.activeTurnId;
+            const errorMessage = event.error.message || "Kiro ACP connection terminated.";
             yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
             ctx.pendingApprovals.clear();
@@ -280,9 +281,31 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             ctx.promptsInFlight = 0;
             yield* Effect.logWarning("Kiro ACP connection terminated", {
               threadId: ctx.threadId,
-              detail: event.error.message,
+              detail: errorMessage,
+            });
+            const stamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent({
+              type: "runtime.error",
+              ...stamp,
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              ...(activeTurnId ? { turnId: activeTurnId } : {}),
+              payload: { message: errorMessage, class: "transport_error" },
+            });
+            yield* offerRuntimeEvent({
+              type: "session.exited",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              ...(activeTurnId ? { turnId: activeTurnId } : {}),
+              payload: {
+                reason: errorMessage,
+                recoverable: true,
+                exitKind: "error",
+              },
             });
             return;
+          }
 
           case "AssistantItemStarted":
             yield* offerRuntimeEvent(

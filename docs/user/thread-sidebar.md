@@ -84,6 +84,19 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+## Retry interrupted work
+
+When a provider reports a recoverable connection or process failure, the environment retries the
+thread up to three times with short backoff. It continues from the conversation's last confirmed
+step instead of resending attachments or assuming unfinished work is safe to repeat. Normal stops,
+pending approvals, and permanent provider errors do not trigger automatic retries.
+
+A failed or interrupted thread shows **Retry** beside its error on web, desktop, and mobile. Retry
+starts a visible follow-up turn asking the agent to inspect what already completed before it
+continues. T3 Code does not call a quiet thread stuck just because it produced no text for a while:
+long builds and tools can legitimately stay silent, so recovery requires an explicit provider exit
+or error signal.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

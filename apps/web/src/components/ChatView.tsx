@@ -14,6 +14,7 @@ import {
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { usageLimitsBannerItem } from "./chat/ComposerUsageLimits";
 import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
+import { canRetryThread, THREAD_RETRY_PROMPT } from "@t3tools/client-runtime/operations";
 import {
   questionAttachmentDraftId,
   questionAttachmentDraftPrefix,
@@ -1922,7 +1923,11 @@ export default function ChatView(props: ChatViewProps) {
   const isServerThread = activeServerThread !== null;
   const activeThread = activeServerThread ?? localDraftThread;
   const threadError = isServerThread
-    ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
+    ? (localServerError ??
+      activeServerThread?.session?.lastError ??
+      (activeServerThread?.session?.status === "interrupted"
+        ? "The previous turn was interrupted."
+        : null))
     : localDraftError;
   // Dismissals can only mask the shown error, never clear it: a server thread
   // keeps its error in session.lastError, so clearing the local shadow would
@@ -3216,6 +3221,66 @@ export default function ChatView(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
   });
+  const [isRetryingThread, setIsRetryingThread] = useState(false);
+  const threadRetryAvailable =
+    canRetryThread({
+      session: activeThread?.session ?? null,
+      hasUserMessage:
+        activeThread?.messages.some(
+          (message) => message.role === "user" && !isCompactCommandMessage(message),
+        ) ?? false,
+      hasPendingRequest: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+    }) &&
+    !isSendBusy &&
+    !activeEnvironmentUnavailable;
+  const handleRetryThread = useCallback(async () => {
+    if (!activeThread || !threadRetryAvailable || isRetryingThread) return;
+    const messageId = newMessageId();
+    const createdAt = new Date().toISOString();
+    setIsRetryingThread(true);
+    beginLocalDispatch();
+    try {
+      const result = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          message: {
+            messageId,
+            role: "user",
+            text: THREAD_RETRY_PROMPT,
+            attachments: [],
+          },
+          modelSelection: activeThread.modelSelection,
+          runtimeMode,
+          interactionMode,
+          createdAt,
+        },
+      });
+      if (result._tag === "Failure") {
+        resetLocalDispatch();
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to retry the thread.",
+          );
+        }
+      }
+    } finally {
+      setIsRetryingThread(false);
+    }
+  }, [
+    activeThread,
+    beginLocalDispatch,
+    environmentId,
+    interactionMode,
+    isRetryingThread,
+    resetLocalDispatch,
+    runtimeMode,
+    setThreadError,
+    startThreadTurn,
+    threadRetryAvailable,
+  ]);
   const optimisticCompactionMessage = optimisticUserMessages.at(-1);
   const pendingCompactionMessage =
     isSendBusy &&
@@ -9957,6 +10022,8 @@ export default function ChatView(props: ChatViewProps) {
               />
               <ThreadErrorBanner
                 error={visibleThreadError}
+                {...(threadRetryAvailable ? { onRetry: () => void handleRetryThread() } : {})}
+                retrying={isRetryingThread}
                 onDismiss={() => {
                   setThreadError(activeThread.id, null);
                   dismissThreadErrorBannerForSession(threadErrorBannerKey);
