@@ -70,6 +70,7 @@ import Migration0055 from "./Migrations/055_ThreadPullRequestMonitors.ts";
 import Migration0056 from "./Migrations/056_ThreadLedger.ts";
 import Migration0057 from "./Migrations/057_AgentMemories.ts";
 import Migration0058 from "./Migrations/058_Artifacts.ts";
+import Migration0059 from "./Migrations/059_ThreadWorkflows.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -140,6 +141,7 @@ const migrationEntries = [
   [56, "ThreadLedger", Migration0056],
   [57, "AgentMemories", Migration0057],
   [58, "Artifacts", Migration0058],
+  [59, "ThreadWorkflows", Migration0059],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

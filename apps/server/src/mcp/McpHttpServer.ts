@@ -52,6 +52,10 @@ import {
   ArtifactToolkitHandlersLive,
 } from "../orchestration/ArtifactLibrary.ts";
 import {
+  ThreadWorkflowToolkit,
+  ThreadWorkflowToolkitHandlersLive,
+} from "../orchestration/ThreadWorkflows.ts";
+import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
 } from "./toolkits/device/handlers.ts";
@@ -648,6 +652,10 @@ export const ArtifactToolkitRegistrationLive = McpServer.toolkit(
   ArtifactToolkit,
 ).pipe(Layer.provide(ArtifactToolkitHandlersLive));
 
+export const ThreadWorkflowToolkitRegistrationLive = McpServer.toolkit(
+  ThreadWorkflowToolkit,
+).pipe(Layer.provide(ThreadWorkflowToolkitHandlersLive));
+
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
   Layer.provide(DeviceStandardToolkitHandlersLive),
 );
@@ -676,5 +684,6 @@ export const layer = Layer.mergeAll(
   ThreadLedgerToolkitRegistrationLive,
   AgentMemoryToolkitRegistrationLive,
   ArtifactToolkitRegistrationLive,
+  ThreadWorkflowToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

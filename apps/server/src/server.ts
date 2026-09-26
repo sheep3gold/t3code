@@ -158,6 +158,7 @@ import * as ThreadPullRequestMonitors from "./persistence/ThreadPullRequestMonit
 import * as ThreadLedgerPersistence from "./persistence/ThreadLedger.ts";
 import * as AgentMemoryPersistence from "./persistence/AgentMemories.ts";
 import * as ArtifactPersistence from "./persistence/Artifacts.ts";
+import * as WorkflowPersistence from "./persistence/ThreadWorkflows.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -292,6 +293,9 @@ const AgentMemoryRepositoryLayerLive = AgentMemoryPersistence.layer.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 const ArtifactRepositoryLayerLive = ArtifactPersistence.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const WorkflowRepositoryLayerLive = WorkflowPersistence.layer.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
@@ -526,6 +530,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ThreadLedgerRepositoryLayerLive),
   Layer.provideMerge(AgentMemoryRepositoryLayerLive),
   Layer.provideMerge(ArtifactRepositoryLayerLive),
+  Layer.provideMerge(WorkflowRepositoryLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
   Layer.provideMerge(

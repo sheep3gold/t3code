@@ -109,6 +109,13 @@ it and tries again. After downtime, a recurring schedule runs once and advances 
 slot instead of replaying every missed interval. One-shot schedules remain visible as completed
 after they run.
 
+Agents can create a sequential multi-step workflow with `workflow_start`. Each step runs as its own
+turn and must finish with `workflow_complete_step` or `workflow_fail_step`; the next pending step
+starts only after the thread is idle. Workflow and step state, attempts, and concise results persist
+across restarts. A running step left orphaned for five minutes is retried from its recorded state,
+up to three attempts, then the workflow stops as failed. Use `workflow_list`, `workflow_get`,
+`workflow_pause`, `workflow_resume`, `workflow_retry_step`, or `workflow_cancel` to manage it.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list
