@@ -6,18 +6,19 @@ import {
   type MsgHubTurnCompletionConfig,
   type MsgHubTurnCompletionRequest,
 } from "./MsgHubTurnCompletion.ts";
+import {
+  buildMsgHubPublishRequest,
+  publishMsgHubRequest,
+  type MsgHubEnvironment,
+  type MsgHubFetch,
+} from "./MsgHubPublisher.ts";
 
 export const DEFAULT_APPROVAL_REQUIRED_SUBJECT =
   "dingding.notify.vibecoding.t3code.approval.required";
 export const DEFAULT_USER_INPUT_REQUIRED_SUBJECT =
   "dingding.notify.vibecoding.t3code.user-input.required";
 
-const REQUEST_TIMEOUT_MS = 8_000;
-const MAX_ATTEMPTS = 3;
 const MAX_TEXT_CHARS = 1_100;
-
-type Environment = Readonly<Record<string, string | undefined>>;
-type Fetch = typeof globalThis.fetch;
 
 export type AttentionNotificationKind = "approval" | "user-input";
 
@@ -51,7 +52,7 @@ function clipText(value: string): string {
 
 export function resolveMsgHubAttentionConfig(
   kind: AttentionNotificationKind,
-  environment: Environment = process.env,
+  environment: MsgHubEnvironment = process.env,
 ): MsgHubTurnCompletionConfig | null {
   const base = resolveMsgHubTurnCompletionConfig(environment);
   if (base === null) return null;
@@ -98,57 +99,26 @@ export function buildMsgHubAttentionRequest(
       类型: input.kind,
     },
   };
-  return {
-    url: `${config.baseUrl}/api/publish`,
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      subject: config.subject,
-      payload: JSON.stringify(payload),
-      msg_id: `t3-attention-${digest}`,
-    }),
-  };
+  return buildMsgHubPublishRequest({
+    config,
+    subject: config.subject,
+    payload,
+    messageId: `t3-attention-${digest}`,
+  });
 }
-
-const delay = (milliseconds: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 export async function publishAttentionNotification(
   input: AttentionNotificationInput,
   options: {
-    readonly environment?: Environment;
-    readonly fetch?: Fetch;
+    readonly environment?: MsgHubEnvironment;
+    readonly fetch?: MsgHubFetch;
   } = {},
 ): Promise<"disabled" | "sent"> {
   const config = resolveMsgHubAttentionConfig(input.kind, options.environment);
   if (config === null) return "disabled";
-  const request = buildMsgHubAttentionRequest(input, config);
-  const fetchRequest = options.fetch ?? globalThis.fetch;
-  let lastError = "unknown error";
-
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    try {
-      const response = await fetchRequest(request.url, {
-        method: "POST",
-        headers: request.headers,
-        body: request.body,
-        signal: controller.signal,
-      });
-      if (response.ok) return "sent";
-      const detail = (await response.text()).slice(0, 200);
-      lastError = `HTTP ${response.status}${detail ? ` ${detail}` : ""}`;
-      if (response.status < 500 && response.status !== 429) break;
-    } catch (error) {
-      lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (attempt < MAX_ATTEMPTS - 1) await delay(1_500 * (attempt + 1));
-  }
-
-  throw new Error(`msghub attention notification failed: ${lastError}`);
+  await publishMsgHubRequest(
+    buildMsgHubAttentionRequest(input, config),
+    options.fetch ?? globalThis.fetch,
+  );
+  return "sent";
 }
