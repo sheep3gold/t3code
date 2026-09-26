@@ -69,6 +69,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as ThreadLedgerPersistence from "../../persistence/ThreadLedger.ts";
+import * as AgentMemoryPersistence from "../../persistence/AgentMemories.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -493,6 +494,7 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ThreadLedgerPersistence.layer),
+      Layer.provideMerge(AgentMemoryPersistence.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -855,6 +857,24 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const threadId = ThreadId.make("thread-1");
     await harness.runEffect(
+      AgentMemoryPersistence.AgentMemoryRepository.pipe(
+        Effect.flatMap((repository) =>
+          repository.upsert({
+            id: "memory-1",
+            fingerprint: "lesson-fingerprint",
+            kind: "lesson",
+            scope: "project",
+            projectId: asProjectId("project-1"),
+            content: "Always run the focused test before publishing.",
+            negative: "Do not claim success from a build alone.",
+            tags: ["validation"],
+            sourceThreadId: threadId,
+            now: "2026-01-01T00:00:00.000Z",
+          }),
+        ),
+      ),
+    );
+    await harness.runEffect(
       ThreadLedgerPersistence.ThreadLedgerRepository.pipe(
         Effect.flatMap((repository) =>
           repository.record({
@@ -891,10 +911,14 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     const input = harness.sendTurn.mock.calls[0]?.[0].input ?? "";
+    expect(input).toContain("[Saved lessons — reusable behavior for this environment/project]");
+    expect(input).toContain("Always run the focused test before publishing.");
+    expect(input).toContain("Avoid: Do not claim success from a build alone.");
     expect(input).toContain("[Persistent thread ledger — durable resume state]");
     expect(input).toContain("Goal: Ship the feature");
     expect(input).toContain("Next: Run focused tests");
     expect(input).toContain("[Current turn request]\nContinue now");
+    expect(input.indexOf("Saved lessons")).toBeLessThan(input.indexOf("Goal: Ship the feature"));
     expect(input.indexOf("Goal: Ship the feature")).toBeLessThan(input.indexOf("Continue now"));
   });
 

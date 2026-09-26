@@ -178,6 +178,13 @@ history. Changing the phase requires a classified progress event in the same wri
 The ledger is for resumable work state, not source code, secrets, or a second copy of the chat. Its
 injected snapshot is capped and carries only the eight most recent events.
 
+Agents can explicitly save reusable knowledge with `memory_add`. Project-scoped entries are visible
+to later threads in the same project; global entries apply across projects in that environment.
+Lessons are injected automatically into later turns, while ordinary memories stay out of context
+until an agent calls `memory_search`. Search uses local deterministic keyword scoring, and
+`memory_remove` deletes only the specified entry ID. T3 Code does not automatically archive whole
+conversations into memory or send project text to an embedding provider.
+
 ## Snooze until later
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
