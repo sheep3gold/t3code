@@ -56,6 +56,7 @@ import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import { publishTurnCompletionNotification } from "../../notifications/MsgHubTurnCompletion.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 // Suffixed, not prefixed: `clearTurnStateForSession` sweeps by thread prefix.
@@ -1755,6 +1756,49 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const notificationWorker = yield* makeDrainableWorker(
+    (event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>) =>
+      Effect.gen(function* () {
+        const turnId = toTurnId(event.turnId);
+        if (!turnId) return;
+        const thread = yield* projectionSnapshotQuery
+          .getThreadDetailById(event.threadId, { activityKinds: [] })
+          .pipe(Effect.map(Option.getOrUndefined));
+        if (!thread) return;
+        const project = yield* projectionSnapshotQuery
+          .getProjectShellById(thread.projectId)
+          .pipe(Effect.map(Option.getOrUndefined));
+        const text = thread.messages
+          .filter((message) => message.role === "assistant" && message.turnId === turnId)
+          .map((message) => message.text)
+          .filter((message) => message.trim().length > 0)
+          .join("\n\n");
+        yield* Effect.promise(() =>
+          publishTurnCompletionNotification({
+            threadId: String(event.threadId),
+            turnId: String(turnId),
+            project: project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project",
+            threadTitle: thread.title,
+            provider: event.provider,
+            state: normalizeRuntimeTurnState(event.payload.state),
+            text,
+            errorMessage: event.payload.errorMessage,
+            createdAt: event.createdAt,
+          }),
+        );
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("failed to publish turn completion notification", {
+                threadId: event.threadId,
+                turnId: event.turnId ?? null,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
+  );
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       if (
@@ -2401,6 +2445,10 @@ const make = Effect.gen(function* () {
         }
       }
 
+      if (event.type === "turn.completed" && shouldApplyThreadLifecycle) {
+        yield* notificationWorker.enqueue(event);
+      }
+
       if (event.type === "session.exited") {
         yield* clearTurnStateForSession(thread.id);
       }
@@ -2704,8 +2752,11 @@ const make = Effect.gen(function* () {
 
   return {
     start,
-    // The diff worker feeds the lifecycle worker, so drain it first.
-    drain: diffWorker.drain.pipe(Effect.andThen(worker.drain)),
+    // The diff worker feeds the lifecycle worker, which can enqueue notifications.
+    drain: diffWorker.drain.pipe(
+      Effect.andThen(worker.drain),
+      Effect.andThen(notificationWorker.drain),
+    ),
   } satisfies ProviderRuntimeIngestionShape;
 });
 
