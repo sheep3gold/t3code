@@ -111,6 +111,10 @@
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
     },
+    "./state/artifacts": {
+      "types": "./src/state/artifactHttp.ts",
+      "default": "./src/state/artifactHttp.ts"
+    },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"
