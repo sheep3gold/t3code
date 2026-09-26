@@ -57,6 +57,10 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
 import { publishTurnCompletionNotification } from "../../notifications/MsgHubTurnCompletion.ts";
+import {
+  publishAttentionNotification,
+  resolveMsgHubAttentionConfig,
+} from "../../notifications/MsgHubAttentionNotification.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 // Suffixed, not prefixed: `clearTurnStateForSession` sweeps by thread prefix.
@@ -1799,6 +1803,74 @@ const make = Effect.gen(function* () {
       ),
   );
 
+  const attentionNotificationWorker = yield* makeDrainableWorker(
+    (
+      event: Extract<
+        ProviderRuntimeEvent,
+        { type: "request.opened" | "user-input.requested" }
+      >,
+    ) =>
+      Effect.gen(function* () {
+        const kind = event.type === "request.opened" ? "approval" : "user-input";
+        if (resolveMsgHubAttentionConfig(kind) === null) return;
+        if (
+          event.type === "request.opened" &&
+          event.payload.requestType === "tool_user_input"
+        ) {
+          return;
+        }
+        const thread = yield* projectionSnapshotQuery
+          .getThreadRuntimeContext(event.threadId)
+          .pipe(Effect.map(Option.getOrUndefined));
+        if (!thread) return;
+        const project = yield* projectionSnapshotQuery
+          .getProjectShellById(thread.projectId)
+          .pipe(Effect.map(Option.getOrUndefined));
+        const projectTitle =
+          project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project";
+        const text =
+          event.type === "request.opened"
+            ? [
+                event.payload.appName
+                  ? `${event.payload.appName} 正在等待授权。`
+                  : "T3Code 正在等待授权。",
+                `类型：${event.payload.requestType}`,
+                "请回到 T3Code 会话查看详情并决定是否批准。",
+              ].join("\n")
+            : event.payload.questions
+                .map((question, index) => {
+                  const options = question.options.map((option) => option.label).join(" / ");
+                  return `${index + 1}. ${question.question}${options ? `\n选项：${options}` : ""}`;
+                })
+                .join("\n\n");
+        yield* Effect.promise(() =>
+          publishAttentionNotification({
+            kind,
+            eventId: String(event.eventId),
+            ...(event.requestId ? { requestId: String(event.requestId) } : {}),
+            threadId: String(event.threadId),
+            ...(event.turnId ? { turnId: String(event.turnId) } : {}),
+            project: projectTitle,
+            threadTitle: thread.title,
+            provider: event.provider,
+            text,
+            createdAt: event.createdAt,
+          }),
+        );
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("failed to publish attention notification", {
+                eventType: event.type,
+                threadId: event.threadId,
+                turnId: event.turnId ?? null,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
+  );
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       if (
@@ -2449,6 +2521,10 @@ const make = Effect.gen(function* () {
         yield* notificationWorker.enqueue(event);
       }
 
+      if (event.type === "request.opened" || event.type === "user-input.requested") {
+        yield* attentionNotificationWorker.enqueue(event);
+      }
+
       if (event.type === "session.exited") {
         yield* clearTurnStateForSession(thread.id);
       }
@@ -2756,6 +2832,7 @@ const make = Effect.gen(function* () {
     drain: diffWorker.drain.pipe(
       Effect.andThen(worker.drain),
       Effect.andThen(notificationWorker.drain),
+      Effect.andThen(attentionNotificationWorker.drain),
     ),
   } satisfies ProviderRuntimeIngestionShape;
 });
