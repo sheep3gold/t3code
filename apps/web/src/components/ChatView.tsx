@@ -1947,6 +1947,42 @@ export default function ChatView(props: ChatViewProps) {
   // session.lastError. Bump a tick so the banner hides immediately. Mirrors
   // the branch mismatch banner.
   const [, setThreadErrorBannerDismissTick] = useState(0);
+  const setThreadError = useCallback(
+    (targetThreadId: ThreadId | null, error: string | null) => {
+      if (!targetThreadId) return;
+      const nextError = sanitizeThreadErrorMessage(error);
+      const nextEntry: LocalThreadErrorEntry = { message: nextError, at: Date.now() };
+      if (
+        shouldWriteThreadErrorToCurrentServerThread({
+          activeServerThread,
+          routeThreadRef,
+          targetThreadId,
+        })
+      ) {
+        setLocalServerErrorsByThreadKey((existing) => {
+          if ((existing[routeThreadKey]?.message ?? null) === nextError) {
+            return existing;
+          }
+          return {
+            ...existing,
+            [routeThreadKey]: nextEntry,
+          };
+        });
+        return;
+      }
+      const localDraftErrorKey = draftId ?? targetThreadId;
+      setLocalDraftErrorsByDraftId((existing) => {
+        if ((existing[localDraftErrorKey]?.message ?? null) === nextError) {
+          return existing;
+        }
+        return {
+          ...existing,
+          [localDraftErrorKey]: nextEntry,
+        };
+      });
+    },
+    [activeServerThread, draftId, routeThreadKey, routeThreadRef],
+  );
   const defaultRuntimeMode = resolveProjectSettings(settings, activeThread?.projectId ?? null)
     .settings.defaultRuntimeMode;
   // Implicit drafts follow their current project/environment, including retargets.
@@ -4001,43 +4037,6 @@ export default function ChatView(props: ChatViewProps) {
     null;
   const hasReachedSplitLimit =
     (activeTerminalGroup?.terminalIds.length ?? 0) >= MAX_TERMINALS_PER_GROUP;
-  const setThreadError = useCallback(
-    (targetThreadId: ThreadId | null, error: string | null) => {
-      if (!targetThreadId) return;
-      const nextError = sanitizeThreadErrorMessage(error);
-      const nextEntry: LocalThreadErrorEntry = { message: nextError, at: Date.now() };
-      if (
-        shouldWriteThreadErrorToCurrentServerThread({
-          activeServerThread,
-          routeThreadRef,
-          targetThreadId,
-        })
-      ) {
-        setLocalServerErrorsByThreadKey((existing) => {
-          if ((existing[routeThreadKey]?.message ?? null) === nextError) {
-            return existing;
-          }
-          return {
-            ...existing,
-            [routeThreadKey]: nextEntry,
-          };
-        });
-        return;
-      }
-      const localDraftErrorKey = draftId ?? targetThreadId;
-      setLocalDraftErrorsByDraftId((existing) => {
-        if ((existing[localDraftErrorKey]?.message ?? null) === nextError) {
-          return existing;
-        }
-        return {
-          ...existing,
-          [localDraftErrorKey]: nextEntry,
-        };
-      });
-    },
-    [activeServerThread, draftId, routeThreadKey, routeThreadRef],
-  );
-
   const interruptContextRef = useRef({ activeThread, phase, setThreadError });
   interruptContextRef.current = { activeThread, phase, setThreadError };
   const restoreQueuedMessagesRef = useRef<(messages: ReadonlyArray<QueuedComposerMessage>) => void>(
