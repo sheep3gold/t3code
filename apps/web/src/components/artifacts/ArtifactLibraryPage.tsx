@@ -7,13 +7,20 @@ import type {
 } from "@t3tools/contracts";
 import { scopedProjectKey } from "@t3tools/client-runtime/environment";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
   ArrowLeftIcon,
   BracesIcon,
   CodeXmlIcon,
   FileCodeIcon,
   FileTextIcon,
   LibraryBigIcon,
+  PencilIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -21,7 +28,8 @@ import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
-import { useArtifact, useArtifacts } from "../../state/artifacts";
+import { artifactEnvironment, useArtifact, useArtifacts } from "../../state/artifacts";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { filterArtifacts, type ArtifactKindFilter } from "./ArtifactLibraryPage.logic";
 import {
   WorkspaceBreadcrumb,
@@ -31,12 +39,32 @@ import {
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { Skeleton } from "../ui/skeleton";
+import { Textarea } from "../ui/textarea";
 
 const ARTIFACT_KINDS = ["all", "text", "markdown", "json", "html", "svg"] as const;
 
@@ -72,6 +100,12 @@ function formatDate(value: string): string {
         dateStyle: "medium",
         timeStyle: "short",
       }).format(date);
+}
+
+function artifactMutationError(error: unknown): string {
+  return error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : "The artifact operation failed.";
 }
 
 function ProjectPicker({
@@ -261,12 +295,16 @@ function VersionTimeline({
   versions,
   currentVersion,
   selectedVersion,
+  busy,
   onSelect,
+  onRevert,
 }: {
   readonly versions: ReadonlyArray<EnvironmentArtifactVersion>;
   readonly currentVersion: number;
   readonly selectedVersion: number | undefined;
+  readonly busy: boolean;
   readonly onSelect: (version: number | undefined) => void;
+  readonly onRevert: (version: number) => void;
 }) {
   return (
     <section aria-labelledby="artifact-versions-heading" className="flex min-w-0 flex-col gap-3">
@@ -307,6 +345,17 @@ function VersionTimeline({
                   {formatDate(version.createdAt)}
                 </span>
               </button>
+              {!isCurrent ? (
+                <Button
+                  aria-label={`Revert to version ${version.version}`}
+                  disabled={busy}
+                  onClick={() => onRevert(version.version)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <RotateCcwIcon />
+                </Button>
+              ) : null}
             </li>
           );
         })}
@@ -319,10 +368,14 @@ function ArtifactInspector({
   project,
   summary,
   onBack,
+  onChanged,
+  onDeleted,
 }: {
   readonly project: EnvironmentProject;
   readonly summary: EnvironmentArtifactSummary;
   readonly onBack: () => void;
+  readonly onChanged: () => void;
+  readonly onDeleted: () => void;
 }) {
   const [version, setVersion] = useState<number | undefined>();
   const { detail, versions, error, isPending, refresh } = useArtifact(
@@ -331,87 +384,268 @@ function ArtifactInspector({
     summary.slug,
     version,
   );
+  const updateArtifact = useAtomCommand(artifactEnvironment.update, { reportFailure: false });
+  const revertArtifact = useAtomCommand(artifactEnvironment.revert, { reportFailure: false });
+  const removeArtifact = useAtomCommand(artifactEnvironment.remove, { reportFailure: false });
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState(summary.name);
+  const [draftDescription, setDraftDescription] = useState(summary.description ?? "");
+  const [draftTags, setDraftTags] = useState(summary.tags.join(", "));
+  const [draftContent, setDraftContent] = useState("");
+
+  const openEditor = () => {
+    if (!detail) return;
+    setDraftName(detail.name);
+    setDraftDescription(detail.description ?? "");
+    setDraftTags(detail.tags.join(", "));
+    setDraftContent(detail.content);
+    setMutationError(null);
+    setEditOpen(true);
+  };
+  const save = async () => {
+    if (!detail || !draftName.trim()) return;
+    setBusy(true);
+    const result = await updateArtifact({
+      environmentId: project.environmentId,
+      input: {
+        projectId: project.id,
+        slug: summary.slug,
+        name: draftName.trim(),
+        description: draftDescription.trim() || null,
+        tags: draftTags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        content: draftContent,
+        reason: "updated from library",
+      },
+    });
+    setBusy(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result))
+        setMutationError(artifactMutationError(squashAtomCommandFailure(result)));
+      return;
+    }
+    setVersion(undefined);
+    setEditOpen(false);
+    refresh();
+    onChanged();
+  };
+  const revert = async (targetVersion: number) => {
+    setBusy(true);
+    const result = await revertArtifact({
+      environmentId: project.environmentId,
+      input: { projectId: project.id, slug: summary.slug, targetVersion },
+    });
+    setBusy(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result))
+        setMutationError(artifactMutationError(squashAtomCommandFailure(result)));
+      return;
+    }
+    setVersion(undefined);
+    refresh();
+    onChanged();
+  };
+  const remove = async () => {
+    setBusy(true);
+    const result = await removeArtifact({
+      environmentId: project.environmentId,
+      input: { projectId: project.id, slug: summary.slug },
+    });
+    setBusy(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result))
+        setMutationError(artifactMutationError(squashAtomCommandFailure(result)));
+      return;
+    }
+    setDeleteOpen(false);
+    onChanged();
+    onDeleted();
+  };
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-3 md:hidden">
-        <Button aria-label="Back to artifacts" onClick={onBack} size="icon-sm" variant="ghost">
-          <ArrowLeftIcon />
-        </Button>
-        <span className="truncate text-sm font-medium">{summary.name}</span>
-      </div>
-      <ScrollArea className="min-h-0 flex-1" radius="none" scrollbarGutter>
-        {isPending && detail === null ? (
-          <div className="flex flex-col gap-4 p-5 lg:p-7">
-            <Skeleton className="h-7 w-1/3" />
-            <Skeleton className="h-4 w-2/3" />
-            <Skeleton className="h-64 w-full" shape="card" />
-          </div>
-        ) : error || detail === null ? (
-          <Empty size="hero">
-            <EmptyHeader>
-              <EmptyTitle>Artifact unavailable</EmptyTitle>
-              <EmptyDescription>{error ?? "This artifact no longer exists."}</EmptyDescription>
-            </EmptyHeader>
-            <Button onClick={refresh} variant="outline">
-              Try again
-            </Button>
-          </Empty>
-        ) : (
-          <div className="grid min-w-0 gap-8 p-5 lg:grid-cols-[minmax(0,1fr)_15rem] lg:p-7">
-            <article className="flex min-w-0 flex-col gap-5">
-              <header className="flex min-w-0 flex-col gap-2">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <h1 className="min-w-0 truncate text-xl font-semibold tracking-tight">
-                    {detail.name}
-                  </h1>
-                  <Badge variant="outline">{KIND_LABEL[detail.kind]}</Badge>
-                  <Badge variant="secondary">v{detail.version}</Badge>
-                </div>
-                {detail.description ? (
-                  <p className="text-sm leading-6 text-muted-foreground">{detail.description}</p>
-                ) : null}
-                <div className="flex flex-wrap gap-1.5">
-                  {detail.tags.map((tag) => (
-                    <Badge key={tag} size="sm" variant="outline">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Saved {formatDate(detail.versionCreatedAt)} · {detail.versionReason}
-                </p>
-              </header>
-              <section
-                aria-labelledby="artifact-content-heading"
-                className="flex min-w-0 flex-col gap-3"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-sm font-semibold" id="artifact-content-heading">
-                    Content
-                  </h2>
-                  {detail.version !== detail.currentVersion ? (
-                    <span className="text-xs text-muted-foreground">Viewing history</span>
+    <>
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-3 md:hidden">
+          <Button aria-label="Back to artifacts" onClick={onBack} size="icon-sm" variant="ghost">
+            <ArrowLeftIcon />
+          </Button>
+          <span className="truncate text-sm font-medium">{summary.name}</span>
+        </div>
+        <ScrollArea className="min-h-0 flex-1" radius="none" scrollbarGutter>
+          {isPending && detail === null ? (
+            <div className="flex flex-col gap-4 p-5 lg:p-7">
+              <Skeleton className="h-7 w-1/3" />
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-64 w-full" shape="card" />
+            </div>
+          ) : error || detail === null ? (
+            <Empty size="hero">
+              <EmptyHeader>
+                <EmptyTitle>Artifact unavailable</EmptyTitle>
+                <EmptyDescription>{error ?? "This artifact no longer exists."}</EmptyDescription>
+              </EmptyHeader>
+              <Button onClick={refresh} variant="outline">
+                Try again
+              </Button>
+            </Empty>
+          ) : (
+            <div className="grid min-w-0 gap-8 p-5 lg:grid-cols-[minmax(0,1fr)_15rem] lg:p-7">
+              <article className="flex min-w-0 flex-col gap-5">
+                <header className="flex min-w-0 flex-col gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <h1 className="min-w-0 truncate text-xl font-semibold tracking-tight">
+                      {detail.name}
+                    </h1>
+                    <Badge variant="outline">{KIND_LABEL[detail.kind]}</Badge>
+                    <Badge variant="secondary">v{detail.version}</Badge>
+                    {detail.version === detail.currentVersion ? (
+                      <span className="ml-auto flex items-center gap-1">
+                        <Button
+                          aria-label="Edit artifact"
+                          disabled={busy}
+                          onClick={openEditor}
+                          size="icon-sm"
+                          variant="ghost"
+                        >
+                          <PencilIcon />
+                        </Button>
+                        <Button
+                          aria-label="Delete artifact"
+                          disabled={busy}
+                          onClick={() => setDeleteOpen(true)}
+                          size="icon-sm"
+                          variant="ghost"
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </span>
+                    ) : null}
+                  </div>
+                  {detail.description ? (
+                    <p className="text-sm leading-6 text-muted-foreground">{detail.description}</p>
                   ) : null}
-                </div>
-                <ContentPreview artifact={detail} />
-              </section>
-            </article>
-            <VersionTimeline
-              currentVersion={detail.currentVersion}
-              onSelect={setVersion}
-              selectedVersion={version}
-              versions={versions}
-            />
-          </div>
-        )}
-      </ScrollArea>
-    </section>
+                  <div className="flex flex-wrap gap-1.5">
+                    {detail.tags.map((tag) => (
+                      <Badge key={tag} size="sm" variant="outline">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Saved {formatDate(detail.versionCreatedAt)} · {detail.versionReason}
+                  </p>
+                </header>
+                <section
+                  aria-labelledby="artifact-content-heading"
+                  className="flex min-w-0 flex-col gap-3"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-sm font-semibold" id="artifact-content-heading">
+                      Content
+                    </h2>
+                    {detail.version !== detail.currentVersion ? (
+                      <span className="text-xs text-muted-foreground">Viewing history</span>
+                    ) : null}
+                  </div>
+                  <ContentPreview artifact={detail} />
+                </section>
+              </article>
+              <VersionTimeline
+                busy={busy}
+                currentVersion={detail.currentVersion}
+                onRevert={(targetVersion) => void revert(targetVersion)}
+                onSelect={setVersion}
+                selectedVersion={version}
+                versions={versions}
+              />
+            </div>
+          )}
+        </ScrollArea>
+      </section>
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogPopup className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit artifact</DialogTitle>
+            <DialogDescription>
+              Changing content creates a new immutable version. Metadata-only changes do not.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Name
+              <Input
+                maxLength={120}
+                value={draftName}
+                onChange={(event) => setDraftName(event.currentTarget.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Description
+              <Input
+                value={draftDescription}
+                onChange={(event) => setDraftDescription(event.currentTarget.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Tags
+              <Input
+                value={draftTags}
+                onChange={(event) => setDraftTags(event.currentTarget.value)}
+                placeholder="release, docs"
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Content
+              <Textarea
+                maxLength={200_000}
+                value={draftContent}
+                onChange={(event) => setDraftContent(event.currentTarget.value)}
+              />
+            </label>
+            {mutationError ? (
+              <p className="text-sm text-destructive-foreground">{mutationError}</p>
+            ) : null}
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose disabled={busy} render={<Button variant="outline" />}>
+              Cancel
+            </DialogClose>
+            <Button disabled={busy || !draftName.trim()} onClick={() => void save()}>
+              {busy ? "Saving…" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this artifact?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes “{summary.name}” and every stored version. This cannot be
+              undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose disabled={busy} render={<Button variant="outline" />}>
+              Keep artifact
+            </AlertDialogClose>
+            <Button disabled={busy} onClick={() => void remove()} variant="destructive">
+              {busy ? "Deleting…" : "Delete artifact"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
   );
 }
 
 function ProjectLibrary({ project }: { readonly project: EnvironmentProject }) {
-  const { artifacts } = useArtifacts(project.environmentId, project.id);
+  const { artifacts, refresh } = useArtifacts(project.environmentId, project.id);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [showInspector, setShowInspector] = useState(false);
   const selected =
@@ -444,6 +678,11 @@ function ProjectLibrary({ project }: { readonly project: EnvironmentProject }) {
             project={project}
             summary={selected}
             onBack={() => setShowInspector(false)}
+            onChanged={refresh}
+            onDeleted={() => {
+              setSelectedSlug(null);
+              setShowInspector(false);
+            }}
           />
         </div>
       ) : (
