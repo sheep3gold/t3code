@@ -31,6 +31,9 @@ const publicSchedule = (schedule: ThreadSchedules.ThreadSchedule, threadTitle: s
   prompt: schedule.prompt,
   scheduleKind: schedule.scheduleKind,
   intervalSeconds: schedule.intervalSeconds,
+  cronExpression: schedule.cronExpression,
+  timezone: schedule.timezone,
+  skipDates: schedule.skipDates,
   nextRunAt: schedule.nextRunAt,
   status: schedule.status,
   lastRunAt: schedule.lastRunAt,
@@ -98,6 +101,11 @@ export const schedulesHttpApiLayer = HttpApiBuilder.group(
             ...(args.payload.everySeconds === undefined
               ? {}
               : { everySeconds: args.payload.everySeconds }),
+            ...(args.payload.cronExpression === undefined
+              ? {}
+              : { cronExpression: args.payload.cronExpression }),
+            ...(args.payload.timezone === undefined ? {} : { timezone: args.payload.timezone }),
+            ...(args.payload.skipDates === undefined ? {} : { skipDates: args.payload.skipDates }),
           });
           if ("error" in resolved) {
             return yield* failEnvironmentInvalidRequest("invalid_schedule");

@@ -133,6 +133,10 @@ function defaultLocalRunTime(): string {
   return local.toISOString().slice(0, 16);
 }
 
+function defaultTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
@@ -296,6 +300,13 @@ function CreateScheduleDialog({
                     setDraft({ mode: "once", atLocal: defaultLocalRunTime() });
                   } else if (value === "interval") {
                     setDraft({ mode: "interval", everyAmount: "1", everyUnit: "hours" });
+                  } else if (value === "cron") {
+                    setDraft({
+                      mode: "cron",
+                      cronExpression: "0 9 * * 1-5",
+                      timezone: defaultTimezone(),
+                      skipDatesText: "",
+                    });
                   }
                   setError(null);
                 }}
@@ -306,6 +317,7 @@ function CreateScheduleDialog({
                 <SelectPopup>
                   <SelectItem value="once">Run once</SelectItem>
                   <SelectItem value="interval">Repeat on an interval</SelectItem>
+                  <SelectItem value="cron">Use a cron expression</SelectItem>
                 </SelectPopup>
               </Select>
             </label>
@@ -322,7 +334,7 @@ function CreateScheduleDialog({
                   }
                 />
               </label>
-            ) : (
+            ) : draft.mode === "interval" ? (
               <div className="flex flex-col gap-1.5 text-sm font-medium">
                 Repeat every
                 <div className="grid grid-cols-[minmax(0,1fr)_minmax(8rem,auto)] gap-2">
@@ -355,6 +367,45 @@ function CreateScheduleDialog({
                     </SelectPopup>
                   </Select>
                 </div>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col gap-1.5 text-sm font-medium sm:col-span-2">
+                  Cron expression
+                  <Input
+                    nativeInput
+                    placeholder="0 9 * * 1-5"
+                    value={draft.cronExpression}
+                    onChange={(event) =>
+                      setDraft({ ...draft, cronExpression: event.currentTarget.value })
+                    }
+                  />
+                  <span className="text-xs font-normal text-muted-foreground">
+                    Five fields: minute, hour, day of month, month, weekday.
+                  </span>
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm font-medium">
+                  Timezone
+                  <Input
+                    nativeInput
+                    placeholder="Asia/Shanghai"
+                    value={draft.timezone}
+                    onChange={(event) =>
+                      setDraft({ ...draft, timezone: event.currentTarget.value })
+                    }
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm font-medium">
+                  Skip dates
+                  <Input
+                    nativeInput
+                    placeholder="2026-10-01, 2026-10-02"
+                    value={draft.skipDatesText}
+                    onChange={(event) =>
+                      setDraft({ ...draft, skipDatesText: event.currentTarget.value })
+                    }
+                  />
+                </label>
               </div>
             )}
 
@@ -424,7 +475,9 @@ function ScheduleRow({
                     ? "Completed"
                     : schedule.scheduleKind === "interval"
                       ? formatInterval(schedule.intervalSeconds)
-                      : "Once"}
+                      : schedule.scheduleKind === "cron"
+                        ? `Cron ${schedule.cronExpression}`
+                        : "Once"}
               </Badge>
             </div>
             <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-sm leading-5 text-secondary-label">
@@ -469,6 +522,12 @@ function ScheduleRow({
             <span>Next run {formatRelative(schedule.nextRunAt)}</span>
           ) : null}
           {schedule.lastRunAt ? <span>Last ran {formatRelative(schedule.lastRunAt)}</span> : null}
+          {schedule.scheduleKind === "cron" && schedule.timezone ? (
+            <span>{schedule.timezone}</span>
+          ) : null}
+          {schedule.skipDates.length > 0 ? (
+            <span>{schedule.skipDates.length} skipped dates</span>
+          ) : null}
           <span className="font-mono">{schedule.id.slice(0, 8)}</span>
         </div>
       </article>

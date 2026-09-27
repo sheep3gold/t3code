@@ -31,6 +31,9 @@ type ScheduleCreateInput = {
   readonly at?: string;
   readonly delaySeconds?: number;
   readonly everySeconds?: number;
+  readonly cronExpression?: string;
+  readonly timezone?: string;
+  readonly skipDates?: ReadonlyArray<string>;
 };
 
 export const fetchEnvironmentSchedules = Effect.fn("fetchEnvironmentSchedules")(function* (
@@ -65,6 +68,9 @@ export const createEnvironmentSchedule = Effect.fn("createEnvironmentSchedule")(
           ...(input.at === undefined ? {} : { at: input.at }),
           ...(input.delaySeconds === undefined ? {} : { delaySeconds: input.delaySeconds }),
           ...(input.everySeconds === undefined ? {} : { everySeconds: input.everySeconds }),
+          ...(input.cronExpression === undefined ? {} : { cronExpression: input.cronExpression }),
+          ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+          ...(input.skipDates === undefined ? {} : { skipDates: [...input.skipDates] }),
         },
         headers,
       }),

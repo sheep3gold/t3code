@@ -1,14 +1,10 @@
-import {
-  CommandId,
-  MessageId,
-  PositiveInt,
-  ThreadId,
-  TrimmedNonEmptyString,
-} from "@t3tools/contracts";
+import { CommandId, MessageId, PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Cron from "effect/Cron";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Tool from "effect/unstable/ai/Tool";
@@ -31,7 +27,8 @@ const ScheduleThreadTaskInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   at: Schema.optional(
     TrimmedNonEmptyString.annotate({
-      description: "ISO-8601 date/time for a one-shot task. Mutually exclusive with delaySeconds and everySeconds.",
+      description:
+        "ISO-8601 date/time for a one-shot task. Mutually exclusive with delaySeconds and everySeconds.",
     }),
   ),
   delaySeconds: Schema.optional(
@@ -44,6 +41,22 @@ const ScheduleThreadTaskInput = Schema.Struct({
       description: "Recurring interval in seconds. Minimum 60 seconds.",
     }),
   ),
+  cronExpression: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "Five-field cron expression. Mutually exclusive with at, delaySeconds, and everySeconds.",
+    }),
+  ),
+  timezone: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description: "IANA timezone for cronExpression, such as Asia/Shanghai. Defaults to UTC.",
+    }),
+  ),
+  skipDates: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString).annotate({
+      description: "Local YYYY-MM-DD dates to skip. Valid only with cronExpression.",
+    }),
+  ),
 });
 
 const ScheduleIdInput = Schema.Struct({ scheduleId: TrimmedNonEmptyString });
@@ -51,8 +64,11 @@ const ScheduleIdInput = Schema.Struct({ scheduleId: TrimmedNonEmptyString });
 const ThreadScheduleResult = Schema.Struct({
   id: Schema.String,
   prompt: Schema.String,
-  scheduleKind: Schema.Literals(["once", "interval"]),
+  scheduleKind: Schema.Literals(["once", "interval", "cron"]),
   intervalSeconds: Schema.NullOr(Schema.Number),
+  cronExpression: Schema.NullOr(Schema.String),
+  timezone: Schema.NullOr(Schema.String),
+  skipDates: Schema.Array(Schema.String),
   nextRunAt: Schema.String,
   status: Schema.Literals(["active", "paused", "completed"]),
   lastRunAt: Schema.NullOr(Schema.String),
@@ -105,7 +121,7 @@ const dependencies = [
 
 const ScheduleThreadTaskTool = Tool.make("schedule_thread_task", {
   description:
-    "Schedule this thread to run an agent prompt once or repeatedly. Pass exactly one of at, delaySeconds, or everySeconds. The schedule persists across server restarts and never overlaps an active turn or pending approval/question.",
+    "Schedule this thread to run an agent prompt once, on a fixed interval, or from a five-field cron expression. Pass exactly one of at, delaySeconds, everySeconds, or cronExpression. Cron schedules accept an IANA timezone and local skip dates. The schedule persists across server restarts and never overlaps an active turn or pending approval/question.",
   parameters: ScheduleThreadTaskInput,
   success: ThreadScheduleResult,
   failure: ThreadScheduleToolError,
@@ -118,7 +134,8 @@ const ScheduleThreadTaskTool = Tool.make("schedule_thread_task", {
   .annotate(Tool.OpenWorld, false);
 
 const ListThreadSchedulesTool = Tool.make("list_thread_schedules", {
-  description: "List schedules owned by this thread, including paused and completed one-shot tasks.",
+  description:
+    "List schedules owned by this thread, including paused and completed one-shot tasks.",
   success: Schema.Struct({ schedules: Schema.Array(ThreadScheduleResult) }),
   failure: ThreadScheduleToolError,
   dependencies,
@@ -143,7 +160,8 @@ const PauseThreadScheduleTool = Tool.make("pause_thread_schedule", {
   .annotate(Tool.OpenWorld, false);
 
 const ResumeThreadScheduleTool = Tool.make("resume_thread_schedule", {
-  description: "Resume a paused schedule owned by this thread. A past due time runs on the next sweep.",
+  description:
+    "Resume a paused schedule owned by this thread. A past due time runs on the next sweep.",
   parameters: ScheduleIdInput,
   success: ScheduleMutationResult,
   failure: ThreadScheduleToolError,
@@ -181,22 +199,72 @@ function publicSchedule(schedule: ThreadSchedules.ThreadSchedule) {
   return result;
 }
 
+const MAX_SKIP_DATES = 366;
+
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
+}
+
+function localDateKey(value: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function nextCronRun(
+  cron: Cron.Cron,
+  timezone: string,
+  skipDates: ReadonlyArray<string>,
+  afterMs: number,
+): string | null {
+  const skipped = new Set(skipDates);
+  let cursor = new Date(afterMs);
+  try {
+    for (let attempt = 0; attempt <= MAX_SKIP_DATES; attempt += 1) {
+      const candidate = Cron.next(cron, cursor);
+      if (!skipped.has(localDateKey(candidate, timezone))) return candidate.toISOString();
+      cursor = candidate;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function resolveThreadSchedule(input: {
   readonly nowMs: number;
   readonly at?: string;
   readonly delaySeconds?: number;
   readonly everySeconds?: number;
+  readonly cronExpression?: string;
+  readonly timezone?: string;
+  readonly skipDates?: ReadonlyArray<string>;
 }):
-  | {
-      readonly scheduleKind: ThreadSchedules.ThreadScheduleKind;
-      readonly intervalSeconds: number | null;
-      readonly nextRunAt: string;
-    }
+  | Pick<
+      ThreadSchedules.CreateThreadScheduleInput,
+      "scheduleKind" | "intervalSeconds" | "cronExpression" | "timezone" | "skipDates" | "nextRunAt"
+    >
   | { readonly error: string } {
-  const supplied = [input.at, input.delaySeconds, input.everySeconds].filter(
+  const supplied = [input.at, input.delaySeconds, input.everySeconds, input.cronExpression].filter(
     (value) => value !== undefined,
   ).length;
-  if (supplied !== 1) return { error: "Pass exactly one of at, delaySeconds, or everySeconds." };
+  if (supplied !== 1) {
+    return { error: "Pass exactly one of at, delaySeconds, everySeconds, or cronExpression." };
+  }
+  if (
+    input.cronExpression === undefined &&
+    (input.timezone !== undefined || input.skipDates !== undefined)
+  ) {
+    return { error: "timezone and skipDates are only valid with cronExpression." };
+  }
   if (input.everySeconds !== undefined) {
     if (input.everySeconds < MIN_INTERVAL_SECONDS) {
       return { error: `everySeconds must be at least ${MIN_INTERVAL_SECONDS}.` };
@@ -204,6 +272,9 @@ export function resolveThreadSchedule(input: {
     return {
       scheduleKind: "interval",
       intervalSeconds: input.everySeconds,
+      cronExpression: null,
+      timezone: null,
+      skipDates: [],
       nextRunAt: new Date(input.nowMs + input.everySeconds * 1_000).toISOString(),
     };
   }
@@ -214,7 +285,33 @@ export function resolveThreadSchedule(input: {
     return {
       scheduleKind: "once",
       intervalSeconds: null,
+      cronExpression: null,
+      timezone: null,
+      skipDates: [],
       nextRunAt: new Date(input.nowMs + input.delaySeconds * 1_000).toISOString(),
+    };
+  }
+  if (input.cronExpression !== undefined) {
+    const cronExpression = input.cronExpression.trim();
+    if (cronExpression.split(/\s+/).length !== 5) {
+      return { error: "cronExpression must contain exactly five fields." };
+    }
+    const timezone = input.timezone?.trim() || "UTC";
+    const skipDates = [...new Set(input.skipDates ?? [])].sort();
+    if (skipDates.length > MAX_SKIP_DATES || skipDates.some((value) => !isCalendarDate(value))) {
+      return { error: `skipDates must contain at most ${MAX_SKIP_DATES} valid YYYY-MM-DD dates.` };
+    }
+    const parsed = Cron.parse(cronExpression, timezone);
+    if (Result.isFailure(parsed)) return { error: parsed.failure.message };
+    const nextRunAt = nextCronRun(parsed.success, timezone, skipDates, input.nowMs);
+    if (nextRunAt === null) return { error: "cronExpression has no runnable future occurrence." };
+    return {
+      scheduleKind: "cron",
+      intervalSeconds: null,
+      cronExpression,
+      timezone,
+      skipDates,
+      nextRunAt,
     };
   }
   const atMs = Date.parse(input.at!);
@@ -224,15 +321,29 @@ export function resolveThreadSchedule(input: {
   return {
     scheduleKind: "once",
     intervalSeconds: null,
+    cronExpression: null,
+    timezone: null,
+    skipDates: [],
     nextRunAt: new Date(atMs).toISOString(),
   };
 }
 
 export function nextThreadScheduleRun(
-  schedule: Pick<ThreadSchedules.ThreadSchedule, "scheduleKind" | "intervalSeconds" | "nextRunAt">,
+  schedule: Pick<
+    ThreadSchedules.ThreadSchedule,
+    "scheduleKind" | "intervalSeconds" | "cronExpression" | "timezone" | "skipDates" | "nextRunAt"
+  >,
   nowMs: number,
 ): string | null {
-  if (schedule.scheduleKind === "once" || schedule.intervalSeconds === null) return null;
+  if (schedule.scheduleKind === "once") return null;
+  if (schedule.scheduleKind === "cron") {
+    if (schedule.cronExpression === null || schedule.timezone === null) return null;
+    const parsed = Cron.parse(schedule.cronExpression, schedule.timezone);
+    return Result.isFailure(parsed)
+      ? null
+      : nextCronRun(parsed.success, schedule.timezone, schedule.skipDates, nowMs);
+  }
+  if (schedule.intervalSeconds === null) return null;
   const intervalMs = schedule.intervalSeconds * 1_000;
   const plannedMs = Date.parse(schedule.nextRunAt);
   const elapsedIntervals = Math.max(1, Math.floor((nowMs - plannedMs) / intervalMs) + 1);
@@ -249,8 +360,14 @@ const makeToolkit = Effect.gen(function* () {
 
   const currentScope = Effect.gen(function* () {
     const scope = yield* McpInvocationContext.McpInvocationContext;
-    const thread = yield* snapshots.getThreadShellById(scope.threadId).pipe(withError("read-thread"));
-    if (Option.isNone(thread) || thread.value.archivedAt !== null || thread.value.deletedAt !== null) {
+    const thread = yield* snapshots
+      .getThreadShellById(scope.threadId)
+      .pipe(withError("read-thread"));
+    if (
+      Option.isNone(thread) ||
+      thread.value.archivedAt !== null ||
+      thread.value.deletedAt !== null
+    ) {
       return yield* new ThreadScheduleThreadNotFoundError({ threadId: scope.threadId });
     }
     return scope;
@@ -262,9 +379,10 @@ const makeToolkit = Effect.gen(function* () {
   ) {
     const scope = yield* currentScope;
     const now = new Date(yield* Clock.currentTimeMillis).toISOString();
-    const changed = yield* (operation === "delete"
-      ? repository.remove(scheduleId, scope.threadId)
-      : repository.setPaused(scheduleId, scope.threadId, operation === "pause", now)
+    const changed = yield* (
+      operation === "delete"
+        ? repository.remove(scheduleId, scope.threadId)
+        : repository.setPaused(scheduleId, scope.threadId, operation === "pause", now)
     ).pipe(withError(operation));
     return { changed };
   });
@@ -319,6 +437,19 @@ const runner = Effect.gen(function* () {
     const now = new Date(nowMs).toISOString();
     const due = yield* repository.listDue(now);
     for (const schedule of due) {
+      if (
+        schedule.scheduleKind === "cron" &&
+        schedule.timezone !== null &&
+        schedule.skipDates.includes(localDateKey(new Date(nowMs), schedule.timezone))
+      ) {
+        const nextRunAt = nextThreadScheduleRun(schedule, nowMs);
+        if (nextRunAt === null) {
+          yield* repository.setPaused(schedule.id, schedule.threadId, true, now);
+        } else {
+          yield* repository.defer(schedule.id, schedule.nextRunAt, nextRunAt, now);
+        }
+        continue;
+      }
       const thread = yield* snapshots
         .getThreadShellById(schedule.threadId)
         .pipe(Effect.map(Option.getOrUndefined));
@@ -327,7 +458,7 @@ const runner = Effect.gen(function* () {
         continue;
       }
       const blocked =
-        thread.session?.activeTurnId !== null && thread.session?.activeTurnId !== undefined ||
+        (thread.session?.activeTurnId !== null && thread.session?.activeTurnId !== undefined) ||
         thread.session?.status === "starting" ||
         thread.session?.status === "running" ||
         thread.hasPendingApprovals ||
@@ -358,8 +489,8 @@ const runner = Effect.gen(function* () {
           interactionMode: thread.interactionMode,
           createdAt: now,
         })
-        .pipe(Effect.either);
-      if (result._tag === "Left") {
+        .pipe(Effect.result);
+      if (Result.isFailure(result)) {
         yield* repository.defer(
           schedule.id,
           schedule.nextRunAt,
@@ -369,7 +500,7 @@ const runner = Effect.gen(function* () {
         yield* Effect.logWarning("thread schedule dispatch failed", {
           scheduleId: schedule.id,
           threadId: schedule.threadId,
-          cause: result.left,
+          cause: result.failure,
         });
         continue;
       }
@@ -384,9 +515,7 @@ const runner = Effect.gen(function* () {
 
   yield* forkParked(
     sweep.pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("thread schedule sweep failed", { cause }),
-      ),
+      Effect.catchCause((cause) => Effect.logWarning("thread schedule sweep failed", { cause })),
       Effect.repeat(Schedule.spaced(SWEEP_INTERVAL)),
     ),
   );

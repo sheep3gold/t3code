@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PersistenceSqlError } from "./Errors.ts";
 
-export type ThreadScheduleKind = "once" | "interval";
+export type ThreadScheduleKind = "once" | "interval" | "cron";
 export type ThreadScheduleStatus = "active" | "paused" | "completed";
 
 export interface ThreadSchedule {
@@ -15,6 +15,9 @@ export interface ThreadSchedule {
   readonly prompt: string;
   readonly scheduleKind: ThreadScheduleKind;
   readonly intervalSeconds: number | null;
+  readonly cronExpression: string | null;
+  readonly timezone: string | null;
+  readonly skipDates: ReadonlyArray<string>;
   readonly nextRunAt: string;
   readonly status: ThreadScheduleStatus;
   readonly lastRunAt: string | null;
@@ -28,6 +31,9 @@ interface ThreadScheduleRow {
   readonly prompt: string;
   readonly scheduleKind: ThreadScheduleKind;
   readonly intervalSeconds: number | null;
+  readonly cronExpression: string | null;
+  readonly timezone: string | null;
+  readonly skipDatesJson: string;
   readonly nextRunAt: string;
   readonly status: ThreadScheduleStatus;
   readonly lastRunAt: string | null;
@@ -51,14 +57,30 @@ export interface CreateThreadScheduleInput {
   readonly prompt: string;
   readonly scheduleKind: ThreadScheduleKind;
   readonly intervalSeconds: number | null;
+  readonly cronExpression?: string | null;
+  readonly timezone?: string | null;
+  readonly skipDates?: ReadonlyArray<string>;
   readonly nextRunAt: string;
   readonly createdAt: string;
 }
 
-const fromRow = (row: ThreadScheduleRow): ThreadSchedule => ({
-  ...row,
-  threadId: ThreadId.make(row.threadId),
-});
+const parseSkipDates = (value: string): ReadonlyArray<string> => {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const fromRow = (row: ThreadScheduleRow): ThreadSchedule => {
+  const { skipDatesJson, ...schedule } = row;
+  return {
+    ...schedule,
+    threadId: ThreadId.make(row.threadId),
+    skipDates: parseSkipDates(skipDatesJson),
+  };
+};
 
 const fromProjectRow = (row: ProjectThreadScheduleRow): ProjectThreadSchedule => ({
   ...fromRow(row),
@@ -129,10 +151,12 @@ const make = Effect.gen(function* () {
             yield* sql`
               INSERT INTO thread_schedules (
                 id, thread_id, prompt, schedule_kind, interval_seconds,
+                cron_expression, timezone, skip_dates_json,
                 next_run_at, status, last_run_at, created_at, updated_at
               ) VALUES (
                 ${input.id}, ${input.threadId}, ${input.prompt}, ${input.scheduleKind},
-                ${input.intervalSeconds}, ${input.nextRunAt}, 'active', NULL,
+                ${input.intervalSeconds}, ${input.cronExpression ?? null}, ${input.timezone ?? null},
+                ${JSON.stringify(input.skipDates ?? [])}, ${input.nextRunAt}, 'active', NULL,
                 ${input.createdAt}, ${input.createdAt}
               )
             `;
@@ -142,6 +166,9 @@ const make = Effect.gen(function* () {
                 prompt,
                 schedule_kind AS "scheduleKind",
                 interval_seconds AS "intervalSeconds",
+                cron_expression AS "cronExpression",
+                timezone,
+                skip_dates_json AS "skipDatesJson",
                 next_run_at AS "nextRunAt",
                 status,
                 last_run_at AS "lastRunAt",
@@ -160,6 +187,9 @@ const make = Effect.gen(function* () {
                 prompt,
                 schedule_kind AS "scheduleKind",
                 interval_seconds AS "intervalSeconds",
+                cron_expression AS "cronExpression",
+                timezone,
+                skip_dates_json AS "skipDatesJson",
                 next_run_at AS "nextRunAt",
                 status,
                 last_run_at AS "lastRunAt",
@@ -183,6 +213,9 @@ const make = Effect.gen(function* () {
                s.prompt,
                s.schedule_kind AS "scheduleKind",
                s.interval_seconds AS "intervalSeconds",
+               s.cron_expression AS "cronExpression",
+               s.timezone,
+               s.skip_dates_json AS "skipDatesJson",
                s.next_run_at AS "nextRunAt",
                s.status,
                s.last_run_at AS "lastRunAt",
@@ -205,6 +238,9 @@ const make = Effect.gen(function* () {
                 prompt,
                 schedule_kind AS "scheduleKind",
                 interval_seconds AS "intervalSeconds",
+                cron_expression AS "cronExpression",
+                timezone,
+                skip_dates_json AS "skipDatesJson",
                 next_run_at AS "nextRunAt",
                 status,
                 last_run_at AS "lastRunAt",

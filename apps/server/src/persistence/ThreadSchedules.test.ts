@@ -15,7 +15,7 @@ const layer = it.layer(testLayer);
 layer("ThreadScheduleRepository", (it) => {
   it.effect("persists, pauses, resumes, runs, and completes schedules", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 54 });
+      yield* runMigrations({ toMigrationInclusive: 61 });
       const repository = yield* ThreadSchedules.ThreadScheduleRepository;
       const threadId = ThreadId.make("thread-scheduled");
       const created = yield* repository.create({
@@ -48,12 +48,29 @@ layer("ThreadScheduleRepository", (it) => {
       assert.equal(completed.lastRunAt, "2026-09-26T12:01:00.000Z");
       assert.equal(yield* repository.remove(completed.id, threadId), true);
       assert.equal((yield* repository.list(threadId)).length, 0);
+
+      yield* repository.create({
+        id: "schedule-cron",
+        threadId,
+        prompt: "Weekday check",
+        scheduleKind: "cron",
+        intervalSeconds: null,
+        cronExpression: "0 9 * * 1-5",
+        timezone: "Asia/Shanghai",
+        skipDates: ["2026-10-01", "2026-10-02"],
+        nextRunAt: "2026-09-28T01:00:00.000Z",
+        createdAt: "2026-09-26T11:00:00.000Z",
+      });
+      const cron = (yield* repository.list(threadId))[0]!;
+      assert.equal(cron.cronExpression, "0 9 * * 1-5");
+      assert.equal(cron.timezone, "Asia/Shanghai");
+      assert.deepStrictEqual(cron.skipDates, ["2026-10-01", "2026-10-02"]);
     }),
   );
 
   it.effect("lists and mutates schedules only within the requested project", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 59 });
+      yield* runMigrations({ toMigrationInclusive: 61 });
       const repository = yield* ThreadSchedules.ThreadScheduleRepository;
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
