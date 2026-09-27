@@ -688,6 +688,121 @@ export class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export const EnvironmentWorkflowStep = Schema.Struct({
+  index: Schema.Number,
+  title: Schema.String,
+  prompt: Schema.String,
+  status: Schema.Literals(["pending", "running", "completed", "failed"]),
+  attempt: Schema.Number,
+  result: Schema.NullOr(Schema.String),
+  startedAt: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(Schema.String),
+});
+export type EnvironmentWorkflowStep = typeof EnvironmentWorkflowStep.Type;
+
+export const EnvironmentThreadWorkflow = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  threadTitle: Schema.String,
+  name: Schema.String,
+  status: Schema.Literals(["running", "paused", "completed", "failed", "cancelled"]),
+  currentStep: Schema.Number,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  steps: Schema.Array(EnvironmentWorkflowStep),
+});
+export type EnvironmentThreadWorkflow = typeof EnvironmentThreadWorkflow.Type;
+
+const EnvironmentWorkflowProjectQuery = { projectId: ProjectId };
+const EnvironmentWorkflowProjectPayload = Schema.Struct({ projectId: ProjectId });
+const EnvironmentWorkflowParams = Schema.Struct({ workflowId: TrimmedNonEmptyString });
+const EnvironmentWorkflowStepInput = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  prompt: TrimmedNonEmptyString,
+});
+const EnvironmentWorkflowCreatePayload = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  name: TrimmedNonEmptyString,
+  steps: Schema.Array(EnvironmentWorkflowStepInput),
+});
+const EnvironmentWorkflowRestartPayload = Schema.Struct({
+  projectId: ProjectId,
+  fromStep: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+});
+
+export class EnvironmentWorkflowsHttpApi extends HttpApiGroup.make("workflows")
+  .add(
+    HttpApiEndpoint.get("list", "/api/workflows", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentWorkflowProjectQuery,
+      success: Schema.Struct({ workflows: Schema.Array(EnvironmentThreadWorkflow) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("get", "/api/workflows/:workflowId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectQuery,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("create", "/api/workflows", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentWorkflowCreatePayload,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("pause", "/api/workflows/:workflowId/pause", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("resume", "/api/workflows/:workflowId/resume", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("retry", "/api/workflows/:workflowId/retry", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("restart", "/api/workflows/:workflowId/restart", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowRestartPayload,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("cancel", "/api/workflows/:workflowId/cancel", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 /** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
@@ -697,6 +812,7 @@ class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").a
     error: [
       PullRequestUnavailableError,
       PullRequestOperationError,
+
       EnvironmentAuthInvalidError,
       EnvironmentScopeRequiredError,
       EnvironmentInternalError,
@@ -771,5 +887,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentArtifactsHttpApi)
   .add(EnvironmentSchedulesHttpApi)
+  .add(EnvironmentWorkflowsHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

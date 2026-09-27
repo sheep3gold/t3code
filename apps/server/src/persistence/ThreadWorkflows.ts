@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -32,6 +32,10 @@ export interface ThreadWorkflow {
   readonly steps: ReadonlyArray<WorkflowStep>;
 }
 
+export interface ProjectThreadWorkflow extends ThreadWorkflow {
+  readonly threadTitle: string;
+}
+
 interface WorkflowRow {
   readonly id: string;
   readonly threadId: string;
@@ -62,9 +66,16 @@ export class ThreadWorkflowRepository extends Context.Service<
       id: string,
       threadId: ThreadId,
     ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
+    readonly getForProject: (
+      id: string,
+      projectId: ProjectId,
+    ) => Effect.Effect<Option.Option<ProjectThreadWorkflow>, PersistenceSqlError>;
     readonly list: (
       threadId: ThreadId,
     ) => Effect.Effect<ReadonlyArray<ThreadWorkflow>, PersistenceSqlError>;
+    readonly listProject: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ReadonlyArray<ProjectThreadWorkflow>, PersistenceSqlError>;
     readonly listRunnable: () => Effect.Effect<ReadonlyArray<ThreadWorkflow>, PersistenceSqlError>;
     readonly markRunning: (
       workflow: ThreadWorkflow,
@@ -132,6 +143,37 @@ const make = Effect.gen(function* () {
       });
     }).pipe(Effect.mapError(sqlError("getThreadWorkflow")));
 
+  const getForProject = (id: string, projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{ readonly threadId: string; readonly threadTitle: string }>`
+        SELECT w.thread_id AS "threadId", t.title AS "threadTitle"
+        FROM thread_workflows w
+        JOIN projection_threads t ON t.thread_id = w.thread_id
+        WHERE w.id = ${id} AND t.project_id = ${projectId}
+          AND t.deleted_at IS NULL
+        LIMIT 1
+      `;
+      const row = rows[0];
+      if (!row) return Option.none<ProjectThreadWorkflow>();
+      const workflow = yield* get(id, ThreadId.make(row.threadId));
+      return Option.map(workflow, (value) => ({ ...value, threadTitle: row.threadTitle }));
+    }).pipe(Effect.mapError(sqlError("getThreadWorkflowForProject")));
+
+  const listProject = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{ readonly id: string }>`
+        SELECT w.id
+        FROM thread_workflows w
+        JOIN projection_threads t ON t.thread_id = w.thread_id
+        WHERE t.project_id = ${projectId} AND t.deleted_at IS NULL
+        ORDER BY w.created_at DESC
+        LIMIT 50
+      `;
+      return yield* Effect.forEach(rows, (row) => getForProject(row.id, projectId)).pipe(
+        Effect.map((items) => items.flatMap(Option.toArray)),
+      );
+    }).pipe(Effect.mapError(sqlError("listProjectThreadWorkflows")));
+
   const updateCurrent = (
     id: string,
     threadId: ThreadId,
@@ -176,7 +218,7 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(
-        Effect.flatMap((changed) => changed ? get(id, threadId) : Effect.succeed(Option.none())),
+        Effect.flatMap((changed) => (changed ? get(id, threadId) : Effect.succeed(Option.none()))),
         Effect.mapError(sqlError(`updateThreadWorkflowCurrent:${status}`)),
       );
 
@@ -207,6 +249,7 @@ const make = Effect.gen(function* () {
           Effect.mapError(sqlError("createThreadWorkflow")),
         ),
     get,
+    getForProject,
     list: (threadId) =>
       Effect.gen(function* () {
         const rows = yield* sql<{ readonly id: string }>`
@@ -217,6 +260,7 @@ const make = Effect.gen(function* () {
           Effect.map((items) => items.flatMap(Option.toArray)),
         );
       }).pipe(Effect.mapError(sqlError("listThreadWorkflows"))),
+    listProject,
     listRunnable: () =>
       Effect.gen(function* () {
         const rows = yield* sql<{ readonly id: string; readonly threadId: string }>`
@@ -296,7 +340,9 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(
-          Effect.flatMap((changed) => changed ? get(id, threadId) : Effect.succeed(Option.none())),
+          Effect.flatMap((changed) =>
+            changed ? get(id, threadId) : Effect.succeed(Option.none()),
+          ),
           Effect.mapError(sqlError("retryThreadWorkflowStep")),
         ),
     restartFrom: (id, threadId, fromStep, now) =>
@@ -331,7 +377,9 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(
-          Effect.flatMap((changed) => changed ? get(id, threadId) : Effect.succeed(Option.none())),
+          Effect.flatMap((changed) =>
+            changed ? get(id, threadId) : Effect.succeed(Option.none()),
+          ),
           Effect.mapError(sqlError("restartThreadWorkflowFromStep")),
         ),
   });

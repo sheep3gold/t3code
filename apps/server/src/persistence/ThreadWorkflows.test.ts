@@ -1,8 +1,9 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "./Migrations.ts";
@@ -50,12 +51,7 @@ layer("ThreadWorkflowRepository", (it) => {
       );
       assert.equal(workflow.status, "failed");
       workflow = Option.getOrThrow(
-        yield* repository.retryCurrent(
-          workflow.id,
-          threadId,
-          "2026-09-26T12:05:00.000Z",
-          3,
-        ),
+        yield* repository.retryCurrent(workflow.id, threadId, "2026-09-26T12:05:00.000Z", 3),
       );
       assert.equal(workflow.status, "running");
       assert.equal(workflow.steps[1]?.status, "pending");
@@ -71,12 +67,7 @@ layer("ThreadWorkflowRepository", (it) => {
       );
       assert.equal(workflow.status, "completed");
       workflow = Option.getOrThrow(
-        yield* repository.restartFrom(
-          workflow.id,
-          threadId,
-          1,
-          "2026-09-26T12:08:00.000Z",
-        ),
+        yield* repository.restartFrom(workflow.id, threadId, 1, "2026-09-26T12:08:00.000Z"),
       );
       assert.equal(workflow.status, "running");
       assert.equal(workflow.currentStep, 1);
@@ -85,6 +76,53 @@ layer("ThreadWorkflowRepository", (it) => {
       assert.equal(workflow.steps[1]?.status, "pending");
       assert.equal(workflow.steps[1]?.attempt, 1);
       assert.equal(workflow.steps[1]?.result, null);
+    }),
+  );
+});
+
+layer("ThreadWorkflowRepository project scope", (it) => {
+  it.effect("lists only workflows owned by the requested project", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 59 });
+      const repository = yield* Workflows.ThreadWorkflowRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.make("project-workflow-a");
+      const otherProjectId = ProjectId.make("project-workflow-b");
+      const threadId = ThreadId.make("thread-workflow-a");
+      const otherThreadId = ThreadId.make("thread-workflow-b");
+      const now = "2026-09-27T00:00:00.000Z";
+      yield* sql`
+        INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES (${projectId}, 'Project A', '/a', '{}', ${now}, ${now}),
+               (${otherProjectId}, 'Project B', '/b', '{}', ${now}, ${now})
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+        VALUES (${threadId}, ${projectId}, 'Thread A', ${now}, ${now}),
+               (${otherThreadId}, ${otherProjectId}, 'Thread B', ${now}, ${now})
+      `;
+      yield* repository.create({
+        id: "workflow-a",
+        threadId,
+        name: "Workflow A",
+        steps: [{ title: "A", prompt: "Do A" }],
+        createdAt: now,
+      });
+      yield* repository.create({
+        id: "workflow-b",
+        threadId: otherThreadId,
+        name: "Workflow B",
+        steps: [{ title: "B", prompt: "Do B" }],
+        createdAt: now,
+      });
+
+      const workflows = yield* repository.listProject(projectId);
+      assert.deepEqual(
+        workflows.map(({ id, threadTitle }) => ({ id, threadTitle })),
+        [{ id: "workflow-a", threadTitle: "Thread A" }],
+      );
+      assert.isTrue(Option.isSome(yield* repository.getForProject("workflow-a", projectId)));
+      assert.isTrue(Option.isNone(yield* repository.getForProject("workflow-b", projectId)));
     }),
   );
 });
