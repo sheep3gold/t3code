@@ -28,7 +28,11 @@ export type WorkflowCreateInput = {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
   readonly name: string;
-  readonly steps: ReadonlyArray<{ readonly title: string; readonly prompt: string }>;
+  readonly steps: ReadonlyArray<{
+    readonly title: string;
+    readonly prompt: string;
+    readonly dependsOn?: ReadonlyArray<number>;
+  }>;
 };
 
 type WorkflowMutationInput = {

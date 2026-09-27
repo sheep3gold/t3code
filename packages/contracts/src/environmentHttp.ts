@@ -734,9 +734,13 @@ export const EnvironmentWorkflowStep = Schema.Struct({
   index: Schema.Number,
   title: Schema.String,
   prompt: Schema.String,
+  dependsOn: Schema.Array(Schema.Number),
   status: Schema.Literals(["pending", "running", "completed", "failed"]),
   attempt: Schema.Number,
   result: Schema.NullOr(Schema.String),
+  childThreadId: Schema.NullOr(ThreadId),
+  worktreePath: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
   startedAt: Schema.NullOr(Schema.String),
   completedAt: Schema.NullOr(Schema.String),
 });
@@ -761,6 +765,7 @@ const EnvironmentWorkflowParams = Schema.Struct({ workflowId: TrimmedNonEmptyStr
 const EnvironmentWorkflowStepInput = Schema.Struct({
   title: TrimmedNonEmptyString,
   prompt: TrimmedNonEmptyString,
+  dependsOn: Schema.optional(Schema.Array(Schema.Int)),
 });
 const EnvironmentWorkflowCreatePayload = Schema.Struct({
   projectId: ProjectId,
