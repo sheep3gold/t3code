@@ -2,6 +2,8 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  type OrchestrationThreadShell,
+  type ProjectId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -35,6 +37,13 @@ const publicSchedule = (schedule: ThreadSchedules.ThreadSchedule, threadTitle: s
   createdAt: schedule.createdAt,
   updatedAt: schedule.updatedAt,
 });
+
+export function canScheduleThread(
+  thread: Pick<OrchestrationThreadShell, "projectId" | "archivedAt">,
+  projectId: ProjectId,
+): boolean {
+  return thread.projectId === projectId && thread.archivedAt === null;
+}
 
 export const schedulesHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -76,12 +85,7 @@ export const schedulesHttpApiLayer = HttpApiBuilder.group(
           const thread = yield* snapshots
             .getThreadShellById(args.payload.threadId)
             .pipe(Effect.catch(internal));
-          if (
-            Option.isNone(thread) ||
-            thread.value.projectId !== args.payload.projectId ||
-            thread.value.archivedAt !== null ||
-            thread.value.deletedAt !== null
-          ) {
+          if (Option.isNone(thread) || !canScheduleThread(thread.value, args.payload.projectId)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
           const nowMs = yield* Clock.currentTimeMillis;
