@@ -64,7 +64,7 @@ export class SourceControlProviderRegistry extends Context.Service<
   }
 >()("t3/sourceControl/SourceControlProviderRegistry") {}
 
-function unsupportedProvider(
+export function unsupportedProvider(
   kind: SourceControlProviderKind,
 ): SourceControlProvider.SourceControlProvider["Service"] {
   return SourceControlProvider.SourceControlProvider.of({

@@ -2579,6 +2579,27 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("status does not warn when the remote has no source control provider", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const { manager } = yield* makeManager({
+        sourceControlProvider: SourceControlProviderRegistry.unsupportedProvider("unknown"),
+      });
+      const logs: Array<{ message: string; level: string }> = [];
+      const logger = Logger.make<unknown, void>(({ message, logLevel }) => {
+        logs.push({ message: String(message), level: logLevel });
+      });
+
+      const status = yield* manager
+        .status({ cwd: repoDir })
+        .pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+
+      expect(status.pr).toBeNull();
+      expect(logs.filter((entry) => entry.level === "Warn")).toEqual([]);
+    }),
+  );
+
   it.effect("status keeps the last known PR when a later lookup fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
