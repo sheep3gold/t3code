@@ -1,7 +1,10 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import * as Http from "node:http";
 
-import { formatAgentLessonContext, searchAgentMemories } from "./AgentMemory.ts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { formatAgentLessonContext, rankAgentMemories, searchAgentMemories } from "./AgentMemory.ts";
 import type { AgentMemory } from "../persistence/AgentMemories.ts";
 
 const memory = (id: string, content: string, tags: ReadonlyArray<string> = []): AgentMemory => ({
@@ -42,5 +45,57 @@ describe("AgentMemory", () => {
     expect(
       Array.from(formatAgentLessonContext([{ ...lesson, content: "x".repeat(10_000) }])).length,
     ).toBeLessThanOrEqual(6_000);
+  });
+
+  describe("rankAgentMemories", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const candidates = [
+      memory("keyword", "Always run focused tests before release"),
+      memory("semantic", "Ship only after the targeted suite is green"),
+      memory("low-score", "Use dark mode"),
+    ];
+
+    it("falls back to keyword ranking when memsearch is not configured", async () => {
+      vi.stubEnv("T3CODE_MEMSEARCH_URL", "");
+      const ranked = await Effect.runPromise(rankAgentMemories(candidates, "focused tests", 10));
+      expect(ranked.map((entry) => entry.id)).toEqual(["keyword"]);
+    });
+
+    it("puts semantic hits first, drops low scores and unknown ids, then adds keyword hits", async () => {
+      const server = Http.createServer((request, response) => {
+        expect(request.headers.authorization).toBe("Bearer test-key");
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            results: [
+              { score: 0.9, source: "/corpus/memories/t3code/semantic.md" },
+              { score: 0.8, source: "/corpus/memories/t3code/not-visible.md" },
+              { score: 0.7, source: "/corpus/memories/t3code/keyword.md" },
+              { score: 0.1, source: "/corpus/memories/t3code/low-score.md" },
+            ],
+          }),
+        );
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as { port: number };
+      vi.stubEnv("T3CODE_MEMSEARCH_URL", `http://127.0.0.1:${port}`);
+      vi.stubEnv("T3CODE_MEMSEARCH_API_KEY", "test-key");
+      try {
+        const ranked = await Effect.runPromise(rankAgentMemories(candidates, "focused tests", 10));
+        expect(ranked.map((entry) => entry.id)).toEqual(["semantic", "keyword"]);
+      } finally {
+        server.close();
+      }
+    });
+
+    it("falls back to keyword ranking when memsearch is unreachable", async () => {
+      vi.stubEnv("T3CODE_MEMSEARCH_URL", "http://127.0.0.1:9");
+      vi.stubEnv("T3CODE_MEMSEARCH_API_KEY", "test-key");
+      const ranked = await Effect.runPromise(rankAgentMemories(candidates, "focused tests", 10));
+      expect(ranked.map((entry) => entry.id)).toEqual(["keyword"]);
+    });
   });
 });
