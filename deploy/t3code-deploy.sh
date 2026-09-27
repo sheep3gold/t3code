@@ -11,7 +11,12 @@ T3CTL=(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/ru
 PORT=3773
 
 port_owner() {
-  ss -Hltnp "sport = :$PORT" | grep -o 'pid=[0-9]*' | head -n1 | cut -d= -f2
+  # grep exits 1 when nothing is listening (the expected steady state after
+  # free_port succeeds); under `set -e -o pipefail` that made every caller of
+  # this function — including free_port's own success path — abort the
+  # script and trip the ERR rollback trap. `|| true` makes "nobody's
+  # listening" a normal empty result instead of a script-ending failure.
+  ss -Hltnp "sport = :$PORT" | grep -o 'pid=[0-9]*' | head -n1 | cut -d= -f2 || true
 }
 
 # The desktop app's remote-environment launcher can start its own server on
