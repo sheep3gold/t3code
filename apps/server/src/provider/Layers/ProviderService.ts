@@ -1438,7 +1438,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (
           persistedBinding?.provider === resolvedProvider &&
           persistedBinding.providerInstanceId !== resolvedInstanceId &&
-          (input.resumeCursor != null || persistedBinding.resumeCursor != null)
+          input.resumeCursor != null
         ) {
           const previousInstanceId = yield* requireBindingInstanceId(
             "ProviderService.startSession",

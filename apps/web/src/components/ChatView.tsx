@@ -2919,9 +2919,9 @@ export default function ChatView(props: ChatViewProps) {
           activeThread?.modelSelection.instanceId,
           activeProjectDefaultModelSelection?.instanceId,
         ],
-        lockedProvider,
-        lockedInstanceId:
-          activeThread?.session?.providerInstanceId ?? activeThread?.modelSelection.instanceId,
+        lockedProvider: null,
+        lockedInstanceId: null,
+        preserveRequestedInstance: lockedProvider !== null,
       }),
     [
       activeProjectDefaultModelSelection?.instanceId,
@@ -3775,11 +3775,7 @@ export default function ChatView(props: ChatViewProps) {
         providers: providerInstanceEntries,
         driverKind: selectedProvider,
         instanceId: activeProviderInstanceId,
-        lockedInstanceId: lockedProvider
-          ? (activeThread?.session?.providerInstanceId ??
-            activeThread?.modelSelection.instanceId ??
-            null)
-          : null,
+        lockedInstanceId: null,
       }),
     [
       activeProviderInstanceId,
@@ -9370,26 +9366,9 @@ export default function ChatView(props: ChatViewProps) {
       // are rejected by returning early; the server remains authoritative too.
       const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
       const resolvedDriverKind = entry?.driver ?? null;
-      if (
-        lockedProvider !== null &&
-        resolvedDriverKind !== null &&
-        resolvedDriverKind !== lockedProvider
-      ) {
+      if (resolvedDriverKind === null) {
         if (options?.focusComposer !== false) scheduleComposerFocus();
         return;
-      }
-      if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
-        const currentEntry = providerStatuses.find(
-          (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
-        );
-        if (
-          currentEntry?.continuation?.groupKey &&
-          entry?.continuation?.groupKey &&
-          currentEntry.continuation.groupKey !== entry.continuation.groupKey
-        ) {
-          if (options?.focusComposer !== false) scheduleComposerFocus();
-          return;
-        }
       }
       const resolvedModel = resolveAppModelSelectionForInstance(
         instanceId,
@@ -9431,7 +9410,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
-      lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
@@ -10269,7 +10247,7 @@ export default function ChatView(props: ChatViewProps) {
                             threadSyncPhase={activeEnvironmentUnavailable ? null : threadSyncPhase}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
-                            lockedProvider={lockedProvider}
+                            lockedProvider={null}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             providerCatalogKnown={serverConfig !== null}
                             activeProjectDefaultModelSelection={activeProjectDefaultModelSelection}

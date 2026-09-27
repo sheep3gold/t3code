@@ -3,8 +3,11 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  type MessageId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationMessage,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
@@ -72,6 +75,54 @@ const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+
+const PROVIDER_HANDOFF_HEADER = `[T3 Code provider handoff]
+You are continuing an existing thread that was previously handled by another provider. Treat the transcript below as prior conversation context, preserve completed work, and answer the current turn request that follows.`;
+const PROVIDER_HANDOFF_FOOTER = "[End provider handoff]";
+
+function buildProviderHandoffContext(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  currentMessageId: MessageId,
+  maxChars: number,
+): string {
+  if (maxChars <= PROVIDER_HANDOFF_HEADER.length + PROVIDER_HANDOFF_FOOTER.length + 16) {
+    return "";
+  }
+  const sections = messages.flatMap((message) => {
+    if (
+      message.id === currentMessageId ||
+      message.streaming ||
+      (message.role !== "user" && message.role !== "assistant")
+    ) {
+      return [];
+    }
+    const text = assistantCitationsToPlainText(message.text).trim();
+    return text.length > 0
+      ? [[message.role === "user" ? "User:" : "Assistant:", text].join("\n")]
+      : [];
+  });
+  if (sections.length === 0) return "";
+
+  const fixedChars = PROVIDER_HANDOFF_HEADER.length + PROVIDER_HANDOFF_FOOTER.length + 4;
+  let remaining = maxChars - fixedChars;
+  const selected: string[] = [];
+  let omitted = 0;
+  for (let index = sections.length - 1; index >= 0; index -= 1) {
+    const section = sections[index]!;
+    const separatorChars = selected.length > 0 ? 2 : 0;
+    if (section.length + separatorChars <= remaining) {
+      selected.unshift(section);
+      remaining -= section.length + separatorChars;
+      continue;
+    }
+    omitted = index + 1;
+    break;
+  }
+  if (selected.length === 0) return "";
+  const omission =
+    omitted > 0 ? `\n[${omitted} earlier message${omitted === 1 ? "" : "s"} omitted]\n` : "\n";
+  return `${PROVIDER_HANDOFF_HEADER}${omission}${selected.join("\n\n")}\n${PROVIDER_HANDOFF_FOOTER}`;
+}
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -551,6 +602,11 @@ const make = Effect.gen(function* () {
       return;
     }
     const providers = yield* providerRegistry.getProviders;
+    if (input.currentModelSelection.instanceId !== requestedModelSelection.instanceId) {
+      // Switching providers starts a fresh native session and carries T3's persisted transcript
+      // into its first turn, so provider-specific in-session model limits do not apply.
+      return;
+    }
     const requiresNewThread =
       providers.find((snapshot) => snapshot.instanceId === input.currentModelSelection.instanceId)
         ?.requiresNewThreadForModelChange === true ||
@@ -679,29 +735,10 @@ const make = Effect.gen(function* () {
         requestedModelSelection,
       });
     }
-    if (
-      thread.session !== null &&
-      requestedModelSelection !== undefined &&
-      requestedModelSelection.instanceId !== currentInstanceId
-    ) {
-      if (currentInfo.driverKind !== desiredInfo.driverKind) {
-        return yield* new ProviderAdapterRequestError({
-          provider: preferredProvider,
-          method: "thread.turn.start",
-          detail: `Thread '${threadId}' is bound to driver '${currentInfo.driverKind}' and cannot switch to '${desiredInfo.driverKind}'.`,
-        });
-      }
-      if (
-        currentInfo.continuationIdentity.continuationKey !==
-        desiredInfo.continuationIdentity.continuationKey
-      ) {
-        return yield* new ProviderAdapterRequestError({
-          provider: preferredProvider,
-          method: "thread.turn.start",
-          detail: `Thread '${threadId}' cannot switch from instance '${currentInstanceId}' to '${desiredInstanceId}' because their provider resume state is incompatible.`,
-        });
-      }
-    }
+    const canReuseProviderResumeState =
+      currentInfo.driverKind === desiredInfo.driverKind &&
+      currentInfo.continuationIdentity.continuationKey ===
+        desiredInfo.continuationIdentity.continuationKey;
     const project = yield* resolveProject(thread.projectId);
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
@@ -790,9 +827,10 @@ const make = Effect.gen(function* () {
         return existingSessionThreadId;
       }
 
-      const resumeCursor = shouldRestartForModelChange
-        ? undefined
-        : (activeSession?.resumeCursor ?? undefined);
+      const resumeCursor =
+        shouldRestartForModelChange || (instanceChanged && !canReuseProviderResumeState)
+          ? undefined
+          : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,
         existingSessionThreadId,
@@ -835,6 +873,7 @@ const make = Effect.gen(function* () {
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageText: string;
+    readonly currentMessageId: MessageId;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
@@ -846,6 +885,14 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
+    const previousInstanceId =
+      thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const switchingProvider =
+      input.modelSelection !== undefined && input.modelSelection.instanceId !== previousInstanceId;
+    const handoffMessages = switchingProvider
+      ? ((yield* resolveThreadDetail(input.threadId))?.messages ?? [])
+      : [];
+
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
@@ -873,8 +920,18 @@ const make = Effect.gen(function* () {
       ),
     ]);
     const durableContext = [lessonContext, ledgerContext].filter(Boolean).join("\n\n");
-    const messageWithDurableContext = durableContext
-      ? `${durableContext}\n\n[Current turn request]\n${input.messageText}`
+    const handoffBudget = Math.max(
+      0,
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS - input.messageText.length - durableContext.length - 1_000,
+    );
+    const providerHandoffContext = buildProviderHandoffContext(
+      handoffMessages,
+      input.currentMessageId,
+      handoffBudget,
+    );
+    const prefixedContext = [providerHandoffContext, durableContext].filter(Boolean).join("\n\n");
+    const messageWithDurableContext = prefixedContext
+      ? `${prefixedContext}\n\n[Current turn request]\n${input.messageText}`
       : input.messageText;
     const normalizedInput = toNonEmptyProviderInput(messageWithDurableContext);
     const normalizedAttachments = input.attachments ?? [];
@@ -1514,6 +1571,7 @@ const make = Effect.gen(function* () {
         text: message.text,
         records: message.context?.records ?? [],
       }),
+      currentMessageId: event.payload.messageId,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
