@@ -659,8 +659,11 @@ export const EnvironmentThreadSchedule = Schema.Struct({
   threadId: ThreadId,
   threadTitle: Schema.String,
   prompt: Schema.String,
-  scheduleKind: Schema.Literals(["once", "interval"]),
+  scheduleKind: Schema.Literals(["once", "interval", "cron"]),
   intervalSeconds: Schema.NullOr(Schema.Number),
+  cronExpression: Schema.NullOr(Schema.String),
+  timezone: Schema.NullOr(Schema.String),
+  skipDates: Schema.Array(Schema.String),
   nextRunAt: Schema.String,
   status: Schema.Literals(["active", "paused", "completed"]),
   lastRunAt: Schema.NullOr(Schema.String),
@@ -683,6 +686,9 @@ const EnvironmentScheduleCreatePayload = Schema.Struct({
   everySeconds: Schema.optional(
     Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
   ),
+  cronExpression: Schema.optional(TrimmedNonEmptyString),
+  timezone: Schema.optional(TrimmedNonEmptyString),
+  skipDates: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 
 export class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")

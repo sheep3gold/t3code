@@ -11,6 +11,9 @@ const schedule = (
   prompt: `Prompt ${overrides.id}`,
   scheduleKind: "once",
   intervalSeconds: null,
+  cronExpression: null,
+  timezone: null,
+  skipDates: [],
   nextRunAt: "2026-09-27T10:00:00.000Z",
   status: "active",
   lastRunAt: null,
@@ -31,11 +34,19 @@ describe("ScheduleTimelinePage logic", () => {
         intervalSeconds: 3600,
         nextRunAt: "2026-09-27T11:00:00.000Z",
       }),
+      schedule({
+        id: "cron",
+        scheduleKind: "cron",
+        cronExpression: "0 9 * * 1-5",
+        timezone: "Asia/Shanghai",
+        skipDates: ["2026-10-01"],
+        nextRunAt: "2026-09-28T01:00:00.000Z",
+      }),
       schedule({ id: "sooner", nextRunAt: "2026-09-27T09:00:00.000Z" }),
     ]);
 
     expect(groups.upcoming.map(({ id }) => id)).toEqual(["sooner", "later"]);
-    expect(groups.recurring.map(({ id }) => id)).toEqual(["recurring"]);
+    expect(groups.recurring.map(({ id }) => id)).toEqual(["recurring", "cron"]);
     expect(groups.paused.map(({ id }) => id)).toEqual(["paused"]);
     expect(groups.completed.map(({ id }) => id)).toEqual(["done"]);
   });
@@ -56,6 +67,21 @@ describe("ScheduleTimelinePage logic", () => {
     expect(
       resolveScheduleDraft({ mode: "interval", everyAmount: "6", everyUnit: "hours" }),
     ).toEqual({ value: { everySeconds: 21600 }, error: null });
+    expect(
+      resolveScheduleDraft({
+        mode: "cron",
+        cronExpression: "0  9 * * 1-5",
+        timezone: "Asia/Shanghai",
+        skipDatesText: "2026-10-02, 2026-10-01, 2026-10-02",
+      }),
+    ).toEqual({
+      value: {
+        cronExpression: "0 9 * * 1-5",
+        timezone: "Asia/Shanghai",
+        skipDates: ["2026-10-01", "2026-10-02"],
+      },
+      error: null,
+    });
   });
 
   it("rejects stale times and invalid intervals", () => {

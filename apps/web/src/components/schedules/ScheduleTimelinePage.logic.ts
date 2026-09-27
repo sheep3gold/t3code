@@ -10,11 +10,24 @@ export type ScheduleDraft =
       readonly mode: "interval";
       readonly everyAmount: string;
       readonly everyUnit: "minutes" | "hours" | "days";
+    }
+  | {
+      readonly mode: "cron";
+      readonly cronExpression: string;
+      readonly timezone: string;
+      readonly skipDatesText: string;
     };
 
 export type ResolvedScheduleDraft =
-  | { readonly at: string; readonly everySeconds?: never }
-  | { readonly at?: never; readonly everySeconds: number };
+  | { readonly at: string; readonly everySeconds?: never; readonly cronExpression?: never }
+  | { readonly at?: never; readonly everySeconds: number; readonly cronExpression?: never }
+  | {
+      readonly at?: never;
+      readonly everySeconds?: never;
+      readonly cronExpression: string;
+      readonly timezone: string;
+      readonly skipDates: ReadonlyArray<string>;
+    };
 
 const timestamp = (value: string | null): number => {
   if (value === null) return 0;
@@ -37,7 +50,7 @@ export function groupSchedules(
       groups.paused.push(schedule);
     } else if (schedule.status === "completed") {
       groups.completed.push(schedule);
-    } else if (schedule.scheduleKind === "interval") {
+    } else if (schedule.scheduleKind === "interval" || schedule.scheduleKind === "cron") {
       groups.recurring.push(schedule);
     } else {
       groups.upcoming.push(schedule);
@@ -79,6 +92,25 @@ export function resolveScheduleDraft(
       return { value: null, error: "Choose a time at least 15 seconds from now." };
     }
     return { value: { at: new Date(atMs).toISOString() }, error: null };
+  }
+
+  if (draft.mode === "cron") {
+    const cronExpression = draft.cronExpression.trim().replace(/\s+/g, " ");
+    if (cronExpression.split(" ").length !== 5) {
+      return { value: null, error: "Enter a five-field cron expression." };
+    }
+    const timezone = draft.timezone.trim();
+    if (!timezone) return { value: null, error: "Enter an IANA timezone." };
+    try {
+      new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+    } catch {
+      return { value: null, error: "Enter a valid IANA timezone." };
+    }
+    const skipDates = [...new Set(draft.skipDatesText.split(/[\s,]+/).filter(Boolean))].sort();
+    if (skipDates.length > 366 || skipDates.some((value) => !/^\d{4}-\d{2}-\d{2}$/.test(value))) {
+      return { value: null, error: "Skip dates must be YYYY-MM-DD values separated by commas." };
+    }
+    return { value: { cronExpression, timezone, skipDates }, error: null };
   }
 
   const amount = Number(draft.everyAmount);

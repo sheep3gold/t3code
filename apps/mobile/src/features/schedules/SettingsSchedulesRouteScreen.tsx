@@ -33,6 +33,11 @@ function formatInterval(seconds: number | null): string {
   return `Every ${Math.round(seconds / 60)}m`;
 }
 
+function defaultTimezone(): string {
+  const formatter = new Intl.DateTimeFormat();
+  return formatter.resolvedOptions().timeZone || "UTC";
+}
+
 function mutationMessage(result: unknown): string {
   if (result instanceof Error && result.message.trim()) return result.message;
   return "The schedule operation failed.";
@@ -147,7 +152,9 @@ function ProjectSchedules({
                         ? "Completed"
                         : schedule.scheduleKind === "interval"
                           ? formatInterval(schedule.intervalSeconds)
-                          : formatDate(schedule.nextRunAt)}
+                          : schedule.scheduleKind === "cron"
+                            ? `Cron ${schedule.cronExpression} · ${schedule.timezone}`
+                            : formatDate(schedule.nextRunAt)}
                   </Text>
                 </View>
                 {busyId === schedule.id ? <ActivityIndicator /> : null}
@@ -252,13 +259,35 @@ function CreateScheduleModal({
     threads[0]?.id ?? null,
   );
   const [prompt, setPrompt] = useState("");
-  const [mode, setMode] = useState<"once" | "interval">("once");
+  const [mode, setMode] = useState<"once" | "interval" | "cron">("once");
   const [minutes, setMinutes] = useState("60");
+  const [cronExpression, setCronExpression] = useState("0 9 * * 1-5");
+  const [timezone, setTimezone] = useState(defaultTimezone());
+  const [skipDates, setSkipDates] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submit = async () => {
+    if (!threadId || !prompt.trim()) {
+      Alert.alert("Complete the schedule", "Choose a thread and enter a task.");
+      return;
+    }
     const value = Number(minutes);
-    if (!threadId || !prompt.trim() || !Number.isInteger(value) || value < 1) {
-      Alert.alert("Complete the schedule", "Choose a thread, enter a task, and use whole minutes.");
+    if (mode !== "cron" && (!Number.isInteger(value) || value < 1)) {
+      Alert.alert("Complete the schedule", "Use a whole number of minutes.");
+      return;
+    }
+    const normalizedCron = cronExpression.trim().replace(/\s+/g, " ");
+    const normalizedTimezone = timezone.trim();
+    const normalizedSkipDates = [...new Set(skipDates.split(/[\s,]+/).filter(Boolean))].sort();
+    if (
+      mode === "cron" &&
+      (normalizedCron.split(" ").length !== 5 ||
+        !normalizedTimezone ||
+        normalizedSkipDates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date)))
+    ) {
+      Alert.alert(
+        "Complete the schedule",
+        "Use a five-field cron expression, an IANA timezone, and YYYY-MM-DD skip dates.",
+      );
       return;
     }
     setSubmitting(true);
@@ -268,7 +297,15 @@ function CreateScheduleModal({
         projectId: project.id,
         threadId,
         prompt: prompt.trim(),
-        ...(mode === "once" ? { delaySeconds: value * 60 } : { everySeconds: value * 60 }),
+        ...(mode === "once"
+          ? { delaySeconds: value * 60 }
+          : mode === "interval"
+            ? { everySeconds: value * 60 }
+            : {
+                cronExpression: normalizedCron,
+                timezone: normalizedTimezone,
+                skipDates: normalizedSkipDates,
+              }),
       },
     });
     setSubmitting(false);
@@ -313,7 +350,7 @@ function CreateScheduleModal({
               onChangeText={setPrompt}
             />
           </View>
-          <View className="flex-row gap-2">
+          <View className="flex-row flex-wrap gap-2">
             <Action
               label={mode === "once" ? "✓ Run once" : "Run once"}
               onPress={() => setMode("once")}
@@ -322,18 +359,63 @@ function CreateScheduleModal({
               label={mode === "interval" ? "✓ Repeat" : "Repeat"}
               onPress={() => setMode("interval")}
             />
+            <Action label={mode === "cron" ? "✓ Cron" : "Cron"} onPress={() => setMode("cron")} />
           </View>
-          <View className="gap-2">
-            <Text className="font-t3-semibold text-foreground">
-              {mode === "once" ? "Run after (minutes)" : "Repeat every (minutes)"}
-            </Text>
-            <TextInput
-              keyboardType="number-pad"
-              className="rounded-xl bg-grouped-card px-4 py-3 text-foreground"
-              value={minutes}
-              onChangeText={setMinutes}
-            />
-          </View>
+          {mode === "cron" ? (
+            <View className="gap-4">
+              <View className="gap-2">
+                <Text className="font-t3-semibold text-foreground">Cron expression</Text>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  className="rounded-xl bg-grouped-card px-4 py-3 font-mono text-foreground"
+                  placeholder="0 9 * * 1-5"
+                  placeholderTextColorClassName="foreground-muted"
+                  value={cronExpression}
+                  onChangeText={setCronExpression}
+                />
+                <Text className="text-xs text-foreground-muted">
+                  Minute, hour, day of month, month, weekday.
+                </Text>
+              </View>
+              <View className="gap-2">
+                <Text className="font-t3-semibold text-foreground">Timezone</Text>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  className="rounded-xl bg-grouped-card px-4 py-3 text-foreground"
+                  placeholder="Asia/Shanghai"
+                  placeholderTextColorClassName="foreground-muted"
+                  value={timezone}
+                  onChangeText={setTimezone}
+                />
+              </View>
+              <View className="gap-2">
+                <Text className="font-t3-semibold text-foreground">Skip dates</Text>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  className="rounded-xl bg-grouped-card px-4 py-3 text-foreground"
+                  placeholder="2026-10-01, 2026-10-02"
+                  placeholderTextColorClassName="foreground-muted"
+                  value={skipDates}
+                  onChangeText={setSkipDates}
+                />
+              </View>
+            </View>
+          ) : (
+            <View className="gap-2">
+              <Text className="font-t3-semibold text-foreground">
+                {mode === "once" ? "Run after (minutes)" : "Repeat every (minutes)"}
+              </Text>
+              <TextInput
+                keyboardType="number-pad"
+                className="rounded-xl bg-grouped-card px-4 py-3 text-foreground"
+                value={minutes}
+                onChangeText={setMinutes}
+              />
+            </View>
+          )}
           <Pressable
             accessibilityRole="button"
             className="items-center rounded-xl bg-accent px-4 py-3"
