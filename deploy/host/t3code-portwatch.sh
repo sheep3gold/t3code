@@ -31,7 +31,11 @@ port_owner() {
 }
 
 main_pid=$(systemctl --user show -p MainPID --value t3code.service)
-if [ "$main_pid" = "0" ] || [ "$(port_owner)" != "$main_pid" ]; then
+if [ "$main_pid" = "0" ]; then
+  active_state=$(systemctl --user show -p ActiveState --value t3code.service)
+  if [ "$active_state" = "activating" ] || [ "$active_state" = "deactivating" ]; then
+    exit 0
+  fi
   systemctl --user reset-failed t3code.service 2>/dev/null || true
   systemctl --user start t3code.service
   exit 0

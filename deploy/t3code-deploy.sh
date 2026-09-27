@@ -35,10 +35,22 @@ free_port() {
 }
 
 start_unit() {
-  "${T3CTL[@]}" stop t3code.service
+  "${T3CTL[@]}" stop t3code.service || true
+  while [ "$("${T3CTL[@]}" show -p ActiveState --value t3code.service)" != "inactive" ]; do
+    sleep 1
+  done
   free_port
   "${T3CTL[@]}" reset-failed t3code.service 2>/dev/null || true
-  "${T3CTL[@]}" start t3code.service
+  "${T3CTL[@]}" start --no-block t3code.service
+  local waited=0
+  while [ "$("${T3CTL[@]}" show -p ActiveState --value t3code.service)" != "active" ]; do
+    sleep 1
+    waited=$((waited + 1))
+    if [ "$waited" -ge 60 ]; then
+      echo "t3code.service failed to become active within 60s" >&2
+      return 1
+    fi
+  done
 }
 
 cd "$SRC"
