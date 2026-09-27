@@ -10,6 +10,7 @@ import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import * as AgentMemories from "../persistence/AgentMemories.ts";
+import * as MemsearchMirror from "../persistence/MemsearchMirror.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -91,7 +92,7 @@ const dependencies = [
 
 const AddMemoryTool = Tool.make("memory_add", {
   description:
-    "Explicitly save a reusable lesson or memory for later threads. Lessons are automatically injected into later turns in scope; ordinary memories are returned only by memory_search. Use project scope unless the fact truly applies across every project in this environment. Never save credentials, source code, or chat transcripts.",
+    "Explicitly save a reusable lesson or memory for later threads. Lessons are automatically injected into later turns in scope; ordinary memories are returned only by memory_search. Use project scope unless the fact truly applies across every project in this environment. When memsearch is configured, saved entries are mirrored to it for semantic search. Never save credentials, source code, or chat transcripts.",
   parameters: AddMemoryInput,
   success: MemoryEntry,
   failure: AgentMemoryToolError,
@@ -105,7 +106,7 @@ const AddMemoryTool = Tool.make("memory_add", {
 
 const SearchMemoryTool = Tool.make("memory_search", {
   description:
-    "Search explicit memories and lessons visible to this project. Results come from local deterministic keyword scoring; no project content is sent to an embedding service.",
+    "Search explicit memories and lessons visible to this project. Uses semantic search through the configured memsearch service when available, merged with local keyword scoring as a fallback.",
   parameters: SearchMemoryInput,
   success: Schema.Struct({ memories: Schema.Array(MemoryEntry) }),
   failure: AgentMemoryToolError,
@@ -168,6 +169,22 @@ export function searchAgentMemories(
     .slice(0, Math.max(1, Math.min(20, limit)))
     .map((entry) => entry.memory);
 }
+
+export const rankAgentMemories = Effect.fn("AgentMemory.rank")(function* (
+  candidates: ReadonlyArray<AgentMemories.AgentMemory>,
+  query: string,
+  limit: number,
+) {
+  const keyword = searchAgentMemories(candidates, query, limit);
+  const semanticIds = yield* MemsearchMirror.semanticMemoryIds(query);
+  if (semanticIds === null) return keyword;
+  const byId = new Map(candidates.map((memory) => [memory.id, memory]));
+  const merged = [...semanticIds.flatMap((id) => byId.get(id) ?? []), ...keyword];
+  return [...new Map(merged.map((memory) => [memory.id, memory])).values()].slice(
+    0,
+    Math.max(1, Math.min(20, limit)),
+  );
+});
 
 export function formatAgentLessonContext(
   lessons: ReadonlyArray<AgentMemories.AgentMemory>,
@@ -256,7 +273,7 @@ const make = Effect.gen(function* () {
             ),
           );
         return {
-          memories: searchAgentMemories(candidates, input.query, input.limit ?? 10),
+          memories: yield* rankAgentMemories(candidates, input.query, input.limit ?? 10),
         };
       }),
     memory_remove: ({ id }) =>

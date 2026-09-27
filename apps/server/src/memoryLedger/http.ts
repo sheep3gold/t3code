@@ -19,7 +19,7 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
-import { searchAgentMemories } from "../orchestration/AgentMemory.ts";
+import { rankAgentMemories } from "../orchestration/AgentMemory.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as AgentMemories from "../persistence/AgentMemories.ts";
 import * as ThreadLedger from "../persistence/ThreadLedger.ts";
@@ -121,7 +121,7 @@ export const memoryLedgerHttpApiLayer = HttpApiBuilder.group(
             .pipe(Effect.catch(internal));
           return {
             memories: args.payload.query?.trim()
-              ? searchAgentMemories(candidates, args.payload.query, 100)
+              ? yield* rankAgentMemories(candidates, args.payload.query, 100)
               : candidates,
           };
         }),
