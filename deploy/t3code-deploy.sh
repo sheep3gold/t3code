@@ -73,6 +73,8 @@ trap rollback ERR
 
 rsync -a --delete "$SRC/apps/web/dist/" "$LIVE/apps/web/dist/"
 rsync -a --delete "$SRC/apps/server/dist/" "$LIVE/apps/server/dist/"
+# systemd 用户单元、看门狗与 t3 拦截层都在仓库 deploy/host/ 里。
+"$SRC/deploy/host/install-host.sh" all
 start_unit
 
 for _ in $(seq 1 90); do
