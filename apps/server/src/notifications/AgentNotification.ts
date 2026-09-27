@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -19,8 +20,7 @@ import {
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 
-export const DEFAULT_AGENT_NOTIFICATION_SUBJECT =
-  "dingding.notify.vibecoding.t3code.agent.message";
+export const DEFAULT_AGENT_NOTIFICATION_SUBJECT = "dingding.notify.vibecoding.t3code.agent.message";
 const MAX_TITLE_CHARS = 200;
 const MAX_TEXT_CHARS = 1_100;
 
@@ -40,13 +40,17 @@ export class AgentNotificationThreadNotFoundError extends Schema.TaggedError<Age
   "AgentNotificationThreadNotFoundError",
   { threadId: Schema.String },
 ) {
-  override get message(): string { return `Thread ${this.threadId} was not found.`; }
+  override get message(): string {
+    return `Thread ${this.threadId} was not found.`;
+  }
 }
 export class AgentNotificationPublishError extends Schema.TaggedError<AgentNotificationPublishError>()(
   "AgentNotificationPublishError",
   { cause: Schema.Defect() },
 ) {
-  override get message(): string { return "Could not publish the agent notification."; }
+  override get message(): string {
+    return "Could not publish the agent notification.";
+  }
 }
 const AgentNotificationToolError = Schema.Union([
   AgentNotificationThreadNotFoundError,
@@ -94,6 +98,7 @@ export function buildAgentNotification(input: {
     level: input.level,
     source: `t3code/${input.project}`,
     host: input.hostLabel,
+    // @effect-diagnostics-next-line globalDate:off -- plain payload builder, parses a timestamp the caller already produced.
     ts: Math.floor(new Date(input.createdAt).getTime() / 1_000),
     fields: {
       主机: input.hostLabel,
@@ -151,17 +156,19 @@ const make = Effect.gen(function* () {
     send_notification: (input) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
-        const thread = yield* snapshots
-          .getThreadShellById(scope.threadId)
-          .pipe(Effect.map(Option.getOrUndefined));
+        const thread = yield* snapshots.getThreadShellById(scope.threadId).pipe(
+          Effect.mapError((cause) => new AgentNotificationPublishError({ cause })),
+          Effect.map(Option.getOrUndefined),
+        );
         if (!thread || thread.archivedAt !== null) {
           return yield* new AgentNotificationThreadNotFoundError({ threadId: scope.threadId });
         }
-        const project = yield* snapshots
-          .getProjectShellById(thread.projectId)
-          .pipe(Effect.map(Option.getOrUndefined));
-        const createdAt = new Date(yield* Clock.currentTimeMillis).toISOString();
-        const dedupeKey = input.dedupeKey ?? (yield* crypto.randomUUIDv4);
+        const project = yield* snapshots.getProjectShellById(thread.projectId).pipe(
+          Effect.mapError((cause) => new AgentNotificationPublishError({ cause })),
+          Effect.map(Option.getOrUndefined),
+        );
+        const createdAt = DateTime.formatIso(yield* DateTime.now);
+        const dedupeKey = input.dedupeKey ?? (yield* crypto.randomUUIDv4.pipe(Effect.orDie));
         return yield* Effect.promise(() =>
           publishAgentNotification({
             title: input.title,
@@ -173,9 +180,7 @@ const make = Effect.gen(function* () {
             dedupeKey,
             createdAt,
           }),
-        ).pipe(
-          Effect.mapError((cause) => new AgentNotificationPublishError({ cause })),
-        );
+        ).pipe(Effect.mapError((cause) => new AgentNotificationPublishError({ cause })));
       }),
   });
 });

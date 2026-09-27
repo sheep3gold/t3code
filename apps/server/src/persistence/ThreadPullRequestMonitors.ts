@@ -34,7 +34,7 @@ export class ThreadPullRequestMonitorRepository extends Context.Service<
       state: ThreadPullRequestMonitorState,
     ) => Effect.Effect<void, PersistenceSqlError>;
   }
->()("t3/persistence/ThreadPullRequestMonitorRepository") {}
+>()("t3/persistence/ThreadPullRequestMonitors/ThreadPullRequestMonitorRepository") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -65,10 +65,7 @@ const make = Effect.gen(function* () {
           fingerprint = excluded.fingerprint,
           status = excluded.status,
           updated_at = excluded.updated_at
-      `.pipe(
-        Effect.asVoid,
-        Effect.mapError(sqlError("setThreadPullRequestMonitor")),
-      ),
+      `.pipe(Effect.asVoid, Effect.mapError(sqlError("setThreadPullRequestMonitor"))),
   });
 });
 

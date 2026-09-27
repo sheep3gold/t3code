@@ -1,7 +1,10 @@
+// @effect-diagnostics globalDate:off -- schedule math works on Clock epoch millis and IANA timezones via Intl.
+// @effect-diagnostics globalDateInEffect:off -- same epoch-millis values, formatted for persisted ISO columns.
 import { CommandId, MessageId, PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Cron from "effect/Cron";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -241,12 +244,12 @@ function nextCronRun(
 
 export function resolveThreadSchedule(input: {
   readonly nowMs: number;
-  readonly at?: string;
-  readonly delaySeconds?: number;
-  readonly everySeconds?: number;
-  readonly cronExpression?: string;
-  readonly timezone?: string;
-  readonly skipDates?: ReadonlyArray<string>;
+  readonly at?: string | undefined;
+  readonly delaySeconds?: number | undefined;
+  readonly everySeconds?: number | undefined;
+  readonly cronExpression?: string | undefined;
+  readonly timezone?: string | undefined;
+  readonly skipDates?: ReadonlyArray<string> | undefined;
 }):
   | Pick<
       ThreadSchedules.CreateThreadScheduleInput,
@@ -374,7 +377,7 @@ const makeToolkit = Effect.gen(function* () {
     scheduleId: string,
   ) {
     const scope = yield* currentScope;
-    const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+    const now = DateTime.formatIso(yield* DateTime.now);
     const changed = yield* (
       operation === "delete"
         ? repository.remove(scheduleId, scope.threadId)
@@ -400,7 +403,7 @@ const makeToolkit = Effect.gen(function* () {
         const createdAt = new Date(nowMs).toISOString();
         const schedule = yield* repository
           .create({
-            id: yield* crypto.randomUUIDv4,
+            id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
             threadId: scope.threadId,
             prompt: input.prompt,
             ...resolved,

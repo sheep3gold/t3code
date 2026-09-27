@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off -- *_json columns hold plain string arrays/records written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -61,7 +62,9 @@ export interface ArtifactVersionEntry {
 function tagsOf(value: string): ReadonlyArray<string> {
   try {
     const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((tag): tag is string => typeof tag === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((tag): tag is string => typeof tag === "string")
+      : [];
   } catch {
     return [];
   }
@@ -77,7 +80,13 @@ function summaryOf(row: ArtifactRow): ArtifactSummary {
 }
 
 function detailOf(row: ArtifactDetailRow): ArtifactDetail {
-  return { ...summaryOf(row), version: row.version, content: row.content, versionReason: row.versionReason, versionCreatedAt: row.versionCreatedAt };
+  return {
+    ...summaryOf(row),
+    version: row.version,
+    content: row.content,
+    versionReason: row.versionReason,
+    versionCreatedAt: row.versionCreatedAt,
+  };
 }
 
 const sqlError = (operation: string) => (cause: unknown) =>
@@ -134,7 +143,7 @@ export class ArtifactRepository extends Context.Service<
       slug: string,
     ) => Effect.Effect<boolean, PersistenceSqlError>;
   }
->()("t3/persistence/ArtifactRepository") {}
+>()("t3/persistence/Artifacts/ArtifactRepository") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -255,7 +264,9 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(
-          Effect.flatMap((found) => found ? get(input.projectId, input.slug) : Effect.succeed(Option.none())),
+          Effect.flatMap((found) =>
+            found ? get(input.projectId, input.slug) : Effect.succeed(Option.none()),
+          ),
           Effect.mapError(sqlError("updateArtifact")),
         ),
 
@@ -284,7 +295,9 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(
-          Effect.flatMap((found) => found ? get(input.projectId, input.slug) : Effect.succeed(Option.none())),
+          Effect.flatMap((found) =>
+            found ? get(input.projectId, input.slug) : Effect.succeed(Option.none()),
+          ),
           Effect.mapError(sqlError("revertArtifact")),
         ),
 
@@ -303,7 +316,9 @@ const make = Effect.gen(function* () {
         ORDER BY v.version DESC
         LIMIT 200
       `.pipe(
-        Effect.map((rows) => rows.map((row) => ({ ...row, sourceThreadId: ThreadId.make(row.sourceThreadId) }))),
+        Effect.map((rows) =>
+          rows.map((row) => ({ ...row, sourceThreadId: ThreadId.make(row.sourceThreadId) })),
+        ),
         Effect.mapError(sqlError("listArtifactVersions")),
       ),
 

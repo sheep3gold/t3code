@@ -45,6 +45,9 @@ import * as ServerRuntimeStartup from "../src/serverRuntimeStartup.ts";
 import * as ServerSettings from "../src/serverSettings.ts";
 import * as AnalyticsService from "../src/telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../src/vcs/GitVcsDriver.ts";
+import * as GitWorkflowService from "../src/git/GitWorkflowService.ts";
+import * as ThreadSchedulesRepository from "../src/persistence/ThreadSchedules.ts";
+import * as WorkflowPersistence from "../src/persistence/ThreadWorkflows.ts";
 
 const providerInstanceId = ProviderInstanceId.make("codex");
 const projectId = ProjectId.make("project-startup-orphan");
@@ -66,10 +69,15 @@ const makePersistedRuntimeLayer = (dbPath: string) => {
     Layer.provide(ProviderSessionRuntime.layer),
     Layer.provide(persistence),
   );
-  return Layer.mergeAll(orchestration, directory);
+  const threadRepositories = Layer.mergeAll(
+    ThreadSchedulesRepository.layer,
+    WorkflowPersistence.layer,
+  ).pipe(Layer.provide(persistence));
+  return Layer.mergeAll(orchestration, directory, threadRepositories);
 };
 
 const startupDependencies = Layer.mergeAll(
+  Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(Keybindings.Keybindings)({
     start: Effect.void,
   }),

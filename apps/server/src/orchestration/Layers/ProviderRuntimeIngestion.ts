@@ -1861,66 +1861,56 @@ const make = Effect.gen(function* () {
         readonly errorMessage: string;
       };
 
-  const notificationWorker = yield* makeDrainableWorker(
-    (job: TurnNotificationJob) =>
-      Effect.gen(function* () {
-        const { event, turnId } = job;
-        const thread = yield* projectionSnapshotQuery
-          .getThreadDetailById(event.threadId, { activityKinds: [] })
-          .pipe(Effect.map(Option.getOrUndefined));
-        if (!thread) return;
-        const project = yield* projectionSnapshotQuery
-          .getProjectShellById(thread.projectId)
-          .pipe(Effect.map(Option.getOrUndefined));
-        const text = thread.messages
-          .filter((message) => message.role === "assistant" && message.turnId === turnId)
-          .map((message) => message.text)
-          .filter((message) => message.trim().length > 0)
-          .join("\n\n");
-        yield* Effect.promise(() =>
-          publishTurnCompletionNotification({
-            threadId: String(event.threadId),
-            turnId: String(turnId),
-            project: project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project",
-            threadTitle: thread.title,
-            provider: event.provider,
-            state:
-              event.type === "turn.completed"
-                ? normalizeRuntimeTurnState(event.payload.state)
-                : "interrupted",
-            text,
-            errorMessage:
-              "errorMessage" in job ? job.errorMessage : event.payload.errorMessage,
-            createdAt: event.createdAt,
-          }),
-        );
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("failed to publish turn completion notification", {
-                threadId: job.event.threadId,
-                turnId: job.turnId,
-                cause: Cause.pretty(cause),
-              }),
-        ),
+  const notificationWorker = yield* makeDrainableWorker((job: TurnNotificationJob) =>
+    Effect.gen(function* () {
+      const { event, turnId } = job;
+      const thread = yield* projectionSnapshotQuery
+        .getThreadDetailById(event.threadId, { activityKinds: [] })
+        .pipe(Effect.map(Option.getOrUndefined));
+      if (!thread) return;
+      const project = yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.map(Option.getOrUndefined));
+      const text = thread.messages
+        .filter((message) => message.role === "assistant" && message.turnId === turnId)
+        .map((message) => message.text)
+        .filter((message) => message.trim().length > 0)
+        .join("\n\n");
+      yield* Effect.promise(() =>
+        publishTurnCompletionNotification({
+          threadId: String(event.threadId),
+          turnId: String(turnId),
+          project: project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project",
+          threadTitle: thread.title,
+          provider: event.provider,
+          state:
+            event.type === "turn.completed"
+              ? normalizeRuntimeTurnState(event.payload.state)
+              : "interrupted",
+          text,
+          errorMessage: "errorMessage" in job ? job.errorMessage : job.event.payload.errorMessage,
+          createdAt: event.createdAt,
+        }),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("failed to publish turn completion notification", {
+              threadId: job.event.threadId,
+              turnId: job.turnId,
+              cause: Cause.pretty(cause),
+            }),
       ),
+    ),
   );
 
   const attentionNotificationWorker = yield* makeDrainableWorker(
-    (
-      event: Extract<
-        ProviderRuntimeEvent,
-        { type: "request.opened" | "user-input.requested" }
-      >,
-    ) =>
+    (event: Extract<ProviderRuntimeEvent, { type: "request.opened" | "user-input.requested" }>) =>
       Effect.gen(function* () {
         const kind = event.type === "request.opened" ? "approval" : "user-input";
         if (resolveMsgHubAttentionConfig(kind) === null) return;
-        if (
-          event.type === "request.opened" &&
-          event.payload.requestType === "tool_user_input"
-        ) {
+        if (event.type === "request.opened" && event.payload.requestType === "tool_user_input") {
           return;
         }
         const thread = yield* projectionSnapshotQuery

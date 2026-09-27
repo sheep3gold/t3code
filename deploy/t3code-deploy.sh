@@ -46,6 +46,9 @@ install -d -m 0755 "$GENERATED" "$BACKUP_ROOT"
 cp "$SRC"/deploy/spdx-cache/v3.28.0/*.json "$GENERATED"/
 
 pnpm install --frozen-lockfile --prefer-offline
+# 类型检查不过就不发布：此时还没碰线上文件，release-hub 会停在失败，main 不前进。
+# 单线程：多线程的 tsgo 峰值约 5.3G，这台机器内存吃紧；单线程约 3.3G。
+(cd apps/server && pnpm exec tsc --noEmit --singleThreaded)
 pnpm --dir apps/web run build
 pnpm --dir apps/server run build:bundle
 

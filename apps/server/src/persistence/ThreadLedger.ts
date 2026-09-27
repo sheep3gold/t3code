@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off -- *_json columns hold plain string arrays/records written inside SQL templates.
 import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -80,7 +81,7 @@ export class ThreadLedgerRepository extends Context.Service<
     ) => Effect.Effect<ThreadLedgerSnapshot, PersistenceSqlError>;
     readonly clear: (threadId: ThreadId) => Effect.Effect<boolean, PersistenceSqlError>;
   }
->()("t3/persistence/ThreadLedgerRepository") {}
+>()("t3/persistence/ThreadLedger/ThreadLedgerRepository") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

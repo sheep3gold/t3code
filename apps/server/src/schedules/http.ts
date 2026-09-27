@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -110,10 +111,10 @@ export const schedulesHttpApiLayer = HttpApiBuilder.group(
           if ("error" in resolved) {
             return yield* failEnvironmentInvalidRequest("invalid_schedule");
           }
-          const createdAt = new Date(nowMs).toISOString();
+          const createdAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
           const schedule = yield* repository
             .create({
-              id: yield* crypto.randomUUIDv4,
+              id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
               threadId: args.payload.threadId,
               prompt: args.payload.prompt,
               ...resolved,
@@ -132,7 +133,7 @@ export const schedulesHttpApiLayer = HttpApiBuilder.group(
               args.params.scheduleId,
               args.payload.projectId,
               true,
-              new Date(yield* Clock.currentTimeMillis).toISOString(),
+              DateTime.formatIso(yield* DateTime.now),
             )
             .pipe(Effect.catch(internal));
           return { changed };
@@ -147,7 +148,7 @@ export const schedulesHttpApiLayer = HttpApiBuilder.group(
               args.params.scheduleId,
               args.payload.projectId,
               false,
-              new Date(yield* Clock.currentTimeMillis).toISOString(),
+              DateTime.formatIso(yield* DateTime.now),
             )
             .pipe(Effect.catch(internal));
           return { changed };

@@ -122,7 +122,9 @@ describe("ProviderCommandReactor", () => {
     | OrchestrationEngineService
     | ProviderCommandReactor
     | ProjectionSnapshotQuery
-    | SqlClient.SqlClient,
+    | SqlClient.SqlClient
+    | AgentMemoryPersistence.AgentMemoryRepository
+    | ThreadLedgerPersistence.ThreadLedgerRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -504,7 +506,14 @@ describe("ProviderCommandReactor", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
-    const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    const runEffect = <A, E>(
+      effect: Effect.Effect<
+        A,
+        E,
+        | AgentMemoryPersistence.AgentMemoryRepository
+        | ThreadLedgerPersistence.ThreadLedgerRepository
+      >,
+    ) => runtime!.runPromise(effect);
 
     await Effect.runPromise(
       engine.dispatch({
@@ -910,7 +919,8 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    const input = harness.sendTurn.mock.calls[0]?.[0].input ?? "";
+    const input =
+      (harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined)?.input ?? "";
     expect(input).toContain("[Saved lessons — reusable behavior for this environment/project]");
     expect(input).toContain("Always run the focused test before publishing.");
     expect(input).toContain("Avoid: Do not claim success from a build alone.");

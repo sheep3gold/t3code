@@ -31,6 +31,8 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
+import * as AgentMemoryPersistence from "../persistence/AgentMemories.ts";
+import * as ThreadLedgerPersistence from "../persistence/ThreadLedger.ts";
 import { OrchestrationEngineLive } from "../orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
@@ -932,6 +934,11 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
           Layer.provide(Layer.mock(TextGeneration)({})),
           Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(
+            Layer.mergeAll(AgentMemoryPersistence.layer, ThreadLedgerPersistence.layer).pipe(
+              Layer.provide(SqlitePersistenceMemory),
+            ),
+          ),
         );
 
         yield* engine.dispatch({

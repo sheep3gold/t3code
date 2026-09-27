@@ -1,5 +1,6 @@
 import { ThreadId, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -148,9 +149,9 @@ export function formatThreadLedgerContext(
     ...(snapshot.events.length > 0
       ? [
           "Recent events:",
-          ...snapshot.events.slice(-CONTEXT_EVENT_LIMIT).map(
-            (event) => `- ${event.createdAt} [${event.kind}] ${event.message}`,
-          ),
+          ...snapshot.events
+            .slice(-CONTEXT_EVENT_LIMIT)
+            .map((event) => `- ${event.createdAt} [${event.kind}] ${event.message}`),
         ]
       : []),
     "[End persistent thread ledger]",
@@ -164,14 +165,12 @@ const make = Effect.gen(function* () {
 
   const scopeAndThread = Effect.gen(function* () {
     const scope = yield* McpInvocationContext.McpInvocationContext;
-    const thread = yield* snapshots
-      .getThreadShellById(scope.threadId)
-      .pipe(
-        Effect.mapError(
-          (cause) => new ThreadLedgerOperationError({ operation: "read-thread", cause }),
-        ),
-        Effect.map(Option.getOrUndefined),
-      );
+    const thread = yield* snapshots.getThreadShellById(scope.threadId).pipe(
+      Effect.mapError(
+        (cause) => new ThreadLedgerOperationError({ operation: "read-thread", cause }),
+      ),
+      Effect.map(Option.getOrUndefined),
+    );
     if (!thread || thread.archivedAt !== null) {
       return yield* new ThreadLedgerThreadNotFoundError({ threadId: scope.threadId });
     }
@@ -182,20 +181,24 @@ const make = Effect.gen(function* () {
     thread_ledger_read: () =>
       Effect.gen(function* () {
         const scope = yield* scopeAndThread;
-        return yield* repository.read(scope.threadId).pipe(
-          Effect.mapError(
-            (cause) => new ThreadLedgerOperationError({ operation: "read", cause }),
-          ),
-        );
+        return yield* repository
+          .read(scope.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ThreadLedgerOperationError({ operation: "read", cause }),
+            ),
+          );
       }),
     thread_ledger_record: (input) =>
       Effect.gen(function* () {
         const scope = yield* scopeAndThread;
-        const current = yield* repository.read(scope.threadId).pipe(
-          Effect.mapError(
-            (cause) => new ThreadLedgerOperationError({ operation: "read", cause }),
-          ),
-        );
+        const current = yield* repository
+          .read(scope.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ThreadLedgerOperationError({ operation: "read", cause }),
+            ),
+          );
         const currentState = current.state ?? {
           goal: null,
           phase: null,
@@ -233,14 +236,14 @@ const make = Effect.gen(function* () {
         ) {
           return yield* new ThreadLedgerInputInvalidError({ detail: "No ledger change supplied." });
         }
-        const updatedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const updatedAt = DateTime.formatIso(yield* DateTime.now);
         return yield* repository
           .record({
             threadId: scope.threadId,
             state: {
-              goal: input.goal === undefined ? currentState.goal : clipped(input.goal) ?? null,
+              goal: input.goal === undefined ? currentState.goal : (clipped(input.goal) ?? null),
               phase: phase ?? null,
-              next: input.next === undefined ? currentState.next : clipped(input.next) ?? null,
+              next: input.next === undefined ? currentState.next : (clipped(input.next) ?? null),
               artifacts,
             },
             updatedAt,

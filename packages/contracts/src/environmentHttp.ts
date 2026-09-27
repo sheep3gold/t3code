@@ -71,6 +71,10 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_schedule",
   "invalid_memory",
   "invalid_ledger",
+  "invalid_artifact",
+  "invalid_workflow",
+  "workflow_not_retryable",
+  "workflow_not_restartable",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -199,6 +203,7 @@ export const EnvironmentResourceNotFoundReason = Schema.Literals([
   "thread_not_found",
   "artifact_not_found",
   "memory_not_found",
+  "workflow_not_found",
 ]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 

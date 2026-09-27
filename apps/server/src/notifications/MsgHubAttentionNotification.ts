@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalDate:off -- plain payload builders that parse caller-provided ISO timestamps.
 import * as NodeCrypto from "node:crypto";
 
 import {
@@ -60,8 +61,7 @@ export function resolveMsgHubAttentionConfig(
     ...base,
     subject:
       kind === "approval"
-        ? environment.T3CODE_MSGHUB_APPROVAL_SUBJECT?.trim() ||
-          DEFAULT_APPROVAL_REQUIRED_SUBJECT
+        ? environment.T3CODE_MSGHUB_APPROVAL_SUBJECT?.trim() || DEFAULT_APPROVAL_REQUIRED_SUBJECT
         : environment.T3CODE_MSGHUB_USER_INPUT_SUBJECT?.trim() ||
           DEFAULT_USER_INPUT_REQUIRED_SUBJECT,
   };

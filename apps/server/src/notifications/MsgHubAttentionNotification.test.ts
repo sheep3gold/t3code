@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   buildMsgHubAttentionRequest,
@@ -67,16 +67,18 @@ describe("MsgHubAttentionNotification", () => {
 
   it("does not touch the network while disabled", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
-    await expect(
-      publishAttentionNotification(input, { environment: {}, fetch }),
-    ).resolves.toBe("disabled");
+    await expect(publishAttentionNotification(input, { environment: {}, fetch })).resolves.toBe(
+      "disabled",
+    );
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it("posts the user-input subject when enabled", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ seq: 43, duplicate: false }), { status: 200 }),
-    );
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ seq: 43, duplicate: false }), { status: 200 }),
+      );
     await expect(
       publishAttentionNotification(
         { ...input, kind: "user-input", text: "Which mode should be used?" },
