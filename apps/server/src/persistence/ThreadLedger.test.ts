@@ -40,6 +40,10 @@ layer("ThreadLedgerRepository", (it) => {
         snapshot.events.map((event) => [event.kind, event.message]),
         [["phase", "Implementation started"]],
       );
+      assert.equal(yield* repository.clear(threadId), true);
+      const cleared = yield* repository.read(threadId);
+      assert.equal(cleared.state, null);
+      assert.deepStrictEqual(cleared.events, []);
     }),
   );
 });

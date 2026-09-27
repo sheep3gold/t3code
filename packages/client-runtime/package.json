@@ -119,6 +119,10 @@
       "types": "./src/state/scheduleHttp.ts",
       "default": "./src/state/scheduleHttp.ts"
     },
+    "./state/memory-ledger": {
+      "types": "./src/state/memoryLedgerHttp.ts",
+      "default": "./src/state/memoryLedgerHttp.ts"
+    },
     "./state/workflows": {
       "types": "./src/state/workflowHttp.ts",
       "default": "./src/state/workflowHttp.ts"

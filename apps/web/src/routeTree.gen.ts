@@ -15,6 +15,7 @@ import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SchedulesRouteImport } from './routes/schedules'
 import { Route as PairRouteImport } from './routes/pair'
+import { Route as MemoryRouteImport } from './routes/memory'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
 import { Route as ChatRouteImport } from './routes/_chat'
@@ -65,6 +66,11 @@ const SchedulesRoute = SchedulesRouteImport.update({
 const PairRoute = PairRouteImport.update({
   id: '/pair',
   path: '/pair',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MemoryRoute = MemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectRoute = ConnectRouteImport.update({
@@ -178,6 +184,7 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/artifacts': typeof ArtifactsRoute
   '/connect': typeof ConnectRoute
+  '/memory': typeof MemoryRoute
   '/pair': typeof PairRoute
   '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -205,6 +212,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/artifacts': typeof ArtifactsRoute
   '/connect': typeof ConnectRoute
+  '/memory': typeof MemoryRoute
   '/pair': typeof PairRoute
   '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -235,6 +243,7 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/artifacts': typeof ArtifactsRoute
   '/connect': typeof ConnectRoute
+  '/memory': typeof MemoryRoute
   '/pair': typeof PairRoute
   '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -266,6 +275,7 @@ export interface FileRouteTypes {
     | '/'
     | '/artifacts'
     | '/connect'
+    | '/memory'
     | '/pair'
     | '/schedules'
     | '/settings'
@@ -293,6 +303,7 @@ export interface FileRouteTypes {
   to:
     | '/artifacts'
     | '/connect'
+    | '/memory'
     | '/pair'
     | '/schedules'
     | '/settings'
@@ -322,6 +333,7 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/artifacts'
     | '/connect'
+    | '/memory'
     | '/pair'
     | '/schedules'
     | '/settings'
@@ -352,6 +364,7 @@ export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   ArtifactsRoute: typeof ArtifactsRoute
   ConnectRoute: typeof ConnectRoute
+  MemoryRoute: typeof MemoryRoute
   PairRoute: typeof PairRoute
   SchedulesRoute: typeof SchedulesRoute
   SettingsRoute: typeof SettingsRouteWithChildren
@@ -403,6 +416,13 @@ declare module '@tanstack/react-router' {
       path: '/pair'
       fullPath: '/pair'
       preLoaderRoute: typeof PairRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/memory': {
+      id: '/memory'
+      path: '/memory'
+      fullPath: '/memory'
+      preLoaderRoute: typeof MemoryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect': {
@@ -611,6 +631,7 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   ArtifactsRoute: ArtifactsRoute,
   ConnectRoute: ConnectRoute,
+  MemoryRoute: MemoryRoute,
   PairRoute: PairRoute,
   SchedulesRoute: SchedulesRoute,
   SettingsRoute: SettingsRouteWithChildren,

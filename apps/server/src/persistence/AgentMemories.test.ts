@@ -51,6 +51,19 @@ layer("AgentMemoryRepository", (it) => {
         now: "2026-09-26T12:01:00.000Z",
       });
       assert.equal(deduped.id, global.id);
+      const projectMemory = (yield* repository.candidates(firstProject, "memory"))[0]!;
+      assert.equal(yield* repository.get(projectMemory.id, secondProject), null);
+      const updated = yield* repository.update({
+        id: projectMemory.id,
+        projectId: firstProject,
+        fingerprint: "updated-project-fingerprint",
+        content: "Prefer targeted validation",
+        negative: "Do not run the full suite",
+        tags: ["tests", "performance"],
+        now: "2026-09-26T12:02:00.000Z",
+      });
+      assert.equal(updated?.content, "Prefer targeted validation");
+      assert.deepStrictEqual(updated?.tags, ["tests", "performance"]);
       assert.deepStrictEqual(
         (yield* repository.candidates(secondProject)).map((entry) => entry.id),
         [global.id],
