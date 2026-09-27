@@ -13,11 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
   base64UrlDecodeUtf8,
@@ -109,7 +105,7 @@ const ThreadWebhookToolError = Schema.Union([
 
 const RegisterThreadWebhookTool = Tool.make("register_thread_webhook", {
   description:
-    "Create a short-lived, one-shot webhook bound to this thread. Give the returned URL to an external system that will POST {\"text\":\"...\"} when its work finishes. Repeated delivery of the same URL is idempotent. Treat the URL as a credential and do not print it in logs.",
+    'Create a short-lived, one-shot webhook bound to this thread. Give the returned URL to an external system that will POST {"text":"..."} when its work finishes. Repeated delivery of the same URL is idempotent. Treat the URL as a credential and do not print it in logs.',
   parameters: RegisterThreadWebhookInput,
   success: RegisterThreadWebhookResult,
   failure: ThreadWebhookToolError,
@@ -164,10 +160,7 @@ function decodeClaims(encodedPayload: string): ThreadWebhookClaims | null {
   }
 }
 
-export function encodeThreadWebhookToken(
-  claims: ThreadWebhookClaims,
-  secret: Uint8Array,
-): string {
+export function encodeThreadWebhookToken(claims: ThreadWebhookClaims, secret: Uint8Array): string {
   const encodedPayload = base64UrlEncode(encodeClaimsJson(claims));
   return `${encodedPayload}.${signPayload(encodedPayload, secret)}`;
 }
@@ -216,7 +209,7 @@ export const issueThreadWebhook = Effect.fn("ThreadWebhook.issue")(function* (in
     hookId,
     url,
     relativeUrl,
-    expiresAt: new Date(expiresAt).toISOString(),
+    expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAt)),
   } satisfies RegisterThreadWebhookResult;
 });
 
@@ -235,12 +228,10 @@ const make = Effect.gen(function* () {
     register_thread_webhook: (input) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
-        const thread = yield* snapshots
-          .getThreadShellById(scope.threadId)
-          .pipe(
-            Effect.mapError((cause) => new ThreadWebhookIssueFailedError({ cause })),
-            Effect.map(Option.getOrUndefined),
-          );
+        const thread = yield* snapshots.getThreadShellById(scope.threadId).pipe(
+          Effect.mapError((cause) => new ThreadWebhookIssueFailedError({ cause })),
+          Effect.map(Option.getOrUndefined),
+        );
         if (!thread || thread.archivedAt !== null) {
           return yield* new ThreadWebhookThreadNotFoundError({ threadId: scope.threadId });
         }
@@ -252,7 +243,7 @@ const make = Effect.gen(function* () {
           ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
         }).pipe(
           Effect.mapError((cause) =>
-            cause instanceof ThreadWebhookBaseUrlInvalidError
+            Schema.is(ThreadWebhookBaseUrlInvalidError)(cause)
               ? cause
               : new ThreadWebhookIssueFailedError({ cause }),
           ),
@@ -288,12 +279,14 @@ export const threadWebhookRouteLayer = HttpRouter.add(
     }
     const raw = yield* request.json.pipe(Effect.orElseSucceed(() => null));
     const input = Option.getOrNull(decodeCallbackInput(raw));
-    if (!input) return HttpServerResponse.text("Expected JSON with non-empty text", { status: 400 });
+    if (!input)
+      return HttpServerResponse.text("Expected JSON with non-empty text", { status: 400 });
 
     const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-    const thread = yield* snapshots
-      .getThreadShellById(claims.threadId)
-      .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+    const thread = yield* snapshots.getThreadShellById(claims.threadId).pipe(
+      Effect.map(Option.getOrUndefined),
+      Effect.orElseSucceed(() => undefined),
+    );
     if (!thread || thread.archivedAt !== null) {
       return HttpServerResponse.text("Gone", { status: 410 });
     }

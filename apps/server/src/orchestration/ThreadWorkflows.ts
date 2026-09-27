@@ -1,6 +1,7 @@
 import { CommandId, MessageId, ThreadId, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -303,7 +304,7 @@ const makeToolkit = Effect.gen(function* () {
     workflowId: string,
   ) {
     const scope = yield* context;
-    const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+    const now = DateTime.formatIso(yield* DateTime.now);
     const changed = yield* (
       operation === "cancel"
         ? repository.cancel(workflowId, scope.threadId, now)
@@ -340,10 +341,10 @@ const makeToolkit = Effect.gen(function* () {
             detail: "workflow name, step titles, and prompts must be non-empty.",
           });
         }
-        const createdAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const createdAt = DateTime.formatIso(yield* DateTime.now);
         return yield* repository
           .create({
-            id: yield* crypto.randomUUIDv4,
+            id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
             threadId: scope.threadId,
             name,
             steps,
@@ -367,7 +368,7 @@ const makeToolkit = Effect.gen(function* () {
     workflow_complete_step: ({ workflowId, result }) =>
       Effect.gen(function* () {
         const scope = yield* context;
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const now = DateTime.formatIso(yield* DateTime.now);
         const value = yield* repository
           .completeParticipant(workflowId, scope.threadId, clip(result, MAX_RESULT_CHARS), now)
           .pipe(opError("complete-step"));
@@ -376,7 +377,7 @@ const makeToolkit = Effect.gen(function* () {
     workflow_fail_step: ({ workflowId, result }) =>
       Effect.gen(function* () {
         const scope = yield* context;
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const now = DateTime.formatIso(yield* DateTime.now);
         const value = yield* repository
           .failParticipant(workflowId, scope.threadId, clip(result, MAX_RESULT_CHARS), now)
           .pipe(opError("fail-step"));
@@ -388,7 +389,7 @@ const makeToolkit = Effect.gen(function* () {
     workflow_retry_step: ({ workflowId }) =>
       Effect.gen(function* () {
         const scope = yield* context;
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const now = DateTime.formatIso(yield* DateTime.now);
         const value = yield* repository
           .retryCurrent(workflowId, scope.threadId, now, MAX_ATTEMPTS)
           .pipe(opError("retry-step"));
@@ -414,7 +415,7 @@ const makeToolkit = Effect.gen(function* () {
             detail: "Every step before fromStep must already be completed.",
           });
         }
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const now = DateTime.formatIso(yield* DateTime.now);
         const restarted = yield* repository
           .restartFrom(workflowId, scope.threadId, fromStep - 1, now)
           .pipe(opError("restart-from"));
@@ -434,7 +435,7 @@ const runner = Effect.gen(function* () {
 
   const sweep = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
-    const now = new Date(nowMs).toISOString();
+    const now = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const workflows = yield* repository.listRunnable();
     for (const workflow of workflows) {
       const parentThread = yield* snapshots
@@ -482,7 +483,7 @@ const runner = Effect.gen(function* () {
             });
             continue;
           }
-          childThreadId = ThreadId.make(yield* crypto.randomUUIDv4);
+          childThreadId = ThreadId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
           worktreePath = worktreeResult.success.worktree.path;
           branch = worktreeResult.success.worktree.refName;
           const created = yield* engine

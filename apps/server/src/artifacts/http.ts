@@ -3,7 +3,7 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
-import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -98,7 +98,7 @@ export const artifactsHttpApiLayer = HttpApiBuilder.group(
               content: args.payload.content ?? null,
               sourceThreadId: current.value.sourceThreadId,
               reason: args.payload.reason ?? "updated from library",
-              updatedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+              updatedAt: DateTime.formatIso(yield* DateTime.now),
             })
             .pipe(Effect.catch(internal));
           if (Option.isNone(updated)) return yield* failEnvironmentNotFound("artifact_not_found");
@@ -119,7 +119,7 @@ export const artifactsHttpApiLayer = HttpApiBuilder.group(
               slug: args.params.slug,
               targetVersion: args.payload.targetVersion,
               sourceThreadId: current.value.sourceThreadId,
-              updatedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+              updatedAt: DateTime.formatIso(yield* DateTime.now),
             })
             .pipe(Effect.catch(internal));
           if (Option.isNone(reverted)) return yield* failEnvironmentNotFound("artifact_not_found");

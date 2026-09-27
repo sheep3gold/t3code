@@ -174,7 +174,7 @@ export class ThreadWorkflowRepository extends Context.Service<
       now: string,
     ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
   }
->()("t3/persistence/ThreadWorkflowRepository") {}
+>()("t3/persistence/ThreadWorkflows/ThreadWorkflowRepository") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

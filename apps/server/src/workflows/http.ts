@@ -3,8 +3,8 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
-import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -106,10 +106,10 @@ export const workflowsHttpApiLayer = HttpApiBuilder.group(
           ) {
             return yield* failEnvironmentInvalidRequest("invalid_workflow");
           }
-          const createdAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
           const workflow = yield* repository
             .create({
-              id: yield* crypto.randomUUIDv4,
+              id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
               threadId: args.payload.threadId,
               name,
               steps,
@@ -129,7 +129,7 @@ export const workflowsHttpApiLayer = HttpApiBuilder.group(
               workflow.id,
               workflow.threadId,
               true,
-              new Date(yield* Clock.currentTimeMillis).toISOString(),
+              DateTime.formatIso(yield* DateTime.now),
             )
             .pipe(Effect.catch(internal));
           return { changed };
@@ -145,7 +145,7 @@ export const workflowsHttpApiLayer = HttpApiBuilder.group(
               workflow.id,
               workflow.threadId,
               false,
-              new Date(yield* Clock.currentTimeMillis).toISOString(),
+              DateTime.formatIso(yield* DateTime.now),
             )
             .pipe(Effect.catch(internal));
           return { changed };
@@ -160,7 +160,7 @@ export const workflowsHttpApiLayer = HttpApiBuilder.group(
             .retryCurrent(
               workflow.id,
               workflow.threadId,
-              new Date(yield* Clock.currentTimeMillis).toISOString(),
+              DateTime.formatIso(yield* DateTime.now),
               MAX_ATTEMPTS,
             )
             .pipe(Effect.catch(internal));
@@ -188,7 +188,7 @@ export const workflowsHttpApiLayer = HttpApiBuilder.group(
               workflow.id,
               workflow.threadId,
               fromIndex,
-              new Date(yield* Clock.currentTimeMillis).toISOString(),
+              DateTime.formatIso(yield* DateTime.now),
             )
             .pipe(Effect.catch(internal));
           if (Option.isNone(restarted)) {
@@ -203,11 +203,7 @@ export const workflowsHttpApiLayer = HttpApiBuilder.group(
           yield* operateScope(args.endpoint.name);
           const workflow = yield* required(args.params.workflowId, args.payload.projectId);
           const changed = yield* repository
-            .cancel(
-              workflow.id,
-              workflow.threadId,
-              new Date(yield* Clock.currentTimeMillis).toISOString(),
-            )
+            .cancel(workflow.id, workflow.threadId, DateTime.formatIso(yield* DateTime.now))
             .pipe(Effect.catch(internal));
           return { changed };
         }),

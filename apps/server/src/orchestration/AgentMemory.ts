@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { ProjectId, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -139,7 +140,9 @@ function clip(value: string, limit: number): string {
 
 function normalizeTags(tags: ReadonlyArray<string> | undefined): ReadonlyArray<string> | null {
   if ((tags?.length ?? 0) > MAX_TAGS) return null;
-  const normalized = [...new Set((tags ?? []).map((tag) => clip(tag, MAX_TAG_CHARS)).filter(Boolean))];
+  const normalized = [
+    ...new Set((tags ?? []).map((tag) => clip(tag, MAX_TAG_CHARS)).filter(Boolean)),
+  ];
   return normalized.length <= MAX_TAGS ? normalized : null;
 }
 
@@ -193,10 +196,9 @@ export function formatAgentLessonContext(
   const lines = [
     "[Saved lessons — reusable behavior for this environment/project]",
     ...lessons.map((lesson) =>
-      [
-        `- ${lesson.content}`,
-        ...(lesson.negative ? [`  Avoid: ${lesson.negative}`] : []),
-      ].join("\n"),
+      [`- ${lesson.content}`, ...(lesson.negative ? [`  Avoid: ${lesson.negative}`] : [])].join(
+        "\n",
+      ),
     ),
     "[End saved lessons]",
   ];
@@ -210,14 +212,12 @@ const make = Effect.gen(function* () {
 
   const scopeContext = Effect.gen(function* () {
     const scope = yield* McpInvocationContext.McpInvocationContext;
-    const thread = yield* snapshots
-      .getThreadShellById(scope.threadId)
-      .pipe(
-        Effect.mapError(
-          (cause) => new AgentMemoryOperationError({ operation: "read-thread", cause }),
-        ),
-        Effect.map(Option.getOrUndefined),
-      );
+    const thread = yield* snapshots.getThreadShellById(scope.threadId).pipe(
+      Effect.mapError(
+        (cause) => new AgentMemoryOperationError({ operation: "read-thread", cause }),
+      ),
+      Effect.map(Option.getOrUndefined),
+    );
     if (!thread || thread.archivedAt !== null) {
       return yield* new AgentMemoryThreadNotFoundError({ threadId: scope.threadId });
     }
@@ -229,9 +229,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const context = yield* scopeContext;
         const content = clip(input.content, MAX_CONTENT_CHARS);
-        const negative = input.negative === null || input.negative === undefined
-          ? null
-          : clip(input.negative, MAX_NEGATIVE_CHARS);
+        const negative =
+          input.negative === null || input.negative === undefined
+            ? null
+            : clip(input.negative, MAX_NEGATIVE_CHARS);
         const tags = normalizeTags(input.tags);
         if (!content || tags === null) {
           return yield* new AgentMemoryInputInvalidError({
@@ -242,10 +243,10 @@ const make = Effect.gen(function* () {
         const fingerprint = NodeCrypto.createHash("sha256")
           .update(`${input.kind}|${input.scope}|${projectId ?? ""}|${content}`)
           .digest("hex");
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const now = DateTime.formatIso(yield* DateTime.now);
         return yield* repository
           .upsert({
-            id: yield* crypto.randomUUIDv4,
+            id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
             fingerprint,
             kind: input.kind,
             scope: input.scope,
@@ -257,9 +258,7 @@ const make = Effect.gen(function* () {
             now,
           })
           .pipe(
-            Effect.mapError(
-              (cause) => new AgentMemoryOperationError({ operation: "add", cause }),
-            ),
+            Effect.mapError((cause) => new AgentMemoryOperationError({ operation: "add", cause })),
           );
       }),
     memory_search: (input) =>

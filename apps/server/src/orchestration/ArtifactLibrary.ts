@@ -1,6 +1,7 @@
 import { TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -232,13 +233,14 @@ function normalizedTags(tags: ReadonlyArray<string> | undefined): ReadonlyArray<
   return [...new Set((tags ?? []).map((tag) => clip(tag, MAX_TAG_CHARS)).filter(Boolean))];
 }
 export function artifactSlug(name: string, suffix: string): string {
-  const base = name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60)
-    .replace(/-+$/g, "") || "artifact";
+  const base =
+    name
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60)
+      .replace(/-+$/g, "") || "artifact";
   return `${base}-${suffix.slice(0, 8).toLowerCase()}`;
 }
 function validContent(content: string): boolean {
@@ -252,12 +254,10 @@ const make = Effect.gen(function* () {
 
   const context = Effect.gen(function* () {
     const scope = yield* McpInvocationContext.McpInvocationContext;
-    const thread = yield* snapshots
-      .getThreadShellById(scope.threadId)
-      .pipe(
-        Effect.mapError((cause) => new ArtifactOperationError({ operation: "read-thread", cause })),
-        Effect.map(Option.getOrUndefined),
-      );
+    const thread = yield* snapshots.getThreadShellById(scope.threadId).pipe(
+      Effect.mapError((cause) => new ArtifactOperationError({ operation: "read-thread", cause })),
+      Effect.map(Option.getOrUndefined),
+    );
     if (!thread || thread.archivedAt !== null) {
       return yield* new ArtifactThreadNotFoundError({ threadId: scope.threadId });
     }
@@ -283,8 +283,8 @@ const make = Effect.gen(function* () {
             detail: `name is required, content is limited to ${MAX_CONTENT_CHARS} characters, and tags to ${MAX_TAGS}.`,
           });
         }
-        const id = yield* crypto.randomUUIDv4;
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+        const now = DateTime.formatIso(yield* DateTime.now);
         return yield* repository
           .create({
             id,
@@ -320,9 +320,10 @@ const make = Effect.gen(function* () {
     artifact_update: (input) =>
       Effect.gen(function* () {
         const owner = yield* context;
-        const current = yield* repository
-          .get(owner.projectId, input.slug)
-          .pipe(operationError("get"), Effect.flatMap((value) => requireArtifact(input.slug, value)));
+        const current = yield* repository.get(owner.projectId, input.slug).pipe(
+          operationError("get"),
+          Effect.flatMap((value) => requireArtifact(input.slug, value)),
+        );
         const tags = input.tags === undefined ? current.tags : normalizedTags(input.tags);
         if ((input.content !== undefined && !validContent(input.content)) || tags === null) {
           return yield* new ArtifactInputInvalidError({
@@ -330,12 +331,15 @@ const make = Effect.gen(function* () {
           });
         }
         if (
-          input.content === undefined && input.name === undefined && input.kind === undefined &&
-          input.description === undefined && input.tags === undefined
+          input.content === undefined &&
+          input.name === undefined &&
+          input.kind === undefined &&
+          input.description === undefined &&
+          input.tags === undefined
         ) {
           return yield* new ArtifactInputInvalidError({ detail: "No artifact change supplied." });
         }
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const now = DateTime.formatIso(yield* DateTime.now);
         const updated = yield* repository
           .update({
             projectId: owner.projectId,
@@ -370,9 +374,11 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const owner = yield* context;
         if (targetVersion < 1) {
-          return yield* new ArtifactInputInvalidError({ detail: "targetVersion must be positive." });
+          return yield* new ArtifactInputInvalidError({
+            detail: "targetVersion must be positive.",
+          });
         }
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const now = DateTime.formatIso(yield* DateTime.now);
         const reverted = yield* repository
           .revert({
             projectId: owner.projectId,

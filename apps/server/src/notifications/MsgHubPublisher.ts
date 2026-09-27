@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off -- promise-based fire-and-forget publisher outside the Effect runtime; the timer bounds one fetch.
 import * as NodeOs from "node:os";
 
 const DEFAULT_BASE_URL = "https://mq.zxytech.cn";

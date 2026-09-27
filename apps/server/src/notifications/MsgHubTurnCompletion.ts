@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalDate:off -- plain payload builders that parse caller-provided ISO timestamps.
 import * as NodeCrypto from "node:crypto";
 
 import {
@@ -11,8 +12,7 @@ import {
   type MsgHubPublisherConfig,
 } from "./MsgHubPublisher.ts";
 
-export const DEFAULT_TURN_COMPLETION_SUBJECT =
-  "dingding.notify.vibecoding.t3code.turn.done";
+export const DEFAULT_TURN_COMPLETION_SUBJECT = "dingding.notify.vibecoding.t3code.turn.done";
 const MAX_TEXT_CHARS = 1_100;
 
 export type TurnCompletionState = "completed" | "failed" | "interrupted" | "cancelled";
@@ -96,8 +96,7 @@ export function resolveMsgHubTurnCompletionConfig(
   if (base === null) return null;
   return {
     ...base,
-    subject:
-      environment.T3CODE_MSGHUB_SUBJECT?.trim() || DEFAULT_TURN_COMPLETION_SUBJECT,
+    subject: environment.T3CODE_MSGHUB_SUBJECT?.trim() || DEFAULT_TURN_COMPLETION_SUBJECT,
   };
 }
 
