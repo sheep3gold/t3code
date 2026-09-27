@@ -14,9 +14,13 @@ export interface WorkflowStep {
   readonly index: number;
   readonly title: string;
   readonly prompt: string;
+  readonly dependsOn: ReadonlyArray<number>;
   readonly status: WorkflowStepStatus;
   readonly attempt: number;
   readonly result: string | null;
+  readonly childThreadId: ThreadId | null;
+  readonly worktreePath: string | null;
+  readonly branch: string | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
 }
@@ -45,8 +49,31 @@ interface WorkflowRow {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
-interface StepRow extends WorkflowStep {
+interface StepRow {
   readonly workflowId: string;
+  readonly index: number;
+  readonly title: string;
+  readonly prompt: string;
+  readonly dependsOnJson: string;
+  readonly status: WorkflowStepStatus;
+  readonly attempt: number;
+  readonly result: string | null;
+  readonly childThreadId: string | null;
+  readonly worktreePath: string | null;
+  readonly branch: string | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+}
+
+function dependenciesOf(value: string): ReadonlyArray<number> {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is number => Number.isInteger(item) && item >= 0)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 const sqlError = (operation: string) => (cause: unknown) =>
@@ -59,7 +86,11 @@ export class ThreadWorkflowRepository extends Context.Service<
       readonly id: string;
       readonly threadId: ThreadId;
       readonly name: string;
-      readonly steps: ReadonlyArray<{ readonly title: string; readonly prompt: string }>;
+      readonly steps: ReadonlyArray<{
+        readonly title: string;
+        readonly prompt: string;
+        readonly dependsOn?: ReadonlyArray<number>;
+      }>;
       readonly createdAt: string;
     }) => Effect.Effect<ThreadWorkflow, PersistenceSqlError>;
     readonly get: (
@@ -81,6 +112,14 @@ export class ThreadWorkflowRepository extends Context.Service<
       workflow: ThreadWorkflow,
       now: string,
     ) => Effect.Effect<boolean, PersistenceSqlError>;
+    readonly assignStep: (input: {
+      readonly workflowId: string;
+      readonly stepIndex: number;
+      readonly childThreadId: ThreadId;
+      readonly worktreePath: string;
+      readonly branch: string;
+      readonly now: string;
+    }) => Effect.Effect<boolean, PersistenceSqlError>;
     readonly completeCurrent: (
       id: string,
       threadId: ThreadId,
@@ -90,6 +129,24 @@ export class ThreadWorkflowRepository extends Context.Service<
     readonly failCurrent: (
       id: string,
       threadId: ThreadId,
+      result: string,
+      now: string,
+    ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
+    readonly completeParticipant: (
+      id: string,
+      participantThreadId: ThreadId,
+      result: string,
+      now: string,
+    ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
+    readonly failParticipant: (
+      id: string,
+      participantThreadId: ThreadId,
+      result: string,
+      now: string,
+    ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
+    readonly failPendingStep: (
+      id: string,
+      stepIndex: number,
       result: string,
       now: string,
     ) => Effect.Effect<Option.Option<ThreadWorkflow>, PersistenceSqlError>;
@@ -132,14 +189,20 @@ const make = Effect.gen(function* () {
       const workflow = workflows[0];
       if (!workflow) return Option.none<ThreadWorkflow>();
       const steps = yield* sql<StepRow>`
-        SELECT workflow_id AS "workflowId", step_index AS "index", title, prompt, status,
-               attempt, result, started_at AS "startedAt", completed_at AS "completedAt"
+        SELECT workflow_id AS "workflowId", step_index AS "index", title, prompt,
+               depends_on_json AS "dependsOnJson", status, attempt, result,
+               child_thread_id AS "childThreadId", worktree_path AS "worktreePath", branch,
+               started_at AS "startedAt", completed_at AS "completedAt"
         FROM thread_workflow_steps WHERE workflow_id = ${id} ORDER BY step_index
       `;
       return Option.some({
         ...workflow,
         threadId: ThreadId.make(workflow.threadId),
-        steps: steps.map(({ workflowId: _workflowId, ...step }) => step),
+        steps: steps.map(({ workflowId: _workflowId, dependsOnJson, childThreadId, ...step }) => ({
+          ...step,
+          dependsOn: dependenciesOf(dependsOnJson),
+          childThreadId: childThreadId === null ? null : ThreadId.make(childThreadId),
+        })),
       });
     }).pipe(Effect.mapError(sqlError("getThreadWorkflow")));
 
@@ -222,6 +285,101 @@ const make = Effect.gen(function* () {
         Effect.mapError(sqlError(`updateThreadWorkflowCurrent:${status}`)),
       );
 
+  const failPendingStep = (id: string, stepIndex: number, result: string, now: string) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{ readonly threadId: string }>`
+            SELECT thread_id AS "threadId" FROM thread_workflows
+            WHERE id = ${id} AND status = 'running' LIMIT 1
+          `;
+          const owner = rows[0];
+          if (!owner) return null;
+          const changed = yield* sql`
+            UPDATE thread_workflow_steps
+            SET status = 'failed', result = ${result}, completed_at = ${now}
+            WHERE workflow_id = ${id} AND step_index = ${stepIndex} AND status = 'pending'
+            RETURNING step_index
+          `;
+          if (changed.length === 0) return null;
+          yield* sql`
+            UPDATE thread_workflows SET status = 'failed', current_step = ${stepIndex},
+              updated_at = ${now} WHERE id = ${id}
+          `;
+          return ThreadId.make(owner.threadId);
+        }),
+      )
+      .pipe(
+        Effect.flatMap((ownerThreadId) =>
+          ownerThreadId === null ? Effect.succeed(Option.none()) : get(id, ownerThreadId),
+        ),
+        Effect.mapError(sqlError("failPendingThreadWorkflowStep")),
+      );
+
+  const updateParticipant = (
+    id: string,
+    participantThreadId: ThreadId,
+    status: "completed" | "failed",
+    result: string,
+    now: string,
+  ) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{
+            readonly ownerThreadId: string;
+            readonly stepIndex: number;
+          }>`
+            SELECT w.thread_id AS "ownerThreadId", s.step_index AS "stepIndex"
+            FROM thread_workflows w
+            JOIN thread_workflow_steps s ON s.workflow_id = w.id
+            WHERE w.id = ${id} AND w.status IN ('running', 'failed') AND s.status = 'running'
+              AND (s.child_thread_id = ${participantThreadId}
+                OR (w.thread_id = ${participantThreadId} AND s.step_index = w.current_step))
+            LIMIT 1
+          `;
+          const current = rows[0];
+          if (!current) return null;
+          yield* sql`
+            UPDATE thread_workflow_steps
+            SET status = ${status}, result = ${result}, completed_at = ${now}
+            WHERE workflow_id = ${id} AND step_index = ${current.stepIndex}
+          `;
+          if (status === "failed") {
+            yield* sql`
+              UPDATE thread_workflows
+              SET status = 'failed', current_step = ${current.stepIndex}, updated_at = ${now}
+              WHERE id = ${id}
+            `;
+          } else {
+            const remaining = yield* sql<{ readonly count: number }>`
+              SELECT COUNT(*) AS count FROM thread_workflow_steps
+              WHERE workflow_id = ${id} AND status <> 'completed'
+            `;
+            if ((remaining[0]?.count ?? 0) === 0) {
+              yield* sql`UPDATE thread_workflows SET status = 'completed', updated_at = ${now} WHERE id = ${id}`;
+            } else {
+              const next = yield* sql<{ readonly index: number }>`
+                SELECT step_index AS "index" FROM thread_workflow_steps
+                WHERE workflow_id = ${id} AND status = 'pending'
+                ORDER BY step_index LIMIT 1
+              `;
+              yield* sql`
+                UPDATE thread_workflows SET current_step = ${next[0]?.index ?? current.stepIndex},
+                  updated_at = ${now} WHERE id = ${id}
+              `;
+            }
+          }
+          return { ownerThreadId: ThreadId.make(current.ownerThreadId) };
+        }),
+      )
+      .pipe(
+        Effect.flatMap((updated) =>
+          updated === null ? Effect.succeed(Option.none()) : get(id, updated.ownerThreadId),
+        ),
+        Effect.mapError(sqlError(`updateThreadWorkflowParticipant:${status}`)),
+      );
+
   return ThreadWorkflowRepository.of({
     create: (input) =>
       sql
@@ -236,8 +394,11 @@ const make = Effect.gen(function* () {
               input.steps,
               (step, index) => sql`
                 INSERT INTO thread_workflow_steps (
-                  workflow_id, step_index, title, prompt, status, attempt
-                ) VALUES (${input.id}, ${index}, ${step.title}, ${step.prompt}, 'pending', 1)
+                  workflow_id, step_index, title, prompt, depends_on_json, status, attempt
+                ) VALUES (
+                  ${input.id}, ${index}, ${step.title}, ${step.prompt},
+                  ${JSON.stringify(step.dependsOn ?? (index === 0 ? [] : [index - 1]))}, 'pending', 1
+                )
               `,
               { discard: true },
             );
@@ -281,9 +442,26 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => rows.length > 0),
         Effect.mapError(sqlError("markThreadWorkflowStepRunning")),
       ),
+    assignStep: (input) =>
+      sql`
+        UPDATE thread_workflow_steps
+        SET status = 'running', child_thread_id = ${input.childThreadId},
+            worktree_path = ${input.worktreePath}, branch = ${input.branch}, started_at = ${input.now}
+        WHERE workflow_id = ${input.workflowId} AND step_index = ${input.stepIndex}
+          AND status = 'pending'
+        RETURNING step_index
+      `.pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError(sqlError("assignThreadWorkflowStep")),
+      ),
     completeCurrent: (id, threadId, result, now) =>
       updateCurrent(id, threadId, "completed", result, now),
     failCurrent: (id, threadId, result, now) => updateCurrent(id, threadId, "failed", result, now),
+    completeParticipant: (id, participantThreadId, result, now) =>
+      updateParticipant(id, participantThreadId, "completed", result, now),
+    failParticipant: (id, participantThreadId, result, now) =>
+      updateParticipant(id, participantThreadId, "failed", result, now),
+    failPendingStep,
     setPaused: (id, threadId, paused, now) =>
       (paused
         ? sql`

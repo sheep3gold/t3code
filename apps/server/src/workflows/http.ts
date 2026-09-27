@@ -90,11 +90,20 @@ export const workflowsHttpApiLayer = HttpApiBuilder.group(
             return yield* failEnvironmentInvalidRequest("invalid_workflow");
           }
           const name = clip(args.payload.name, MAX_NAME_CHARS);
-          const steps = args.payload.steps.map((step) => ({
+          const steps = args.payload.steps.map((step, index) => ({
             title: clip(step.title, MAX_STEP_TITLE_CHARS),
             prompt: clip(step.prompt, MAX_STEP_PROMPT_CHARS),
+            dependsOn: [...new Set(step.dependsOn ?? (index === 0 ? [] : [index - 1]))],
           }));
-          if (!name || steps.some((step) => !step.title || !step.prompt)) {
+          if (
+            !name ||
+            steps.some(
+              (step, index) =>
+                !step.title ||
+                !step.prompt ||
+                step.dependsOn.some((dependency) => dependency < 0 || dependency >= index),
+            )
+          ) {
             return yield* failEnvironmentInvalidRequest("invalid_workflow");
           }
           const createdAt = new Date(yield* Clock.currentTimeMillis).toISOString();

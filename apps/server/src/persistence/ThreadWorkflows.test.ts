@@ -16,7 +16,7 @@ const layer = it.layer(testLayer);
 layer("ThreadWorkflowRepository", (it) => {
   it.effect("advances completed steps and retries a failed step with a bounded attempt", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 59 });
+      yield* runMigrations({ toMigrationInclusive: 60 });
       const repository = yield* Workflows.ThreadWorkflowRepository;
       const threadId = ThreadId.make("thread-workflow");
       let workflow = yield* repository.create({
@@ -83,7 +83,7 @@ layer("ThreadWorkflowRepository", (it) => {
 layer("ThreadWorkflowRepository project scope", (it) => {
   it.effect("lists only workflows owned by the requested project", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 59 });
+      yield* runMigrations({ toMigrationInclusive: 60 });
       const repository = yield* Workflows.ThreadWorkflowRepository;
       const sql = yield* SqlClient.SqlClient;
       const projectId = ProjectId.make("project-workflow-a");
@@ -124,5 +124,77 @@ layer("ThreadWorkflowRepository project scope", (it) => {
       assert.isTrue(Option.isSome(yield* repository.getForProject("workflow-a", projectId)));
       assert.isTrue(Option.isNone(yield* repository.getForProject("workflow-b", projectId)));
     }),
+  );
+});
+
+layer("ThreadWorkflowRepository DAG", (it) => {
+  it.effect(
+    "tracks parallel child threads and unlocks a join after both dependencies complete",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 60 });
+        const repository = yield* Workflows.ThreadWorkflowRepository;
+        const owner = ThreadId.make("dag-owner");
+        const left = ThreadId.make("dag-left");
+        const right = ThreadId.make("dag-right");
+        let workflow = yield* repository.create({
+          id: "workflow-dag",
+          threadId: owner,
+          name: "Parallel build",
+          steps: [
+            { title: "Left", prompt: "Build left", dependsOn: [] },
+            { title: "Right", prompt: "Build right", dependsOn: [] },
+            { title: "Join", prompt: "Merge both", dependsOn: [0, 1] },
+          ],
+          createdAt: "2026-09-27T01:00:00.000Z",
+        });
+        assert.deepEqual(
+          workflow.steps.map((step) => step.dependsOn),
+          [[], [], [0, 1]],
+        );
+        assert.isTrue(
+          yield* repository.assignStep({
+            workflowId: workflow.id,
+            stepIndex: 0,
+            childThreadId: left,
+            worktreePath: "/worktrees/left",
+            branch: "t3/workflow-left",
+            now: "2026-09-27T01:01:00.000Z",
+          }),
+        );
+        assert.isTrue(
+          yield* repository.assignStep({
+            workflowId: workflow.id,
+            stepIndex: 1,
+            childThreadId: right,
+            worktreePath: "/worktrees/right",
+            branch: "t3/workflow-right",
+            now: "2026-09-27T01:01:00.000Z",
+          }),
+        );
+        workflow = Option.getOrThrow(
+          yield* repository.completeParticipant(
+            workflow.id,
+            left,
+            "Left done",
+            "2026-09-27T01:02:00.000Z",
+          ),
+        );
+        assert.equal(workflow.steps[0]?.status, "completed");
+        assert.equal(workflow.steps[1]?.status, "running");
+        workflow = Option.getOrThrow(
+          yield* repository.completeParticipant(
+            workflow.id,
+            right,
+            "Right done",
+            "2026-09-27T01:03:00.000Z",
+          ),
+        );
+        assert.deepEqual(
+          workflow.steps.filter((step) => step.status === "pending").map((step) => step.index),
+          [2],
+        );
+        assert.equal(workflow.currentStep, 2);
+      }),
   );
 });

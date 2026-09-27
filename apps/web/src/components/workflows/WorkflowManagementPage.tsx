@@ -94,7 +94,12 @@ const STATUS_VARIANT: Record<
 let workflowDraftStepSequence = 0;
 const nextWorkflowDraftStepKey = () => `workflow-step-${++workflowDraftStepSequence}`;
 
-type WorkflowDraftStep = { readonly key: string; readonly title: string; readonly prompt: string };
+type WorkflowDraftStep = {
+  readonly key: string;
+  readonly title: string;
+  readonly prompt: string;
+  readonly dependsOn: string;
+};
 
 function environmentProjectKey(project: EnvironmentProject): string {
   return scopedProjectKey({ environmentId: project.environmentId, projectId: project.id });
@@ -173,7 +178,7 @@ function CreateWorkflowDialog({
   const [threadId, setThreadId] = useState(threads[0]?.id ?? "");
   const [name, setName] = useState("");
   const [steps, setSteps] = useState<ReadonlyArray<WorkflowDraftStep>>([
-    { key: nextWorkflowDraftStepKey(), title: "", prompt: "" },
+    { key: nextWorkflowDraftStepKey(), title: "", prompt: "", dependsOn: "" },
   ]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -183,11 +188,27 @@ function CreateWorkflowDialog({
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const normalizedSteps = steps.map((step) => ({
-      title: step.title.trim(),
-      prompt: step.prompt.trim(),
-    }));
-    if (!threadId || !name.trim() || normalizedSteps.some((step) => !step.title || !step.prompt)) {
+    const normalizedSteps = steps.map((step) => {
+      const dependsOn = step.dependsOn
+        .split(",")
+        .map((value) => Number(value.trim()) - 1)
+        .filter((value) => Number.isInteger(value));
+      return {
+        title: step.title.trim(),
+        prompt: step.prompt.trim(),
+        ...(step.dependsOn.trim() ? { dependsOn } : {}),
+      };
+    });
+    if (
+      !threadId ||
+      !name.trim() ||
+      normalizedSteps.some(
+        (step, index) =>
+          !step.title ||
+          !step.prompt ||
+          step.dependsOn?.some((dependency) => dependency < 0 || dependency >= index),
+      )
+    ) {
       setError("Choose a thread and complete the workflow name, step titles, and instructions.");
       return;
     }
@@ -254,7 +275,7 @@ function CreateWorkflowDialog({
                   onClick={() =>
                     setSteps((current) => [
                       ...current,
-                      { key: nextWorkflowDraftStepKey(), title: "", prompt: "" },
+                      { key: nextWorkflowDraftStepKey(), title: "", prompt: "", dependsOn: "" },
                     ])
                   }
                   size="sm"
@@ -295,6 +316,16 @@ function CreateWorkflowDialog({
                         <XIcon />
                       </Button>
                     </div>
+                    <Input
+                      aria-label={`Step ${index + 1} dependencies`}
+                      onChange={(event) =>
+                        updateStep(step.key, { dependsOn: event.currentTarget.value })
+                      }
+                      placeholder={
+                        index === 0 ? "No dependencies" : "Depends on steps: 1, 2 or none"
+                      }
+                      value={step.dependsOn}
+                    />
                     <Textarea
                       aria-label={`Step ${index + 1} instructions`}
                       maxLength={10_000}
@@ -588,6 +619,14 @@ function WorkflowInspector({
                       <p className="mt-2 whitespace-pre-wrap text-sm leading-5 text-secondary-label">
                         {step.prompt}
                       </p>
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span>
+                          {step.dependsOn.length === 0
+                            ? "No dependencies"
+                            : `Depends on ${step.dependsOn.map((dependency) => `step ${dependency + 1}`).join(", ")}`}
+                        </span>
+                        {step.branch ? <span className="font-mono">{step.branch}</span> : null}
+                      </div>
                     </div>
                     {allowRestart && restartable.has(index + 1) ? (
                       <Button
