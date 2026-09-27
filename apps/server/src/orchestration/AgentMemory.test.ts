@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- a real loopback HTTP server stands in for memsearch.
 import * as Http from "node:http";
 
 import { ProjectId, ThreadId } from "@t3tools/contracts";

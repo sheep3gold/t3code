@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   buildMsgHubTurnCompletionRequest,
@@ -129,9 +129,11 @@ describe("MsgHubTurnCompletion", () => {
   });
 
   it("posts the configured subject when enabled", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ seq: 42, duplicate: false }), { status: 200 }),
-    );
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ seq: 42, duplicate: false }), { status: 200 }),
+      );
     await expect(
       publishTurnCompletionNotification(input, {
         environment: {

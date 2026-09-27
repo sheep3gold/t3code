@@ -128,6 +128,11 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
+import * as AgentMemoryPersistence from "./persistence/AgentMemories.ts";
+import * as ArtifactPersistence from "./persistence/Artifacts.ts";
+import * as ThreadLedgerPersistence from "./persistence/ThreadLedger.ts";
+import * as ThreadSchedulesRepository from "./persistence/ThreadSchedules.ts";
+import * as WorkflowPersistence from "./persistence/ThreadWorkflows.ts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
@@ -1069,8 +1074,16 @@ const buildAppUnderTest = (options?: {
       ),
     );
 
+    const threadRepositoriesLayer = Layer.mergeAll(
+      ThreadSchedulesRepository.layer,
+      ThreadLedgerPersistence.layer,
+      AgentMemoryPersistence.layer,
+      ArtifactPersistence.layer,
+      WorkflowPersistence.layer,
+    ).pipe(Layer.provide(SqlitePersistenceMemory));
+
     const appLayer = servedRoutesLayer.pipe(
-      Layer.provide(resourceTelemetryLayer),
+      Layer.provide(Layer.mergeAll(threadRepositoriesLayer, resourceTelemetryLayer)),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
         Layer.mock(AnalyticsService.AnalyticsService)({
