@@ -36,21 +36,27 @@ free_port() {
 
 start_unit() {
   "${T3CTL[@]}" stop t3code.service || true
-  while [ "$("${T3CTL[@]}" show -p ActiveState --value t3code.service)" != "inactive" ]; do
-    sleep 1
-  done
-  free_port
-  "${T3CTL[@]}" reset-failed t3code.service 2>/dev/null || true
-  "${T3CTL[@]}" start --no-block t3code.service
+  # 停干净再拉起：只要 unit 还可能在带老进程重启（activating/deactivating/
+  # reloading）就等；failed 也算停稳，后面 reset-failed 会清掉。
+  # 注意不能等 "active"：状态机经过 activating 时会短暂离开 active，
+  # 在 systemctl --user 上下文里那种 wait 会卡死 bash（wait4 被不断重启）。
   local waited=0
-  while [ "$("${T3CTL[@]}" show -p ActiveState --value t3code.service)" != "active" ]; do
+  while :; do
+    case "$("${T3CTL[@]}" show -p ActiveState --value t3code.service)" in
+      inactive | failed) break ;;
+    esac
     sleep 1
     waited=$((waited + 1))
     if [ "$waited" -ge 60 ]; then
-      echo "t3code.service failed to become active within 60s" >&2
+      echo "t3code.service failed to stop within 60s" >&2
       return 1
     fi
   done
+  free_port
+  "${T3CTL[@]}" reset-failed t3code.service 2>/dev/null || true
+  # 同步阻塞 start，由 systemd 自己等到 unit 起来（含 ExecStartPre），
+  # 避免在用户总线上用轮询循环；下面的健康检查还会再确认端口。
+  "${T3CTL[@]}" start t3code.service
 }
 
 cd "$SRC"
