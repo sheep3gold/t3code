@@ -43,11 +43,16 @@ start_unit() {
   "${T3CTL[@]}" reset-failed t3code.service 2>/dev/null || true
   "${T3CTL[@]}" start --no-block t3code.service
   local waited=0
-  while [ "$("${T3CTL[@]}" show -p ActiveState --value t3code.service)" != "active" ]; do
+  local active_state
+  while true; do
+    active_state=$("${T3CTL[@]}" show -p ActiveState --value t3code.service)
+    if [ "$active_state" = "active" ]; then
+      break
+    fi
     sleep 1
     waited=$((waited + 1))
     if [ "$waited" -ge 60 ]; then
-      echo "t3code.service failed to become active within 60s" >&2
+      echo "t3code.service failed to become active within 60s (last state: ${active_state:-unknown})" >&2
       return 1
     fi
   done
