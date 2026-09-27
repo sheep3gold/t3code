@@ -314,12 +314,12 @@ export const threadWebhookRouteLayer = HttpRouter.add(
         runtimeMode: thread.runtimeMode,
         createdAt: now,
       })
-      .pipe(Effect.either);
-    if (result._tag === "Left") {
+      .pipe(Effect.result);
+    if (result._tag === "Failure") {
       return HttpServerResponse.text("Could not start thread", { status: 409 });
     }
     return HttpServerResponse.jsonUnsafe(
-      { accepted: true, hookId: claims.hookId, sequence: result.right.sequence },
+      { accepted: true, hookId: claims.hookId, sequence: result.success.sequence },
       { status: 202, headers: { "cache-control": "no-store" } },
     );
   }),

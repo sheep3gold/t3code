@@ -639,7 +639,7 @@ export const reconcileProviderSessions = Effect.gen(function* () {
 
           if (orphanedTurnId !== null) {
             const project = projectsById.get(thread.projectId);
-            yield* Effect.forkDaemon(
+            yield* Effect.forkDetach(
               Effect.promise(() =>
                 publishTurnCompletionNotification({
                   threadId: String(thread.id),
