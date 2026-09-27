@@ -20,7 +20,11 @@ PORT=3773
 
 # Deploys stop/start t3code.service themselves and expect to own the port
 # for the duration; don't fight t3code-deploy.service while it's running.
-systemctl is-active --quiet t3code-deploy.service && exit 0
+# It is a oneshot, so while running it is "activating", which `is-active`
+# reports as not active — check the state itself.
+case "$(systemctl show -p ActiveState --value t3code-deploy.service)" in
+activating | active | reloading | deactivating) exit 0 ;;
+esac
 
 port_owner() {
   ss -Hltnp "sport = :$PORT" | grep -o 'pid=[0-9]*' | head -n1 | cut -d= -f2 || true
