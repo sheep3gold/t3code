@@ -15,7 +15,7 @@ import { useCallback } from "react";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 
-const artifactEnvironment = createEnvironmentArtifactAtoms(connectionAtomRuntime);
+export const artifactEnvironment = createEnvironmentArtifactAtoms(connectionAtomRuntime);
 
 function formatArtifactError(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);

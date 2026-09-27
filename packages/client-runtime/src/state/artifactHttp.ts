@@ -1,7 +1,7 @@
-import type { ProjectId } from "@t3tools/contracts";
+import type { EnvironmentArtifactKind, ProjectId } from "@t3tools/contracts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
+import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./runtime.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -84,6 +84,85 @@ export const fetchEnvironmentArtifactVersions = Effect.fn("fetchEnvironmentArtif
   },
 );
 
+export type ArtifactUpdateInput = {
+  readonly projectId: ProjectId;
+  readonly slug: string;
+  readonly name?: string;
+  readonly kind?: EnvironmentArtifactKind;
+  readonly description?: string | null;
+  readonly tags?: ReadonlyArray<string>;
+  readonly content?: string;
+  readonly reason?: string;
+};
+
+export const updateEnvironmentArtifact = Effect.fn("updateEnvironmentArtifact")(function* (
+  input: ArtifactRequestContext & ArtifactUpdateInput,
+) {
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    group: "artifacts",
+    method: "POST",
+    url: (base) =>
+      environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/update`),
+    timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
+    request: ({ client, headers }) =>
+      client.update({
+        params: { slug: input.slug },
+        payload: {
+          projectId: input.projectId,
+          ...(input.name === undefined ? {} : { name: input.name }),
+          ...(input.kind === undefined ? {} : { kind: input.kind }),
+          ...(input.description === undefined ? {} : { description: input.description }),
+          ...(input.tags === undefined ? {} : { tags: [...input.tags] }),
+          ...(input.content === undefined ? {} : { content: input.content }),
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+        },
+        headers,
+      }),
+  });
+});
+
+export const revertEnvironmentArtifact = Effect.fn("revertEnvironmentArtifact")(function* (
+  input: ArtifactRequestContext & {
+    readonly projectId: ProjectId;
+    readonly slug: string;
+    readonly targetVersion: number;
+  },
+) {
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    group: "artifacts",
+    method: "POST",
+    url: (base) =>
+      environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/revert`),
+    timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
+    request: ({ client, headers }) =>
+      client.revert({
+        params: { slug: input.slug },
+        payload: { projectId: input.projectId, targetVersion: input.targetVersion },
+        headers,
+      }),
+  });
+});
+
+export const removeEnvironmentArtifact = Effect.fn("removeEnvironmentArtifact")(function* (
+  input: ArtifactRequestContext & { readonly projectId: ProjectId; readonly slug: string },
+) {
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    group: "artifacts",
+    method: "DELETE",
+    url: (base) => environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}`),
+    timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
+    request: ({ client, headers }) =>
+      client.remove({
+        params: { slug: input.slug },
+        payload: { projectId: input.projectId },
+        headers,
+      }),
+  });
+});
+
 export type FetchEnvironmentArtifactError = RemoteEnvironmentRequestError;
 
 export function createEnvironmentArtifactAtoms<R, E>(
@@ -98,6 +177,17 @@ export function createEnvironmentArtifactAtoms<R, E>(
       if (Option.isNone(prepared)) return yield* Effect.never;
       return yield* request(prepared.value);
     });
+
+  const withRequestContext = <A, E2, R2>(
+    request: (context: ArtifactRequestContext) => Effect.Effect<A, E2, R2>,
+  ) =>
+    withPreparedConnection((prepared) =>
+      Effect.gen(function* () {
+        const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+        const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+        return yield* request({ prepared, signer, remoteAuthorization });
+      }),
+    );
 
   return {
     list: createEnvironmentQueryAtomFamily(runtime, {
@@ -157,6 +247,24 @@ export function createEnvironmentArtifactAtoms<R, E>(
             });
           }),
         ),
+    }),
+    update: createEnvironmentCommand(runtime, {
+      label: "environment-data:artifacts:update",
+      execute: (input: ArtifactUpdateInput) =>
+        withRequestContext((context) => updateEnvironmentArtifact({ ...context, ...input })),
+    }),
+    revert: createEnvironmentCommand(runtime, {
+      label: "environment-data:artifacts:revert",
+      execute: (input: {
+        readonly projectId: ProjectId;
+        readonly slug: string;
+        readonly targetVersion: number;
+      }) => withRequestContext((context) => revertEnvironmentArtifact({ ...context, ...input })),
+    }),
+    remove: createEnvironmentCommand(runtime, {
+      label: "environment-data:artifacts:remove",
+      execute: (input: { readonly projectId: ProjectId; readonly slug: string }) =>
+        withRequestContext((context) => removeEnvironmentArtifact({ ...context, ...input })),
     }),
   };
 }

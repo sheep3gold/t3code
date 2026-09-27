@@ -551,6 +551,21 @@ const EnvironmentArtifactGetQuery = {
   ),
 };
 
+const EnvironmentArtifactMutationPayload = Schema.Struct({ projectId: ProjectId });
+const EnvironmentArtifactUpdatePayload = Schema.Struct({
+  projectId: ProjectId,
+  name: Schema.optional(TrimmedNonEmptyString),
+  kind: Schema.optional(EnvironmentArtifactKind),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+  content: Schema.optional(Schema.String),
+  reason: Schema.optional(TrimmedNonEmptyString),
+});
+const EnvironmentArtifactRevertPayload = Schema.Struct({
+  projectId: ProjectId,
+  targetVersion: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+});
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
@@ -608,6 +623,33 @@ export class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
       params: EnvironmentArtifactGetParams,
       payload: EnvironmentArtifactProjectQuery,
       success: Schema.Struct({ versions: Schema.Array(EnvironmentArtifactVersion) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("update", "/api/artifacts/:slug/update", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactUpdatePayload,
+      success: EnvironmentArtifactDetail,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("revert", "/api/artifacts/:slug/revert", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactRevertPayload,
+      success: EnvironmentArtifactDetail,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete("remove", "/api/artifacts/:slug", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactMutationPayload,
+      success: Schema.Struct({ removed: Schema.Boolean }),
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
