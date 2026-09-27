@@ -930,9 +930,13 @@ const make = Effect.gen(function* () {
       handoffBudget,
     );
     const prefixedContext = [providerHandoffContext, durableContext].filter(Boolean).join("\n\n");
-    const messageWithDurableContext = prefixedContext
-      ? `${prefixedContext}\n\n[Current turn request]\n${input.messageText}`
-      : input.messageText;
+    // Provider CLIs only treat a message as a command (`/usage`, `/compact`, …)
+    // when it starts with "/", so a prefixed context would turn it into chat.
+    const isProviderCommand = input.messageText.trimStart().startsWith("/");
+    const messageWithDurableContext =
+      prefixedContext && !isProviderCommand
+        ? `${prefixedContext}\n\n[Current turn request]\n${input.messageText}`
+        : input.messageText;
     const normalizedInput = toNonEmptyProviderInput(messageWithDurableContext);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService

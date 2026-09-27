@@ -922,6 +922,49 @@ describe("ProviderCommandReactor", () => {
     expect(input.indexOf("Goal: Ship the feature")).toBeLessThan(input.indexOf("Continue now"));
   });
 
+  it("sends provider slash commands without prefixing saved lessons", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    await harness.runEffect(
+      AgentMemoryPersistence.AgentMemoryRepository.pipe(
+        Effect.flatMap((repository) =>
+          repository.upsert({
+            id: "memory-slash",
+            fingerprint: "lesson-slash",
+            kind: "lesson",
+            scope: "project",
+            projectId: asProjectId("project-1"),
+            content: "Always run the focused test before publishing.",
+            negative: null,
+            tags: [],
+            sourceThreadId: threadId,
+            now: "2026-01-01T00:00:00.000Z",
+          }),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-slash-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-slash"),
+          role: "user",
+          text: "/usage",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({ input: "/usage" });
+  });
+
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
