@@ -51,7 +51,9 @@ export interface UpsertAgentMemoryInput {
 function parseTags(value: string): ReadonlyArray<string> {
   try {
     const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((tag): tag is string => typeof tag === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((tag): tag is string => typeof tag === "string")
+      : [];
   } catch {
     return [];
   }
@@ -79,6 +81,19 @@ export class AgentMemoryRepository extends Context.Service<
       projectId: ProjectId,
       kind?: AgentMemoryKind,
     ) => Effect.Effect<ReadonlyArray<AgentMemory>, PersistenceSqlError>;
+    readonly get: (
+      id: string,
+      projectId: ProjectId,
+    ) => Effect.Effect<AgentMemory | null, PersistenceSqlError>;
+    readonly update: (input: {
+      readonly id: string;
+      readonly projectId: ProjectId;
+      readonly fingerprint: string;
+      readonly content: string;
+      readonly negative: string | null;
+      readonly tags: ReadonlyArray<string>;
+      readonly now: string;
+    }) => Effect.Effect<AgentMemory | null, PersistenceSqlError>;
     readonly recentLessons: (
       projectId: ProjectId,
       limit?: number,
@@ -152,6 +167,40 @@ const make = Effect.gen(function* () {
       ).pipe(
         Effect.map((rows) => rows.map(fromRow)),
         Effect.mapError(sqlError("listAgentMemoryCandidates")),
+      ),
+
+    get: (id, projectId) =>
+      sql<AgentMemoryRow>`
+        SELECT
+          id, kind, scope, project_id AS "projectId", content, negative,
+          tags_json AS "tagsJson", source_thread_id AS "sourceThreadId",
+          created_at AS "createdAt", updated_at AS "updatedAt"
+        FROM agent_memories
+        WHERE id = ${id}
+          AND (scope = 'global' OR (scope = 'project' AND project_id = ${projectId}))
+        LIMIT 1
+      `.pipe(
+        Effect.map((rows) => (rows[0] ? fromRow(rows[0]) : null)),
+        Effect.mapError(sqlError("getAgentMemory")),
+      ),
+
+    update: (input) =>
+      sql<AgentMemoryRow>`
+        UPDATE agent_memories
+        SET fingerprint = ${input.fingerprint},
+            content = ${input.content},
+            negative = ${input.negative},
+            tags_json = ${JSON.stringify(input.tags)},
+            updated_at = ${input.now}
+        WHERE id = ${input.id}
+          AND (scope = 'global' OR (scope = 'project' AND project_id = ${input.projectId}))
+        RETURNING
+          id, kind, scope, project_id AS "projectId", content, negative,
+          tags_json AS "tagsJson", source_thread_id AS "sourceThreadId",
+          created_at AS "createdAt", updated_at AS "updatedAt"
+      `.pipe(
+        Effect.map((rows) => (rows[0] ? fromRow(rows[0]) : null)),
+        Effect.mapError(sqlError("updateAgentMemory")),
       ),
 
     recentLessons: (projectId, limit = 20) =>

@@ -155,6 +155,7 @@ import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import { artifactsHttpApiLayer } from "./artifacts/http.ts";
 import { schedulesHttpApiLayer } from "./schedules/http.ts";
 import { workflowsHttpApiLayer } from "./workflows/http.ts";
+import { memoryLedgerHttpApiLayer } from "./memoryLedger/http.ts";
 import { threadWebhookRouteLayer } from "./orchestration/ThreadWebhook.ts";
 import * as ThreadSchedulesRepository from "./persistence/ThreadSchedules.ts";
 import * as ThreadPullRequestMonitors from "./persistence/ThreadPullRequestMonitors.ts";
@@ -612,6 +613,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(artifactsHttpApiLayer),
       Layer.provide(schedulesHttpApiLayer),
       Layer.provide(workflowsHttpApiLayer),
+      Layer.provide(memoryLedgerHttpApiLayer),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),

@@ -1,5 +1,6 @@
 import {
   ArrowLeftIcon,
+  BrainIcon,
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
   LibraryBigIcon,
@@ -154,9 +155,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                 ? "schedules"
                 : location.pathname === "/workflows"
                   ? "workflows"
-                  : location.pathname === "/pull-requests"
-                    ? "pull-requests"
-                    : null,
+                  : location.pathname === "/memory"
+                    ? "memory"
+                    : location.pathname === "/pull-requests"
+                      ? "pull-requests"
+                      : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -194,6 +197,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleWorkflowsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/workflows" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleMemoryClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/memory" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -250,6 +258,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Workflows"
             onClick={handleWorkflowsClick}
           />
+          <SidebarUtilityItem icon={<BrainIcon />} label="Memory" onClick={handleMemoryClick} />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"

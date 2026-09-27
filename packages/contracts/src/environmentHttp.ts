@@ -69,6 +69,8 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "scope_not_granted",
   "invalid_command",
   "invalid_schedule",
+  "invalid_memory",
+  "invalid_ledger",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -196,6 +198,7 @@ export class EnvironmentInternalError extends Schema.TaggedError<EnvironmentInte
 export const EnvironmentResourceNotFoundReason = Schema.Literals([
   "thread_not_found",
   "artifact_not_found",
+  "memory_not_found",
 ]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
@@ -333,6 +336,7 @@ const EnvironmentOrchestrationSnapshotErrors = [
   EnvironmentInternalError,
 ] as const;
 const EnvironmentOrchestrationThreadSnapshotErrors = [
+  EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
@@ -856,6 +860,138 @@ export class EnvironmentWorkflowsHttpApi extends HttpApiGroup.make("workflows")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export const EnvironmentAgentMemory = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["lesson", "memory"]),
+  scope: Schema.Literals(["global", "project"]),
+  projectId: Schema.NullOr(ProjectId),
+  content: Schema.String,
+  negative: Schema.NullOr(Schema.String),
+  tags: Schema.Array(Schema.String),
+  sourceThreadId: ThreadId,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type EnvironmentAgentMemory = typeof EnvironmentAgentMemory.Type;
+
+export const EnvironmentThreadLedgerSnapshot = Schema.Struct({
+  state: Schema.NullOr(
+    Schema.Struct({
+      goal: Schema.NullOr(Schema.String),
+      phase: Schema.NullOr(Schema.String),
+      next: Schema.NullOr(Schema.String),
+      artifacts: Schema.Record(Schema.String, Schema.String),
+      updatedAt: Schema.String,
+    }),
+  ),
+  events: Schema.Array(
+    Schema.Struct({
+      id: Schema.Number,
+      kind: Schema.String,
+      message: Schema.String,
+      createdAt: Schema.String,
+    }),
+  ),
+});
+export type EnvironmentThreadLedgerSnapshot = typeof EnvironmentThreadLedgerSnapshot.Type;
+
+const EnvironmentMemoryProjectQuery = {
+  projectId: ProjectId,
+  query: Schema.optional(Schema.String),
+  kind: Schema.optional(Schema.Literals(["lesson", "memory"])),
+};
+const EnvironmentMemoryParams = Schema.Struct({ memoryId: TrimmedNonEmptyString });
+const EnvironmentMemoryCreatePayload = Schema.Struct({
+  projectId: ProjectId,
+  sourceThreadId: ThreadId,
+  kind: Schema.Literals(["lesson", "memory"]),
+  scope: Schema.Literals(["global", "project"]),
+  content: TrimmedNonEmptyString,
+  negative: Schema.optional(Schema.NullOr(Schema.String)),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+});
+const EnvironmentMemoryUpdatePayload = Schema.Struct({
+  projectId: ProjectId,
+  content: TrimmedNonEmptyString,
+  negative: Schema.NullOr(Schema.String),
+  tags: Schema.Array(Schema.String),
+});
+const EnvironmentMemoryMutationPayload = Schema.Struct({ projectId: ProjectId });
+const EnvironmentLedgerParams = Schema.Struct({ threadId: ThreadId });
+const EnvironmentLedgerQuery = { projectId: ProjectId };
+const EnvironmentLedgerUpdatePayload = Schema.Struct({
+  projectId: ProjectId,
+  goal: Schema.NullOr(Schema.String),
+  phase: Schema.NullOr(Schema.String),
+  next: Schema.NullOr(Schema.String),
+  artifacts: Schema.Record(Schema.String, Schema.String),
+  eventKind: Schema.optional(TrimmedNonEmptyString),
+  event: Schema.optional(TrimmedNonEmptyString),
+});
+
+export class EnvironmentMemoryLedgerHttpApi extends HttpApiGroup.make("memoryLedger")
+  .add(
+    HttpApiEndpoint.get("listMemories", "/api/memories", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentMemoryProjectQuery,
+      success: Schema.Struct({ memories: Schema.Array(EnvironmentAgentMemory) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createMemory", "/api/memories", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentMemoryCreatePayload,
+      success: EnvironmentAgentMemory,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.patch("updateMemory", "/api/memories/:memoryId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentMemoryParams,
+      payload: EnvironmentMemoryUpdatePayload,
+      success: EnvironmentAgentMemory,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete("removeMemory", "/api/memories/:memoryId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentMemoryParams,
+      payload: EnvironmentMemoryMutationPayload,
+      success: Schema.Struct({ removed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("getLedger", "/api/ledgers/:threadId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentLedgerParams,
+      payload: EnvironmentLedgerQuery,
+      success: EnvironmentThreadLedgerSnapshot,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.put("updateLedger", "/api/ledgers/:threadId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentLedgerParams,
+      payload: EnvironmentLedgerUpdatePayload,
+      success: EnvironmentThreadLedgerSnapshot,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete("clearLedger", "/api/ledgers/:threadId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentLedgerParams,
+      payload: Schema.Struct({ projectId: ProjectId }),
+      success: Schema.Struct({ cleared: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 /** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
@@ -941,5 +1077,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentArtifactsHttpApi)
   .add(EnvironmentSchedulesHttpApi)
   .add(EnvironmentWorkflowsHttpApi)
+  .add(EnvironmentMemoryLedgerHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

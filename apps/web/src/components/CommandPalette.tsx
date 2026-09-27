@@ -43,6 +43,7 @@ import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
   CalendarClockIcon,
+  BrainIcon,
   ChartNoAxesColumnIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
@@ -2050,6 +2051,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/workflows" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:memory",
+    searchTerms: ["memory", "memories", "lessons", "ledger", "resume state"],
+    title: "Open memory and ledgers",
+    icon: <BrainIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/memory" });
     },
   });
 

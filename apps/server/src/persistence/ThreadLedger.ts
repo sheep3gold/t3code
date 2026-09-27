@@ -78,6 +78,7 @@ export class ThreadLedgerRepository extends Context.Service<
     readonly record: (
       input: RecordThreadLedgerInput,
     ) => Effect.Effect<ThreadLedgerSnapshot, PersistenceSqlError>;
+    readonly clear: (threadId: ThreadId) => Effect.Effect<boolean, PersistenceSqlError>;
   }
 >()("t3/persistence/ThreadLedgerRepository") {}
 
@@ -157,6 +158,20 @@ const make = Effect.gen(function* () {
           Effect.andThen(read(input.threadId)),
           Effect.mapError(sqlError("recordThreadLedger")),
         ),
+    clear: (threadId) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const state = yield* sql`
+              DELETE FROM thread_ledger_state WHERE thread_id = ${threadId} RETURNING thread_id
+            `;
+            const events = yield* sql`
+              DELETE FROM thread_ledger_events WHERE thread_id = ${threadId} RETURNING id
+            `;
+            return state.length > 0 || events.length > 0;
+          }),
+        )
+        .pipe(Effect.mapError(sqlError("clearThreadLedger"))),
   });
 });
 
