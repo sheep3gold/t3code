@@ -258,7 +258,7 @@ const make = Effect.gen(function* () {
         Effect.mapError((cause) => new ArtifactOperationError({ operation: "read-thread", cause })),
         Effect.map(Option.getOrUndefined),
       );
-    if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+    if (!thread || thread.archivedAt !== null) {
       return yield* new ArtifactThreadNotFoundError({ threadId: scope.threadId });
     }
     return { scope, projectId: thread.projectId };

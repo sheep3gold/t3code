@@ -201,7 +201,7 @@ const make = Effect.gen(function* () {
         ),
         Effect.map(Option.getOrUndefined),
       );
-    if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+    if (!thread || thread.archivedAt !== null) {
       return yield* new AgentMemoryThreadNotFoundError({ threadId: scope.threadId });
     }
     return { scope, projectId: thread.projectId };

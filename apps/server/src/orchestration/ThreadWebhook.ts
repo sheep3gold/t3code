@@ -241,7 +241,7 @@ const make = Effect.gen(function* () {
             Effect.mapError((cause) => new ThreadWebhookIssueFailedError({ cause })),
             Effect.map(Option.getOrUndefined),
           );
-        if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+        if (!thread || thread.archivedAt !== null) {
           return yield* new ThreadWebhookThreadNotFoundError({ threadId: scope.threadId });
         }
         return yield* issueThreadWebhook({
@@ -294,7 +294,7 @@ export const threadWebhookRouteLayer = HttpRouter.add(
     const thread = yield* snapshots
       .getThreadShellById(claims.threadId)
       .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
-    if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+    if (!thread || thread.archivedAt !== null) {
       return HttpServerResponse.text("Gone", { status: 410 });
     }
     const now = DateTime.formatIso(yield* DateTime.now);

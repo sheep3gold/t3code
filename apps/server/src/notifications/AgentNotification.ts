@@ -154,7 +154,7 @@ const make = Effect.gen(function* () {
         const thread = yield* snapshots
           .getThreadShellById(scope.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
-        if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+        if (!thread || thread.archivedAt !== null) {
           return yield* new AgentNotificationThreadNotFoundError({ threadId: scope.threadId });
         }
         const project = yield* snapshots
