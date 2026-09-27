@@ -168,6 +168,12 @@ function SettingsIndexSections() {
               value={projectLabel}
               target="SettingsArtifacts"
             />
+            <SettingsRow
+              icon="clock"
+              label="Schedules"
+              value={projectLabel}
+              target="SettingsSchedules"
+            />
           </>
         ) : null}
         <SettingsRow icon="folder" label="Organization" target="SettingsOrganization" />
