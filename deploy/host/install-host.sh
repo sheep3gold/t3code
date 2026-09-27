@@ -4,8 +4,8 @@
 #   install-host.sh launcher   只保证 t3 拦截层在位（t3code-portwatch 每 10 秒调一次）
 #   install-host.sh all        另装 systemd 用户单元（t3code-deploy 每次发布调一次）
 #
-# 密钥文件 ~/.t3/t3code-msghub.env、~/.t3/t3code-memsearch.env 只在本机，
-# 本脚本只引用、不创建也不改动它们。
+# 业务配置在 etcd 的 t3code/ 前缀，由 render-etcd-env.py 在服务启动前渲染；
+# 本机只有读 etcd 的引导凭证 ~/.t3/t3code-etcd-bootstrap.env，本脚本不碰它。
 set -Eeuo pipefail
 
 HOST_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -50,6 +50,16 @@ install_units() {
     rel=${f#"$HOST_DIR/systemd/"}
     install_file "$f" "$USER_UNIT_DIR/$rel" 0644 && changed=1
   done < <(find "$HOST_DIR/systemd" -type f | sort)
+  # 仓库里删掉的单元文件，线上也要删（只处理本仓库拥有的文件名）。
+  for f in "$USER_UNIT_DIR"/t3code.service.d/*.conf; do
+    [ -e "$f" ] || continue
+    rel=${f#"$USER_UNIT_DIR/"}
+    if [ ! -e "$HOST_DIR/systemd/$rel" ]; then
+      rm -f "$f"
+      echo "install-host: removed $f"
+      changed=1
+    fi
+  done
   if [ "$changed" = 1 ]; then
     systemctl --user daemon-reload
   fi
