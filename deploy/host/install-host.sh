@@ -11,6 +11,7 @@ set -Eeuo pipefail
 HOST_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RUNTIME_ROOT=${T3_RUNTIME_ROOT:-/home/ubuntu/.t3/runtime/versions}
 USER_UNIT_DIR=${T3_USER_UNIT_DIR:-/home/ubuntu/.config/systemd/user}
+BIN_DIR=${T3_BIN_DIR:-/home/ubuntu/.local/bin}
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 LAUNCHER_MARKER="# t3 launcher 拦截层"
 
@@ -68,11 +69,21 @@ install_units() {
   rm -f /home/ubuntu/.t3/t3code-portwatch.sh /home/ubuntu/.t3/t3-port-forward.mjs
 }
 
+# deploy/host/bin/ 下的命令行工具（如 claude-xjp）装到 ~/.local/bin，T3 终端的 PATH 里有它。
+install_bins() {
+  local f
+  for f in "$HOST_DIR"/bin/*; do
+    [ -f "$f" ] || continue
+    install_file "$f" "$BIN_DIR/$(basename "$f")" 0755 || true
+  done
+}
+
 case "${1:-}" in
 launcher) install_launcher ;;
 all)
   install_launcher
   install_units
+  install_bins
   ;;
 *)
   echo "usage: $0 launcher|all" >&2
