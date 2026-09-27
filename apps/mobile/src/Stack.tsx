@@ -33,6 +33,7 @@ import {
   SettingsArtifactDetailRouteScreen,
   SettingsArtifactsRouteScreen,
 } from "./features/artifacts/ArtifactLibraryRouteScreens";
+import { SettingsSchedulesRouteScreen } from "./features/schedules/SettingsSchedulesRouteScreen";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
@@ -335,6 +336,11 @@ const SettingsContentStack = createNativeStackNavigator({
       screen: SettingsArtifactDetailRouteScreen,
       linking: "artifacts/:slug",
       options: { title: "Artifact" },
+    }),
+    SettingsSchedules: createNativeStackScreen({
+      screen: SettingsSchedulesRouteScreen,
+      linking: "schedules",
+      options: { title: "Schedules" },
     }),
     SettingsUsage: createNativeStackScreen({
       screen: UsageRouteScreen,
