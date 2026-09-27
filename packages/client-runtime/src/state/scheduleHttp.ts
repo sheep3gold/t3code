@@ -1,4 +1,4 @@
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -13,7 +13,7 @@ import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
-import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
+import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./runtime.ts";
 
 const DEFAULT_SCHEDULE_TIMEOUT_MS = 10_000;
 
@@ -137,22 +137,82 @@ export function createEnvironmentScheduleAtoms<R, E>(
       return yield* request(prepared.value);
     });
 
+  const list = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-data:schedules:list",
+    staleTimeMs: 15_000,
+    refreshIntervalMs: 15_000,
+    execute: (input: { readonly projectId: ProjectId }) =>
+      withPreparedConnection((prepared) =>
+        Effect.gen(function* () {
+          const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+          const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+          return yield* fetchEnvironmentSchedules({
+            prepared,
+            projectId: input.projectId,
+            signer,
+            remoteAuthorization,
+          });
+        }),
+      ),
+  });
+
+  const refreshProject = (
+    registry: { refresh: (atom: ReturnType<typeof list>) => void },
+    environmentId: EnvironmentId,
+    projectId: ProjectId,
+  ) => Effect.sync(() => registry.refresh(list({ environmentId, input: { projectId } })));
+
+  const withRequestContext = <A, E2, R2>(
+    request: (context: ScheduleRequestContext) => Effect.Effect<A, E2, R2>,
+  ) =>
+    withPreparedConnection((prepared) =>
+      Effect.gen(function* () {
+        const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+        const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+        return yield* request({ prepared, signer, remoteAuthorization });
+      }),
+    );
+
   return {
-    list: createEnvironmentQueryAtomFamily(runtime, {
-      label: "environment-data:schedules:list",
-      staleTimeMs: 15_000,
-      execute: (input: { readonly projectId: ProjectId }) =>
-        withPreparedConnection((prepared) =>
-          Effect.gen(function* () {
-            const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-            const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-            return yield* fetchEnvironmentSchedules({
-              prepared,
-              projectId: input.projectId,
-              signer,
-              remoteAuthorization,
-            });
-          }),
+    list,
+    create: createEnvironmentCommand(runtime, {
+      label: "environment-data:schedules:create",
+      execute: (input: ScheduleCreateInput, registry, environmentId) =>
+        withRequestContext((context) => createEnvironmentSchedule({ ...context, ...input })).pipe(
+          Effect.tap(() => refreshProject(registry, environmentId, input.projectId)),
+        ),
+    }),
+    pause: createEnvironmentCommand(runtime, {
+      label: "environment-data:schedules:pause",
+      execute: (
+        input: Omit<ScheduleMutationInput, keyof ScheduleRequestContext>,
+        registry,
+        environmentId,
+      ) =>
+        withRequestContext((context) => pauseEnvironmentSchedule({ ...context, ...input })).pipe(
+          Effect.tap(() => refreshProject(registry, environmentId, input.projectId)),
+        ),
+    }),
+    resume: createEnvironmentCommand(runtime, {
+      label: "environment-data:schedules:resume",
+      execute: (
+        input: Omit<ScheduleMutationInput, keyof ScheduleRequestContext>,
+        registry,
+        environmentId,
+      ) =>
+        withRequestContext((context) => resumeEnvironmentSchedule({ ...context, ...input })).pipe(
+          Effect.tap(() => refreshProject(registry, environmentId, input.projectId)),
+        ),
+    }),
+    remove: createEnvironmentCommand(runtime, {
+      label: "environment-data:schedules:remove",
+      execute: (
+        input: Omit<ScheduleMutationInput, keyof ScheduleRequestContext>,
+        registry,
+        environmentId,
+      ) =>
+        withRequestContext((context) => removeEnvironmentSchedule({ ...context, ...input })).pipe(
+          Effect.tap(() => refreshProject(registry, environmentId, input.projectId)),
         ),
     }),
   };

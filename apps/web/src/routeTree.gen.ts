@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SchedulesRouteImport } from './routes/schedules'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
@@ -48,6 +49,11 @@ const UsageRoute = UsageRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SchedulesRoute = SchedulesRouteImport.update({
+  id: '/schedules',
+  path: '/schedules',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PairRoute = PairRouteImport.update({
@@ -167,6 +173,7 @@ export interface FileRoutesByFullPath {
   '/artifacts': typeof ArtifactsRoute
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
+  '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
@@ -192,6 +199,7 @@ export interface FileRoutesByTo {
   '/artifacts': typeof ArtifactsRoute
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
+  '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
@@ -220,6 +228,7 @@ export interface FileRoutesById {
   '/artifacts': typeof ArtifactsRoute
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
+  '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
@@ -249,6 +258,7 @@ export interface FileRouteTypes {
     | '/artifacts'
     | '/connect'
     | '/pair'
+    | '/schedules'
     | '/settings'
     | '/usage'
     | '/welcome'
@@ -274,6 +284,7 @@ export interface FileRouteTypes {
     | '/artifacts'
     | '/connect'
     | '/pair'
+    | '/schedules'
     | '/settings'
     | '/usage'
     | '/welcome'
@@ -301,6 +312,7 @@ export interface FileRouteTypes {
     | '/artifacts'
     | '/connect'
     | '/pair'
+    | '/schedules'
     | '/settings'
     | '/usage'
     | '/welcome'
@@ -329,6 +341,7 @@ export interface RootRouteChildren {
   ArtifactsRoute: typeof ArtifactsRoute
   ConnectRoute: typeof ConnectRoute
   PairRoute: typeof PairRoute
+  SchedulesRoute: typeof SchedulesRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
@@ -356,6 +369,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/schedules': {
+      id: '/schedules'
+      path: '/schedules'
+      fullPath: '/schedules'
+      preLoaderRoute: typeof SchedulesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pair': {
@@ -572,6 +592,7 @@ const rootRouteChildren: RootRouteChildren = {
   ArtifactsRoute: ArtifactsRoute,
   ConnectRoute: ConnectRoute,
   PairRoute: PairRoute,
+  SchedulesRoute: SchedulesRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,

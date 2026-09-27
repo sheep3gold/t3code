@@ -1,4 +1,10 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, LibraryBigIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  CalendarClockIcon,
+  ChartNoAxesColumnIcon,
+  LibraryBigIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
@@ -143,9 +149,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             ? "usage"
             : location.pathname === "/artifacts"
               ? "artifacts"
-              : location.pathname === "/pull-requests"
-                ? "pull-requests"
-                : null,
+              : location.pathname === "/schedules"
+                ? "schedules"
+                : location.pathname === "/pull-requests"
+                  ? "pull-requests"
+                  : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -173,6 +181,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleArtifactsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/artifacts" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleSchedulesClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/schedules" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -218,6 +231,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<LibraryBigIcon />}
             label="Artifacts"
             onClick={handleArtifactsClick}
+          />
+          <SidebarUtilityItem
+            icon={<CalendarClockIcon />}
+            label="Schedules"
+            onClick={handleSchedulesClick}
           />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
