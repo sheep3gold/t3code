@@ -241,7 +241,7 @@ const make = Effect.gen(function* () {
             Effect.mapError((cause) => new ThreadWebhookIssueFailedError({ cause })),
             Effect.map(Option.getOrUndefined),
           );
-        if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+        if (!thread || thread.archivedAt !== null) {
           return yield* new ThreadWebhookThreadNotFoundError({ threadId: scope.threadId });
         }
         return yield* issueThreadWebhook({
@@ -294,7 +294,7 @@ export const threadWebhookRouteLayer = HttpRouter.add(
     const thread = yield* snapshots
       .getThreadShellById(claims.threadId)
       .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
-    if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+    if (!thread || thread.archivedAt !== null) {
       return HttpServerResponse.text("Gone", { status: 410 });
     }
     const now = DateTime.formatIso(yield* DateTime.now);
@@ -314,12 +314,12 @@ export const threadWebhookRouteLayer = HttpRouter.add(
         runtimeMode: thread.runtimeMode,
         createdAt: now,
       })
-      .pipe(Effect.either);
-    if (result._tag === "Left") {
+      .pipe(Effect.result);
+    if (result._tag === "Failure") {
       return HttpServerResponse.text("Could not start thread", { status: 409 });
     }
     return HttpServerResponse.jsonUnsafe(
-      { accepted: true, hookId: claims.hookId, sequence: result.right.sequence },
+      { accepted: true, hookId: claims.hookId, sequence: result.success.sequence },
       { status: 202, headers: { "cache-control": "no-store" } },
     );
   }),

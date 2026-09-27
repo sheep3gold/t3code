@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PersistenceSqlError } from "./Errors.ts";
+import * as MemsearchMirror from "./MemsearchMirror.ts";
 
 export type AgentMemoryKind = "lesson" | "memory";
 export type AgentMemoryScope = "global" | "project";
@@ -139,7 +140,7 @@ const make = Effect.gen(function* () {
             updated_at AS "updatedAt"
         `;
         return fromRow(rows[0]!);
-      }).pipe(Effect.mapError(sqlError("upsertAgentMemory"))),
+      }).pipe(Effect.mapError(sqlError("upsertAgentMemory")), Effect.tap(MemsearchMirror.mirrorPut)),
 
     candidates: (projectId, kind) =>
       (kind === undefined
@@ -201,6 +202,7 @@ const make = Effect.gen(function* () {
       `.pipe(
         Effect.map((rows) => (rows[0] ? fromRow(rows[0]) : null)),
         Effect.mapError(sqlError("updateAgentMemory")),
+        Effect.tap((memory) => (memory ? MemsearchMirror.mirrorPut(memory) : Effect.void)),
       ),
 
     recentLessons: (projectId, limit = 20) =>
@@ -228,6 +230,7 @@ const make = Effect.gen(function* () {
       `.pipe(
         Effect.map((rows) => rows.length > 0),
         Effect.mapError(sqlError("removeAgentMemory")),
+        Effect.tap((removed) => (removed ? MemsearchMirror.mirrorDelete(id) : Effect.void)),
       ),
   });
 });

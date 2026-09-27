@@ -363,11 +363,7 @@ const makeToolkit = Effect.gen(function* () {
     const thread = yield* snapshots
       .getThreadShellById(scope.threadId)
       .pipe(withError("read-thread"));
-    if (
-      Option.isNone(thread) ||
-      thread.value.archivedAt !== null ||
-      thread.value.deletedAt !== null
-    ) {
+    if (Option.isNone(thread) || thread.value.archivedAt !== null) {
       return yield* new ThreadScheduleThreadNotFoundError({ threadId: scope.threadId });
     }
     return scope;
@@ -453,7 +449,7 @@ const runner = Effect.gen(function* () {
       const thread = yield* snapshots
         .getThreadShellById(schedule.threadId)
         .pipe(Effect.map(Option.getOrUndefined));
-      if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+      if (!thread || thread.archivedAt !== null) {
         yield* repository.setPaused(schedule.id, schedule.threadId, true, now);
         continue;
       }
