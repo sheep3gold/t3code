@@ -4,6 +4,7 @@ import {
   ChartNoAxesColumnIcon,
   LibraryBigIcon,
   SettingsIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
@@ -151,9 +152,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               ? "artifacts"
               : location.pathname === "/schedules"
                 ? "schedules"
-                : location.pathname === "/pull-requests"
-                  ? "pull-requests"
-                  : null,
+                : location.pathname === "/workflows"
+                  ? "workflows"
+                  : location.pathname === "/pull-requests"
+                    ? "pull-requests"
+                    : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -186,6 +189,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleSchedulesClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/schedules" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleWorkflowsClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/workflows" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -236,6 +244,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<CalendarClockIcon />}
             label="Schedules"
             onClick={handleSchedulesClick}
+          />
+          <SidebarUtilityItem
+            icon={<WorkflowIcon />}
+            label="Workflows"
+            onClick={handleWorkflowsClick}
           />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}

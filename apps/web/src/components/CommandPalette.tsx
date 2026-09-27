@@ -58,6 +58,7 @@ import {
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -2038,6 +2039,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <CalendarClockIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/schedules" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:workflows",
+    searchTerms: ["workflows", "steps", "automation", "retry", "durable"],
+    title: "Open workflows",
+    icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/workflows" });
     },
   });
 

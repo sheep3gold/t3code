@@ -119,6 +119,10 @@
       "types": "./src/state/scheduleHttp.ts",
       "default": "./src/state/scheduleHttp.ts"
     },
+    "./state/workflows": {
+      "types": "./src/state/workflowHttp.ts",
+      "default": "./src/state/workflowHttp.ts"
+    },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"
