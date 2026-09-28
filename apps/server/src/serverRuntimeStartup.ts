@@ -50,6 +50,7 @@ import { forkParked } from "./serverActivation.ts";
 import { publishTurnCompletionNotification } from "./notifications/MsgHubTurnCompletion.ts";
 import { startThreadScheduleRunner } from "./orchestration/ThreadSchedules.ts";
 import { startThreadWorkflowRunner } from "./orchestration/ThreadWorkflows.ts";
+import { startMemorySync } from "./orchestration/MemorySync.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import {
@@ -645,9 +646,7 @@ export const reconcileProviderSessions = Effect.gen(function* () {
                   threadId: String(thread.id),
                   turnId: String(orphanedTurnId),
                   project:
-                    project?.title ||
-                    project?.workspaceRoot.split(/[\\/]/).at(-1) ||
-                    "project",
+                    project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project",
                   threadTitle: thread.title,
                   provider: session.providerName ?? "provider",
                   state: "interrupted",
@@ -1003,6 +1002,7 @@ export const make = (options?: StartupOptions) =>
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
           yield* startThreadScheduleRunner.pipe(Scope.provide(reactorScope));
           yield* startThreadWorkflowRunner.pipe(Scope.provide(reactorScope));
+          yield* startMemorySync.pipe(Scope.provide(reactorScope));
         }),
       );
 

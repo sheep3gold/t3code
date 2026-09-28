@@ -150,6 +150,7 @@ export const memoryLedgerHttpApiLayer = HttpApiBuilder.group(
               ...normalized,
               sourceThreadId: args.payload.sourceThreadId,
               now,
+              authority: "user_stated",
             })
             .pipe(Effect.catch(internal));
         }),
