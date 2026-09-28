@@ -1,5 +1,6 @@
 import AppleTranscription from "@react-native-ai/apple/src/NativeAppleTranscription";
 import { File } from "expo-file-system";
+import { Settings } from "react-native";
 
 import {
   VoiceTranscriptionError,
@@ -10,6 +11,20 @@ import {
 } from "@t3tools/client-runtime/voice-input";
 
 function getDeviceLocale(): string {
+  // Intl inside Hermes reports the JS engine's ICU locale (typically en-US for
+  // an English-only app bundle), not the iOS system language. Speech must
+  // follow the device language, so read it from NSUserDefaults first.
+  const appleLocale = Settings.get("AppleLocale");
+  if (typeof appleLocale === "string" && appleLocale.length > 0) {
+    return appleLocale.replaceAll("_", "-");
+  }
+  const appleLanguages = Settings.get("AppleLanguages");
+  if (Array.isArray(appleLanguages)) {
+    const first = appleLanguages[0];
+    if (typeof first === "string" && first.length > 0) {
+      return first;
+    }
+  }
   return Intl.DateTimeFormat().resolvedOptions().locale;
 }
 
