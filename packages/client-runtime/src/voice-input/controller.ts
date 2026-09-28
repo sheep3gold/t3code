@@ -3,6 +3,8 @@ import { replaceTextRange } from "@t3tools/shared/composerTrigger";
 import type { PreparedVoiceTranscription, VoiceTranscriber } from "./transcription.ts";
 
 export const VOICE_RECORDING_LIMIT_SECONDS = 5 * 60;
+export const VOICE_PREPARATION_TIMEOUT_MS = 30_000;
+export const VOICE_TRANSCRIPTION_TIMEOUT_MS = 60_000;
 
 export type VoiceInputPhase = "idle" | "preparing" | "recording" | "transcribing" | "error";
 
@@ -135,17 +137,45 @@ function releaseSession(token: symbol | null): void {
   if (token && activeSession === token) activeSession = null;
 }
 
-async function runTranscriptionOperation<T>(operation: () => Promise<T>): Promise<T> {
+function stealSession(): symbol {
+  const token = Symbol("voice-input-session");
+  activeSession = token;
+  return token;
+}
+
+async function runTranscriptionOperation<T>(
+  operation: () => Promise<T>,
+  options?: { readonly timeoutMs?: number },
+): Promise<T> {
   if (activeTranscriptionOperation) {
-    throw new Error("voice-operation-busy");
+    // A hung or orphaned operation must not wedge the slot for the lifetime of
+    // the app process. The newer operation takes over the slot; the orphaned
+    // one becomes a no-op when it eventually settles because it no longer
+    // matches activeTranscriptionOperation.
+    activeTranscriptionOperation = null;
   }
 
-  const promise = operation();
+  const timeoutMs = options?.timeoutMs ?? VOICE_TRANSCRIPTION_TIMEOUT_MS;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  const promise = Promise.resolve().then(operation);
   activeTranscriptionOperation = promise;
   try {
-    return await promise;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        // The hung operation may never settle, but the slot must be freed so
+        // the next voice attempt is not rejected forever.
+        if (activeTranscriptionOperation === promise) activeTranscriptionOperation = null;
+        reject(new Error("voice-operation-timeout"));
+      }, timeoutMs);
+    });
+    return await Promise.race([promise, timeoutPromise]);
   } finally {
-    if (activeTranscriptionOperation === promise) activeTranscriptionOperation = null;
+    if (timeout) clearTimeout(timeout);
+    if (!timedOut && activeTranscriptionOperation === promise) {
+      activeTranscriptionOperation = null;
+    }
   }
 }
 
@@ -158,6 +188,9 @@ function preparationErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message === "voice-operation-busy") {
     return "Voice transcription is still finishing. Try again shortly.";
   }
+  if (error instanceof Error && error.message === "voice-operation-timeout") {
+    return "Voice transcription took too long to start. Please try again.";
+  }
   if (errorCode(error) === "unsupported-locale") {
     return "Voice transcription is not available for this language.";
   }
@@ -167,6 +200,9 @@ function preparationErrorMessage(error: unknown): string {
 function transcriptionErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message === "voice-operation-busy") {
     return "Voice transcription is still finishing. Try again shortly.";
+  }
+  if (error instanceof Error && error.message === "voice-operation-timeout") {
+    return "Voice transcription took too long. Please try again.";
   }
   return "Could not transcribe this recording.";
 }
@@ -201,13 +237,26 @@ export class VoiceInputController {
       this.setError("This draft is no longer available.", "retry");
       return;
     }
-    const sessionToken = acquireSession();
+    let sessionToken = acquireSession();
     if (!sessionToken) {
-      this.setError("Another voice recording is already active.", "retry");
-      return;
+      // A previous controller may have been invalidated mid-preparation (e.g. the
+      // user switched threads) without its async cleanup ever settling, leaving
+      // the global session locked forever. Steal the lock so voice input keeps
+      // working; any orphaned preparation that later settles is a no-op because
+      // its operation token was already invalidated.
+      sessionToken = stealSession();
     }
 
     this.sessionToken = sessionToken;
+
+    // Belt-and-suspenders: if any async step below (permission prompt,
+    // transcriber prepare, recorder setup) never settles, the cancel keeps the
+    // session token releasable instead of wedging voice input for the lifetime
+    // of the app process.
+    const preparationTimeout = setTimeout(() => {
+      this.cancel();
+    }, VOICE_PREPARATION_TIMEOUT_MS);
+
     const operationToken = ++this.operationToken;
     const abortController = new AbortController();
     this.transcriptionAbortController = abortController;
@@ -235,7 +284,11 @@ export class VoiceInputController {
           transcriber.prepare({ signal: abortController.signal }),
         );
       } catch (error) {
-        if (this.isCurrent(operationToken)) this.setError(preparationErrorMessage(error), "retry");
+        // Swallow preparation failures from invalidated (e.g. lock-stolen)
+        // sessions; the newer session now owns the slot and drives the UI.
+        if (this.isCurrent(operationToken) && this.state.phase === "preparing") {
+          this.setError(preparationErrorMessage(error), "retry");
+        }
         return;
       }
       if (!this.isCurrent(operationToken)) return;
@@ -260,6 +313,7 @@ export class VoiceInputController {
       if (this.isCurrent(operationToken))
         this.setError("Could not start voice recording.", "retry");
     } finally {
+      clearTimeout(preparationTimeout);
       if (this.isCurrent(operationToken) && this.state.phase === "error") {
         await this.releaseResources();
       } else if (!this.isCurrent(operationToken) && !this.finishing) {
@@ -380,7 +434,7 @@ export class VoiceInputController {
           transcription.transcribe(recordingUri, { signal }),
         );
       } catch (error) {
-        if (this.isCurrent(operationToken)) {
+        if (this.isCurrent(operationToken) && this.state.phase === "transcribing") {
           this.setError(transcriptionErrorMessage(error), "retry");
         }
         return;
