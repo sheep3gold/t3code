@@ -68,14 +68,15 @@ describe("AgentMemory", () => {
     it("puts semantic hits first, drops low scores and unknown ids, then adds keyword hits", async () => {
       const server = Http.createServer((request, response) => {
         expect(request.headers.authorization).toBe("Bearer test-key");
+        expect(request.url).toBe("/v1/records/search");
         response.setHeader("content-type", "application/json");
         response.end(
           JSON.stringify({
             results: [
-              { score: 0.9, source: "/corpus/memories/t3code/semantic.md" },
-              { score: 0.8, source: "/corpus/memories/t3code/not-visible.md" },
-              { score: 0.7, source: "/corpus/memories/t3code/keyword.md" },
-              { score: 0.1, source: "/corpus/memories/t3code/low-score.md" },
+              { score: 0.9, record: { id: "semantic" } },
+              { score: 0.8, record: { id: "not-visible" } },
+              { score: 0.7, record: { id: "keyword" } },
+              { score: 0.1, record: { id: "low-score" } },
             ],
           }),
         );
@@ -84,6 +85,8 @@ describe("AgentMemory", () => {
       const { port } = server.address() as { port: number };
       vi.stubEnv("T3CODE_MEMSEARCH_URL", `http://127.0.0.1:${port}`);
       vi.stubEnv("T3CODE_MEMSEARCH_API_KEY", "test-key");
+      // The mirror refuses to talk to memory-api under vitest unless a test opts in.
+      vi.stubEnv("T3CODE_MEMSEARCH_IN_TESTS", "1");
       try {
         const ranked = await Effect.runPromise(rankAgentMemories(candidates, "focused tests", 10));
         expect(ranked.map((entry) => entry.id)).toEqual(["semantic", "keyword"]);

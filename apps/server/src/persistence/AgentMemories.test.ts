@@ -72,4 +72,51 @@ layer("AgentMemoryRepository", (it) => {
       assert.equal((yield* repository.candidates(firstProject)).length, 1);
     }),
   );
+
+  it.effect("applies memory-api changes to the cache and drops invalidated records", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 57 });
+      const repository = yield* AgentMemories.AgentMemoryRepository;
+      const project = ProjectId.make("project-1");
+      const remote = (overrides: Record<string, unknown>) => ({
+        id: "rec-1",
+        kind: "fact",
+        scope: "global",
+        project_id: null,
+        content: "release-hub runs on 124",
+        negative: null,
+        tags: ["infra"],
+        status: "active",
+        updated_at: "2026-09-28T02:40:00.000000Z",
+        source_ref: "sessions/x.md",
+        ...overrides,
+      });
+      const first = yield* repository.applyRemote([
+        remote({}),
+        remote({ id: "rec-2", kind: "lesson", content: "Branch before editing" }),
+        remote({ id: "rec-3", scope: "project", project_id: null, content: "orphan" }),
+      ]);
+      assert.deepStrictEqual(first, { upserted: 2, removed: 0, skipped: 1 });
+      // The layer shares one in-memory database across tests; look only at synced records.
+      const synced = (memories: ReadonlyArray<AgentMemories.AgentMemory>) =>
+        memories.filter((memory) => memory.id.startsWith("rec-"));
+      const cached = synced(yield* repository.candidates(project));
+      assert.deepStrictEqual(cached.map((memory) => [memory.id, memory.kind]).sort(), [
+        ["rec-1", "memory"],
+        ["rec-2", "lesson"],
+      ]);
+      assert.equal(cached.find((memory) => memory.id === "rec-1")?.sourceThreadId, "memory-api");
+
+      const second = yield* repository.applyRemote([
+        remote({ content: "release-hub runs on 124 in /opt/release-hub" }),
+        remote({ id: "rec-2", kind: "lesson", status: "invalid" }),
+      ]);
+      assert.deepStrictEqual(second, { upserted: 1, removed: 1, skipped: 0 });
+      const after = synced(yield* repository.candidates(project));
+      assert.deepStrictEqual(
+        after.map((memory) => memory.content),
+        ["release-hub runs on 124 in /opt/release-hub"],
+      );
+    }),
+  );
 });

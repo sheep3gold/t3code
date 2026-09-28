@@ -70,6 +70,7 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { readThreadLedgerContext } from "../ThreadLedger.ts";
 import { readAgentLessonContext } from "../AgentMemory.ts";
+import * as MemsearchMirror from "../../persistence/MemsearchMirror.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -900,26 +901,31 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const [lessonContext, ledgerContext] = yield* Effect.all([
-      readAgentLessonContext(thread.projectId).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider turn could not read saved lessons", {
-            threadId: input.threadId,
-            projectId: thread.projectId,
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as("")),
+    const [lessonContext, ledgerContext, factContext] = yield* Effect.all(
+      [
+        readAgentLessonContext(thread.projectId).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider turn could not read saved lessons", {
+              threadId: input.threadId,
+              projectId: thread.projectId,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as("")),
+          ),
         ),
-      ),
-      readThreadLedgerContext(input.threadId).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider turn could not read thread ledger", {
-            threadId: input.threadId,
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as("")),
+        readThreadLedgerContext(input.threadId).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider turn could not read thread ledger", {
+              threadId: input.threadId,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as("")),
+          ),
         ),
-      ),
-    ]);
-    const durableContext = [lessonContext, ledgerContext].filter(Boolean).join("\n\n");
+        // Facts relevant to this request from memory-api (bounded wait, empty on failure).
+        MemsearchMirror.relevantFactsContext(input.messageText, thread.projectId),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const durableContext = [lessonContext, factContext, ledgerContext].filter(Boolean).join("\n\n");
     const handoffBudget = Math.max(
       0,
       PROVIDER_SEND_TURN_MAX_INPUT_CHARS - input.messageText.length - durableContext.length - 1_000,

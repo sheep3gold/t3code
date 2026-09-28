@@ -1,5 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- *_json columns hold plain string arrays/records written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
+
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -48,6 +50,25 @@ export interface UpsertAgentMemoryInput {
   readonly tags: ReadonlyArray<string>;
   readonly sourceThreadId: ThreadId;
   readonly now: string;
+  /** user_stated when a person wrote it (UI); observed when an agent saved it. */
+  readonly authority?: MemsearchMirror.MemoryAuthority;
+}
+
+export interface RemoteApplyResult {
+  readonly upserted: number;
+  readonly removed: number;
+  readonly skipped: number;
+}
+
+export function memoryFingerprint(memory: {
+  readonly kind: AgentMemoryKind;
+  readonly scope: AgentMemoryScope;
+  readonly projectId: string | null;
+  readonly content: string;
+}): string {
+  return NodeCrypto.createHash("sha256")
+    .update(`${memory.kind}|${memory.scope}|${memory.projectId ?? ""}|${memory.content}`)
+    .digest("hex");
 }
 
 function parseTags(value: string): ReadonlyArray<string> {
@@ -104,6 +125,12 @@ export class AgentMemoryRepository extends Context.Service<
       id: string,
       projectId: ProjectId,
     ) => Effect.Effect<boolean, PersistenceSqlError>;
+    /** Every cached memory, for backfilling memory-api. */
+    readonly listAll: () => Effect.Effect<ReadonlyArray<AgentMemory>, PersistenceSqlError>;
+    /** Apply memory-api changes to the local cache without pushing them back. */
+    readonly applyRemote: (
+      records: ReadonlyArray<MemsearchMirror.RemoteRecord>,
+    ) => Effect.Effect<RemoteApplyResult, PersistenceSqlError>;
   }
 >()("t3/persistence/AgentMemories/AgentMemoryRepository") {}
 
@@ -143,7 +170,7 @@ const make = Effect.gen(function* () {
         return fromRow(rows[0]!);
       }).pipe(
         Effect.mapError(sqlError("upsertAgentMemory")),
-        Effect.tap(MemsearchMirror.mirrorPut),
+        Effect.tap((memory) => MemsearchMirror.mirrorPut(memory, input.authority ?? "observed")),
       ),
 
     candidates: (projectId, kind) =>
@@ -206,7 +233,10 @@ const make = Effect.gen(function* () {
       `.pipe(
         Effect.map((rows) => (rows[0] ? fromRow(rows[0]) : null)),
         Effect.mapError(sqlError("updateAgentMemory")),
-        Effect.tap((memory) => (memory ? MemsearchMirror.mirrorPut(memory) : Effect.void)),
+        // Only the management page edits memories, so an edit is a person's statement.
+        Effect.tap((memory) =>
+          memory ? MemsearchMirror.mirrorPut(memory, "user_stated") : Effect.void,
+        ),
       ),
 
     recentLessons: (projectId, limit = 20) =>
@@ -236,6 +266,79 @@ const make = Effect.gen(function* () {
         Effect.mapError(sqlError("removeAgentMemory")),
         Effect.tap((removed) => (removed ? MemsearchMirror.mirrorDelete(id) : Effect.void)),
       ),
+
+    listAll: () =>
+      sql<AgentMemoryRow>`
+        SELECT
+          id, kind, scope, project_id AS "projectId", content, negative,
+          tags_json AS "tagsJson", source_thread_id AS "sourceThreadId",
+          created_at AS "createdAt", updated_at AS "updatedAt"
+        FROM agent_memories
+        ORDER BY updated_at ASC
+        LIMIT 5000
+      `.pipe(
+        Effect.map((rows) => rows.map(fromRow)),
+        Effect.mapError(sqlError("listAllAgentMemories")),
+      ),
+
+    applyRemote: (records) =>
+      Effect.gen(function* () {
+        let upserted = 0;
+        let removed = 0;
+        let skipped = 0;
+        for (const record of records) {
+          if (record.status !== "active") {
+            const rows =
+              yield* sql`DELETE FROM agent_memories WHERE id = ${record.id} RETURNING id`;
+            removed += rows.length;
+            continue;
+          }
+          // Preferences are standing rules like lessons, so they join the always-injected set.
+          const kind: AgentMemoryKind =
+            record.kind === "lesson" || record.kind === "preference" ? "lesson" : "memory";
+          const scope: AgentMemoryScope = record.scope === "project" ? "project" : "global";
+          const projectId = scope === "project" ? record.project_id : null;
+          if (scope === "project" && !projectId) {
+            skipped += 1;
+            continue;
+          }
+          const sourceThreadId = record.source_ref?.startsWith("thread:")
+            ? record.source_ref.slice("thread:".length)
+            : "memory-api";
+          const fingerprint = memoryFingerprint({
+            kind,
+            scope,
+            projectId,
+            content: record.content,
+          });
+          const written = yield* sql`
+            INSERT INTO agent_memories (
+              id, fingerprint, kind, scope, project_id, content, negative,
+              tags_json, source_thread_id, created_at, updated_at
+            ) VALUES (
+              ${record.id}, ${fingerprint}, ${kind}, ${scope}, ${projectId}, ${record.content},
+              ${record.negative}, ${JSON.stringify(record.tags)}, ${sourceThreadId},
+              ${record.updated_at}, ${record.updated_at}
+            )
+            ON CONFLICT (id) DO UPDATE SET
+              fingerprint = excluded.fingerprint,
+              kind = excluded.kind,
+              scope = excluded.scope,
+              project_id = excluded.project_id,
+              content = excluded.content,
+              negative = excluded.negative,
+              tags_json = excluded.tags_json,
+              updated_at = excluded.updated_at
+            RETURNING id
+          `.pipe(
+            // Same content already cached under another id (fingerprint is unique): keep ours.
+            Effect.catch(() => Effect.succeed([] as ReadonlyArray<unknown>)),
+          );
+          if (written.length > 0) upserted += 1;
+          else skipped += 1;
+        }
+        return { upserted, removed, skipped };
+      }).pipe(Effect.mapError(sqlError("applyRemoteAgentMemories"))),
   });
 });
 
