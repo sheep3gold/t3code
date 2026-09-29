@@ -4,6 +4,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  isProviderAvailable,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -53,6 +54,7 @@ import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./ht
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
+const PROVIDER_MODELS_PATH = "/api/provider-models";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -420,6 +422,40 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
         available: false,
       },
       readAt,
+    });
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
+);
+
+// Model picker data for HTTP-only clients (the mini program gateway) that
+// cannot subscribe to the websocket server config.
+export const providerModelsRouteLayer = HttpRouter.add(
+  "GET",
+  PROVIDER_MODELS_PATH,
+  Effect.gen(function* () {
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+    const providers = yield* providerRegistry.getProviders;
+
+    return HttpServerResponse.jsonUnsafe({
+      providers: providers.map((provider) => ({
+        instanceId: provider.instanceId,
+        driver: provider.driver,
+        displayName: provider.displayName ?? provider.driver,
+        enabled: provider.enabled,
+        available: isProviderAvailable(provider),
+        status: provider.status,
+        models: provider.models.map((model) => ({
+          slug: model.slug,
+          name: model.name,
+          ...(model.isDefault ? { isDefault: true } : {}),
+        })),
+      })),
     });
   }).pipe(
     Effect.catchTags({
