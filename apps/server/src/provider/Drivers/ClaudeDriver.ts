@@ -61,6 +61,7 @@ import {
 } from "../providerUpdateSettings.ts";
 import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
 import { discoverClaudeSkills } from "./ClaudeSkills.ts";
+import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -244,8 +245,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           : Effect.all([
               snapshot.getSnapshot,
               discoverClaudeSkills(effectiveConfig, cwd, processEnv),
+              discoverSharedProviderSkills(cwd),
             ]).pipe(
-              Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
+              Effect.map(([machineSnapshot, skills, sharedSkills]) => ({
+                ...machineSnapshot,
+                skills: mergeProviderSkills(skills, sharedSkills),
+              })),
               Effect.provideService(FileSystem.FileSystem, fileSystem),
               Effect.provideService(Path.Path, path),
             );

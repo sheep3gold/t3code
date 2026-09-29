@@ -33,6 +33,7 @@ import {
   probeCursorSkills,
   rewriteCursorSkillMentions,
 } from "../Drivers/CursorSkills.ts";
+import { mergeProviderSkills } from "../sharedSkills.ts";
 import { execScriptSource, writeFakeCli } from "../../testUtils/fakeCli.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
@@ -321,6 +322,16 @@ const cursorCliCommandMissingMessage = [
 ].join(" ");
 
 describe("Cursor skills", () => {
+  it("merges shared skills without shadowing native skills", () => {
+    const native = { name: "review", path: "/native/SKILL.md", enabled: true };
+    const shared = [
+      { name: "Review", path: "/shared/review/SKILL.md", enabled: true },
+      { name: "release", path: "/shared/release/SKILL.md", enabled: true },
+    ];
+
+    expect(mergeProviderSkills([native], shared)).toEqual([shared[1], native]);
+  });
+
   it("discovers recursive project skills with project precedence", async () =>
     await runNode(
       Effect.gen(function* () {

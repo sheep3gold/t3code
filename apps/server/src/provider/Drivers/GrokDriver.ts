@@ -29,6 +29,7 @@ import {
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import { discoverGrokSkills } from "./GrokSkills.ts";
+import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -153,7 +154,16 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
                     }),
                 ),
               ),
-            ]).pipe(Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })));
+              discoverSharedProviderSkills(workspaceCwd).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              ),
+            ]).pipe(
+              Effect.map(([machineSnapshot, skills, sharedSkills]) => ({
+                ...machineSnapshot,
+                skills: mergeProviderSkills(skills, sharedSkills),
+              })),
+            );
 
       return {
         instanceId,

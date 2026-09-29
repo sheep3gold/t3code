@@ -57,6 +57,7 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
+import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("opencode");
@@ -271,10 +272,17 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
             : Effect.all([
                 snapshot.getSnapshot,
                 loadWorkspaceForCwd(cwd).pipe(Effect.timeout("20 seconds")),
+                discoverSharedProviderSkills(cwd).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  Effect.provideService(Path.Path, pathService),
+                ),
               ]).pipe(
-                Effect.map(([machineSnapshot, { skills, commands }]) => ({
+                Effect.map(([machineSnapshot, { skills, commands }, sharedSkills]) => ({
                   ...machineSnapshot,
-                  skills: openCodeSkillsToServerProviderSkills(skills),
+                  skills: mergeProviderSkills(
+                    openCodeSkillsToServerProviderSkills(skills),
+                    sharedSkills,
+                  ),
                   slashCommands: openCodeCommandsToServerProviderSlashCommands(commands),
                 })),
                 Effect.mapError(
