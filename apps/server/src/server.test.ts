@@ -2233,6 +2233,57 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves authenticated provider model lists", () =>
+    Effect.gen(function* () {
+      const provider = {
+        instanceId: ProviderInstanceId.make("claude-xjp"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        displayName: "Claude Pro · XJP",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [
+          {
+            slug: "claude-opus-5-5",
+            name: "Claude Opus 5.5",
+            isCustom: false,
+            isDefault: true,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      };
+      yield* buildAppUnderTest({
+        layers: { providerRegistry: { getProviders: Effect.succeed([provider]) } },
+      });
+
+      const unauthenticated = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-models"));
+      assert.equal(unauthenticated.status, 401);
+
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-models"), {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+      const body = yield* responseJsonEffect<{ providers: Array<unknown> }>(response);
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body.providers, [
+        {
+          instanceId: "claude-xjp",
+          driver: "claudeAgent",
+          displayName: "Claude Pro · XJP",
+          enabled: true,
+          available: true,
+          status: "ready",
+          models: [{ slug: "claude-opus-5-5", name: "Claude Opus 5.5", isDefault: true }],
+        },
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves snapshots for MCP handoff thread IDs above the router default", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make(
