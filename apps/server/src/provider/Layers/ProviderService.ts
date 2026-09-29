@@ -77,6 +77,8 @@ import {
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
+import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
+import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -86,8 +88,11 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { providerSkillNames, providerSkillsForCwd } from "../sharedSkills.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const encodePromptJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const PROVIDER_SKILL_MENTION_PATTERN =
+  /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s|$)/gu;
 
 interface SnapShotPromptAccessibilityNode {
   readonly role: string;
@@ -477,6 +482,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const canonicalEventLogger = options?.canonicalEventLogger ?? eventLoggers.canonical;
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
+  const instanceRegistry = yield* Effect.serviceOption(
+    ProviderInstanceRegistry.ProviderInstanceRegistry,
+  );
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const projectionQuery = yield* Effect.serviceOption(
@@ -1713,6 +1721,31 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
       });
+      const dispatchedInput =
+        (routed.adapter.provider === "grok" || routed.adapter.provider === "antigravity") &&
+        instanceRegistry._tag === "Some" &&
+        input.input
+          ? yield* Effect.gen(function* () {
+              const instance = yield* instanceRegistry.value.getInstance(routed.instanceId);
+              if (!instance) return input;
+              const binding = yield* directory.getBinding(input.threadId);
+              const cwd = Option.getOrUndefined(binding)?.runtimePayload
+                ? readPersistedCwd(Option.getOrUndefined(binding)?.runtimePayload)
+                : undefined;
+              const snapshot = yield* instance.snapshot.getSnapshot;
+              const skillNames = providerSkillNames(providerSkillsForCwd(snapshot, cwd));
+              return skillNames.size === 0
+                ? input
+                : {
+                    ...input,
+                    input: (input.input ?? "").replace(
+                      PROVIDER_SKILL_MENTION_PATTERN,
+                      (match, prefix: string, name: string) =>
+                        skillNames.has(name) ? `${prefix}/${name}` : match,
+                    ),
+                  };
+            })
+          : input;
       // A turn is the clearest sign a session is still alive. The MCP
       // credential is minted once at session start and cannot be rotated into
       // an already-spawned agent process, so we keep the existing token valid
@@ -1732,7 +1765,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
         (turnMetadata) =>
           Effect.gen(function* () {
-            const turn = yield* routed.adapter.sendTurn(input);
+            const turn = yield* routed.adapter.sendTurn(dispatchedInput);
             yield* associateTurnAnalytics({
               providerInstanceId: routed.instanceId,
               threadId: input.threadId,

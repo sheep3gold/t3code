@@ -71,6 +71,7 @@ import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
+import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -262,8 +263,15 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
                 Effect.timeout("20 seconds"),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               ),
+              discoverSharedProviderSkills(cwd).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, pathService),
+              ),
             ]).pipe(
-              Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
+              Effect.map(([machineSnapshot, skills, sharedSkills]) => ({
+                ...machineSnapshot,
+                skills: mergeProviderSkills(skills, sharedSkills),
+              })),
               Effect.mapError(
                 (cause) =>
                   new ProviderDriverError({

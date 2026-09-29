@@ -56,6 +56,7 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 import { discoverCursorSkills, probeCursorSkills } from "./CursorSkills.ts";
+import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("cursor");
@@ -224,6 +225,13 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
             : probeCursorSkills(cwd, processEnv).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
+                Effect.flatMap((skills) =>
+                  discoverSharedProviderSkills(cwd).pipe(
+                    Effect.provideService(FileSystem.FileSystem, fileSystem),
+                    Effect.provideService(Path.Path, path),
+                    Effect.map((sharedSkills) => mergeProviderSkills(skills, sharedSkills)),
+                  ),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new ProviderDriverError({

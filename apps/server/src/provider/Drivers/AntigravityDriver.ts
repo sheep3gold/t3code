@@ -60,6 +60,7 @@ import {
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { discoverAntigravitySkills, resolveAntigravityUserHome } from "./AntigravitySkills.ts";
+import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
 
 const DRIVER = ProviderDriverKind.make("antigravity");
 const decodeSettings = Schema.decodeSync(AntigravitySettings);
@@ -460,7 +461,14 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
             : discoverAntigravitySkills({ cwd, userHome }).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
-                Effect.flatMap((skills) => provider.snapshotForCwd(cwd, skills)),
+                Effect.flatMap((skills) =>
+                  discoverSharedProviderSkills(cwd).pipe(
+                    Effect.provideService(FileSystem.FileSystem, fileSystem),
+                    Effect.provideService(Path.Path, path),
+                    Effect.map((mergedSkills) => mergeProviderSkills(skills, mergedSkills)),
+                    Effect.flatMap((mergedSkills) => provider.snapshotForCwd(cwd, mergedSkills)),
+                  ),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new ProviderDriverError({
