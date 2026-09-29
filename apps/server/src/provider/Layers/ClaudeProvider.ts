@@ -33,7 +33,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
-import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
 import {
@@ -519,6 +519,47 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         status: "error",
         auth: { status: "unknown" },
         message: "Claude Agent CLI is installed but failed to run.",
+      },
+    });
+  }
+
+  // Guard: Claude Code wipes accessToken/refreshToken (leaving metadata) when a
+  // refresh hard-fails, then every subsequent launch loop-refreshes with empty
+  // tokens and hammers the OAuth rate limit. Detect that state and report a
+  // clear error instead of probing with dead credentials.
+  const claudeHomePath = yield* resolveClaudeHomePath(claudeSettings, resolvedEnvironment);
+  const credentialsProbe = yield* Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const credentialsPath = path.join(claudeHomePath, ".credentials.json");
+    const raw = yield* fs.readFileString(credentialsPath);
+    // The wiped-credentials shape Claude Code writes is stable: both token
+    // fields become empty strings while sibling metadata (scopes,
+    // subscriptionType, refreshTokenExpiresAt) is preserved. Match that exact
+    // shape without pulling a JSON parser dependency into the hot path.
+    return (
+      /"accessToken"\s*:\s*""/.test(raw) &&
+      /"refreshToken"\s*:\s*""/.test(raw) &&
+      /"claudeAiOauth"\s*:/.test(raw)
+    );
+  }).pipe(Effect.orElseSucceed(() => false));
+
+  if (credentialsProbe) {
+    yield* Effect.logWarning("Claude OAuth credentials are empty; re-login required.", {
+      homePath: claudeHomePath,
+    });
+    return buildServerProvider({
+      presentation: CLAUDE_PRESENTATION,
+      enabled: claudeSettings.enabled,
+      checkedAt,
+      models: allModels,
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "error",
+        auth: { status: "unauthenticated" },
+        message:
+          "Claude OAuth tokens were invalidated. Run `claude auth login` (or the instance's wrapper, e.g. claude-xjp auth login) to re-authenticate.",
       },
     });
   }
