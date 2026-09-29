@@ -1990,7 +1990,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
     void refreshProviders({
       environmentId,
-      input: { instanceId: selectedProviderEntry.instanceId, cwd: gitCwd },
+      input: { instanceId: selectedProviderEntry.instanceId, cwd: gitCwd, forceSkills: true },
     }).then((result) => {
       const hasWorkspaceSnapshot =
         result._tag === "Success" &&
