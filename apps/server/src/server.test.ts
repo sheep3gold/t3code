@@ -2278,6 +2278,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           enabled: true,
           available: true,
           status: "ready",
+          requiresNewThreadForModelChange: false,
           models: [{ slug: "claude-opus-5-5", name: "Claude Opus 5.5", isDefault: true }],
         },
       ]);
