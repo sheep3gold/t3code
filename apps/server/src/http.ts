@@ -450,6 +450,7 @@ export const providerModelsRouteLayer = HttpRouter.add(
         enabled: provider.enabled,
         available: isProviderAvailable(provider),
         status: provider.status,
+        requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange === true,
         models: provider.models.map((model) => ({
           slug: model.slug,
           name: model.name,
