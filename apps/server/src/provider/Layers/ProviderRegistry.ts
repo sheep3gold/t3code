@@ -838,13 +838,14 @@ export const ProviderRegistryLive = Layer.effect(
     const refreshWorkspaceSnapshot = Effect.fn("refreshWorkspaceSnapshot")(function* (input: {
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
+      readonly force?: boolean;
     }) {
       const providers = yield* Ref.get(providersRef);
       const provider = providers.find((candidate) => candidate.instanceId === input.instanceId);
       if (
         !provider ||
         !provider.enabled ||
-        provider.workspaceSnapshots?.some((s) => s.cwd === input.cwd)
+        (!input.force && provider.workspaceSnapshots?.some((s) => s.cwd === input.cwd))
       ) {
         return providers;
       }
