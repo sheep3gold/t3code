@@ -48,6 +48,16 @@ user_systemctl() {
 }
 
 ensure_authoritative() {
+    deploy_state=$(systemctl is-active t3code-deploy.service 2>/dev/null || true)
+    if [ "$deploy_state" != "inactive" ] && [ "$deploy_state" != "failed" ]; then
+        i=0
+        while [ "$i" -lt 180 ]; do
+            listening "$AUTHORITATIVE_PORT" && return 0
+            i=$((i + 1))
+            sleep 1
+        done
+        return 1
+    fi
     if ! listening "$AUTHORITATIVE_PORT"; then
         user_systemctl reset-failed t3code.service >/dev/null 2>&1 || true
         # --no-block：等端口就绪由下面的循环负责，不要卡在 systemctl 上。
