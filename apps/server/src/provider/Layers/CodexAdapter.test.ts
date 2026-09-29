@@ -1789,6 +1789,31 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       NodeAssert.equal(firstEvent.value.threadId, "thread-1");
       NodeAssert.equal(firstEvent.value.payload.reason, "Session stopped");
+      NodeAssert.equal(firstEvent.value.payload.exitKind, "graceful");
+      NodeAssert.equal(firstEvent.value.payload.recoverable, undefined);
+    }),
+  );
+
+  it.effect("marks unexpected Codex session exits as recoverable", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-session-exited"),
+        kind: "session",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "session/exited",
+        message: "Connection lost",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "session.exited") return;
+      NodeAssert.equal(firstEvent.value.payload.exitKind, "error");
+      NodeAssert.equal(firstEvent.value.payload.recoverable, true);
     }),
   );
 

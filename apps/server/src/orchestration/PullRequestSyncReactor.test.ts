@@ -20,6 +20,7 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -27,6 +28,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
 import { PullRequestService } from "../pullRequest/PullRequestService.ts";
+import { ThreadPullRequestMonitorRepository } from "../persistence/ThreadPullRequestMonitors.ts";
 import { ServerActivation } from "../serverActivation.ts";
 import {
   OrchestrationEngineService,
@@ -216,6 +218,10 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
       summary,
       stack,
       invalidate: options.invalidate ?? (() => Effect.void),
+    }),
+    Layer.mock(ThreadPullRequestMonitorRepository)({
+      get: () => Effect.succeed(Option.none()),
+      set: () => Effect.void,
     }),
     Layer.mock(OrchestrationEngineService)({
       readEvents: () => Stream.empty,

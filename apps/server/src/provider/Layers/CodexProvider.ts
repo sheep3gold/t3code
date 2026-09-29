@@ -286,6 +286,19 @@ function appendCustomCodexModels(
   return customEntries.length === 0 ? models : [...models, ...customEntries];
 }
 
+export function selectVisibleCodexModels(
+  discoveredModels: ReadonlyArray<ServerProviderModel>,
+  customModels: ReadonlyArray<CustomModelSetting>,
+  customModelsOnly: boolean,
+): ReadonlyArray<ServerProviderModel> {
+  if (!customModelsOnly) {
+    return discoveredModels;
+  }
+  return appendCustomCodexModels([], customModels).map((model, index) =>
+    index === 0 ? { ...model, isDefault: true } : model,
+  );
+}
+
 function parseCodexSkillsListResponse(
   response: CodexSchema.V2SkillsListResponse,
   cwd: string,
@@ -675,7 +688,11 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     presentation: CODEX_PRESENTATION,
     enabled: codexSettings.enabled,
     checkedAt,
-    models: snapshot.models,
+    models: selectVisibleCodexModels(
+      snapshot.models,
+      codexSettings.customModels,
+      /^(?:1|true|yes|on)$/i.test(resolvedEnvironment.T3_CODEX_CUSTOM_MODELS_ONLY ?? ""),
+    ),
     skills: snapshot.skills,
     slashCommands: [
       COMPACT_SLASH_COMMAND,

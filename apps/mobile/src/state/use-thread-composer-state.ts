@@ -486,6 +486,60 @@ export function useThreadComposerState() {
     uploadThreadFeedback,
   ]);
 
+  const onSendOption = useCallback(
+    async (label: string) => {
+      if (!selectedThreadShell || selectedThreadCreation !== null) return null;
+      const text = label.trim();
+      if (text.length === 0) return null;
+
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      const draft = getComposerDraftSnapshot(threadKey);
+      const thread = selectedThreadDetail ?? selectedThreadShell;
+      const modelSelection = draft.modelSelection ?? thread.modelSelection;
+      const serverConfig = selectedEnvironmentRuntime?.serverConfig;
+      if (
+        selectedEnvironmentRuntime?.connectionState === "connected" &&
+        isModelSelectionUnavailable(serverConfig, modelSelection)
+      ) {
+        Alert.alert("Model unavailable", "Choose an available model and try again.");
+        return null;
+      }
+      const provider = serverConfig?.providers.find(
+        (entry) => entry.instanceId === modelSelection.instanceId,
+      );
+      const metadata = makeQueuedMessageMetadata();
+      const messageId = MessageId.make(metadata.messageId);
+      void enqueueThreadOutboxMessage({
+        environmentId: selectedThreadShell.environmentId,
+        threadId: selectedThreadShell.id,
+        messageId,
+        commandId: CommandId.make(metadata.commandId),
+        text,
+        attachments: [],
+        context: { version: 1, records: [] },
+        modelSelection,
+        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+        interactionMode: resolveProviderInteractionMode(
+          provider,
+          draft.interactionMode ?? thread.interactionMode,
+        ),
+        createdAt: metadata.createdAt,
+      }).catch((error: unknown) => {
+        setPendingConnectionError(
+          error instanceof Error ? error.message : "Failed to save the queued option.",
+        );
+      });
+      return messageId;
+    },
+    [
+      selectedEnvironmentRuntime?.connectionState,
+      selectedEnvironmentRuntime?.serverConfig,
+      selectedThreadCreation,
+      selectedThreadDetail,
+      selectedThreadShell,
+    ],
+  );
+
   const onChangeDraftMessage = useCallback(
     (value: string) => {
       if (!selectedThreadShell) {
@@ -817,6 +871,7 @@ export function useThreadComposerState() {
     onNativePasteText,
     onRemoveDraftImage,
     onSendMessage,
+    onSendOption,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,

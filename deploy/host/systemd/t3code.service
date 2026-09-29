@@ -1,0 +1,37 @@
+# 由仓库 deploy/host/systemd/ 管理，t3code-deploy 每次发布时安装到
+# ~/.config/systemd/user/。不要直接改线上文件，下次发布会被覆盖。
+[Unit]
+Description=T3 Code server (self-built, released by release-hub)
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=T3CODE_HOME=/home/ubuntu/.t3
+Environment=T3_BOOT_SERVICE_UNIT=t3code.service
+# 本机唯一的 T3 服务。桌面端远程环境经 deploy/host/t3-launcher.sh 拦截层
+# 复用它或转发到它，手机端经 nginx（code.zxytech.cn）连它。
+#
+# 只绑回环：公网入口是 443 的 nginx 与 8443 的 tailscale serve，二者都经
+# 127.0.0.1 进来，放宽绑定等于绕过这两道门。
+#
+# msghub、memsearch 等配置集中在 etcd 的 t3code/ 前缀（config-ui 管理），
+# 启动前渲染成本地 env 文件；etcd 不可达时沿用上次的渲染结果。
+# 读 etcd 的凭证在 ~/.t3/t3code-etcd-bootstrap.env，只在本机，不进仓库。
+EnvironmentFile=-%h/.t3/t3code-etcd.env
+ExecStartPre=/usr/bin/python3 /opt/t3code/deploy/host/render-etcd-env.py
+# 启动前清掉 3773 上的任何残留监听，保证本 unit 是该端口的权威。
+ExecStartPre=-/usr/bin/fuser -k 3773/tcp
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/local/bin/node /home/ubuntu/.t3/selfbuilt/t3code/apps/server/dist/bin.mjs serve --host 127.0.0.1 --port 3773
+KillMode=mixed
+OOMPolicy=continue
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/ubuntu/.t3/userdata/logs/boot-service.log
+StandardError=append:/home/ubuntu/.t3/userdata/logs/boot-service.log
+
+[Install]
+WantedBy=default.target

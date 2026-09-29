@@ -4,15 +4,19 @@ import {
   CodexSettings,
   CursorSettings,
   GrokSettings,
+  KiroSettings,
+  MiniMaxSettings,
   OpenCodeSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
+import { KiroIcon } from "../KiroIcon";
 import {
   AntigravityIcon,
   ClaudeAI,
   CursorIcon,
   GrokIcon,
+  MiniMaxIcon,
   type Icon,
   OpenAI,
   OpenCodeIcon,
@@ -71,6 +75,13 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     settingsSchema: GrokSettings,
   },
   {
+    value: ProviderDriverKind.make("minimax"),
+    label: "MiniMax Code",
+    icon: MiniMaxIcon,
+    badgeLabel: "Fork",
+    settingsSchema: MiniMaxSettings,
+  },
+  {
     value: ProviderDriverKind.make("opencode"),
     label: "OpenCode",
     icon: OpenCodeIcon,
@@ -81,6 +92,15 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     label: "Antigravity",
     icon: AntigravityIcon,
     settingsSchema: AntigravitySettings,
+  },
+  {
+    value: ProviderDriverKind.make("kiro"),
+    label: "Kiro",
+    icon: KiroIcon,
+    // Local to this fork, not an upstream driver: the badge says so plainly
+    // rather than letting it pass as a shipped provider.
+    badgeLabel: "Fork",
+    settingsSchema: KiroSettings,
   },
 ];
 

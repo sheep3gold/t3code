@@ -37,6 +37,7 @@ import {
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
+  type ServerProviderUsageWindow,
   type ServerLifecycleStreamEvent,
   ThreadId,
   TurnId,
@@ -128,6 +129,11 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
+import * as AgentMemoryPersistence from "./persistence/AgentMemories.ts";
+import * as ArtifactPersistence from "./persistence/Artifacts.ts";
+import * as ThreadLedgerPersistence from "./persistence/ThreadLedger.ts";
+import * as ThreadSchedulesRepository from "./persistence/ThreadSchedules.ts";
+import * as WorkflowPersistence from "./persistence/ThreadWorkflows.ts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
@@ -1069,8 +1075,16 @@ const buildAppUnderTest = (options?: {
       ),
     );
 
+    const threadRepositoriesLayer = Layer.mergeAll(
+      ThreadSchedulesRepository.layer,
+      ThreadLedgerPersistence.layer,
+      AgentMemoryPersistence.layer,
+      ArtifactPersistence.layer,
+      WorkflowPersistence.layer,
+    ).pipe(Layer.provide(SqlitePersistenceMemory));
+
     const appLayer = servedRoutesLayer.pipe(
-      Layer.provide(resourceTelemetryLayer),
+      Layer.provide(Layer.mergeAll(threadRepositoriesLayer, resourceTelemetryLayer)),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
         Layer.mock(AnalyticsService.AnalyticsService)({
@@ -2145,6 +2159,129 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 200);
       assert.deepEqual(body, testEnvironmentDescriptor);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves authenticated provider usage summary data", () =>
+    Effect.gen(function* () {
+      const providerUsageWindow: ServerProviderUsageWindow = {
+        id: "weekly",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 25,
+      };
+      const provider = {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+        usageLimits: {
+          checkedAt: "2026-04-11T00:00:00.000Z",
+          windows: [providerUsageWindow],
+        },
+      };
+      const hub = {
+        id: UsageLimitSourceId.make("hub"),
+        kind: "cliproxy" as const,
+        label: "Accounts",
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        accounts: [
+          {
+            id: "work",
+            driver: ProviderDriverKind.make("codex"),
+            plan: "Team",
+            usageLimits: {
+              checkedAt: "2026-04-11T00:00:00.000Z",
+              windows: [providerUsageWindow],
+            },
+          },
+        ],
+      };
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([provider]) },
+          usageLimitSources: {
+            current: Effect.succeed([hub]),
+            streamChanges: Stream.empty,
+          },
+        },
+      });
+
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-usage-summary"), {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+      const summary = yield* responseJsonEffect<{
+        providers: Array<{
+          id: string;
+          displayName: string;
+          usageLimits: { windows: Array<ServerProviderUsageWindow> };
+        }>;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(summary.providers[0]?.displayName, "Codex");
+      assert.deepEqual(summary.providers[0]?.usageLimits.windows, [providerUsageWindow]);
+      assert.equal(summary.providers[1]?.displayName, "Team");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves authenticated provider model lists", () =>
+    Effect.gen(function* () {
+      const provider = {
+        instanceId: ProviderInstanceId.make("claude-xjp"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        displayName: "Claude Pro · XJP",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [
+          {
+            slug: "claude-opus-5-5",
+            name: "Claude Opus 5.5",
+            isCustom: false,
+            isDefault: true,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      };
+      yield* buildAppUnderTest({
+        layers: { providerRegistry: { getProviders: Effect.succeed([provider]) } },
+      });
+
+      const unauthenticated = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-models"));
+      assert.equal(unauthenticated.status, 401);
+
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-models"), {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+      const body = yield* responseJsonEffect<{ providers: Array<unknown> }>(response);
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body.providers, [
+        {
+          instanceId: "claude-xjp",
+          driver: "claudeAgent",
+          displayName: "Claude Pro · XJP",
+          enabled: true,
+          available: true,
+          status: "ready",
+          requiresNewThreadForModelChange: false,
+          models: [{ slug: "claude-opus-5-5", name: "Claude Opus 5.5", isDefault: true }],
+        },
+      ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

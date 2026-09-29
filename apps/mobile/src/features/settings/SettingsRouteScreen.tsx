@@ -155,12 +155,26 @@ function SettingsIndexSections() {
 
       <SettingsSection title="Projects & threads">
         {selectedProjectKey !== null ? (
-          <SettingsRow
-            icon="folder"
-            label="Overview"
-            value={projectLabel}
-            target="SettingsProjectOverview"
-          />
+          <>
+            <SettingsRow
+              icon="folder"
+              label="Overview"
+              value={projectLabel}
+              target="SettingsProjectOverview"
+            />
+            <SettingsRow
+              icon="archivebox"
+              label="Artifacts"
+              value={projectLabel}
+              target="SettingsArtifacts"
+            />
+            <SettingsRow
+              icon="clock"
+              label="Schedules"
+              value={projectLabel}
+              target="SettingsSchedules"
+            />
+          </>
         ) : null}
         <SettingsRow icon="folder" label="Organization" target="SettingsOrganization" />
         <SettingsRow icon="text.bubble" label="Thread behavior" target="SettingsThreads" />

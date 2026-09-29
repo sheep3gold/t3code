@@ -47,6 +47,10 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { forkParked } from "./serverActivation.ts";
+import { publishTurnCompletionNotification } from "./notifications/MsgHubTurnCompletion.ts";
+import { startThreadScheduleRunner } from "./orchestration/ThreadSchedules.ts";
+import { startThreadWorkflowRunner } from "./orchestration/ThreadWorkflows.ts";
+import { startMemorySync } from "./orchestration/MemorySync.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import {
@@ -503,7 +507,8 @@ export const reconcileProviderSessions = Effect.gen(function* () {
   const liveThreadIds = new Set(
     (yield* providerService.listSessions()).map((session) => session.threadId),
   );
-  const { threads } = yield* query.getCommandReadModel();
+  const { projects, threads } = yield* query.getCommandReadModel();
+  const projectsById = new Map((projects ?? []).map((project) => [project.id, project]));
   // Provider startup can report ready before the continuation is submitted.
   // Find those markers in one read rather than querying every idle thread.
   const preparedThreadIds = new Set(
@@ -586,6 +591,7 @@ export const reconcileProviderSessions = Effect.gen(function* () {
       Option.isSome(binding) &&
       binding.value.status === "running" &&
       binding.value.resumeCursor != null;
+    const orphanedTurnId = session.activeTurnId ?? continuationTurnId;
     const settleAsError = (lastError: string) =>
       Effect.gen(function* () {
         yield* Effect.gen(function* () {
@@ -631,6 +637,34 @@ export const reconcileProviderSessions = Effect.gen(function* () {
             },
             createdAt: reconciledAt,
           });
+
+          if (orphanedTurnId !== null) {
+            const project = projectsById.get(thread.projectId);
+            yield* Effect.forkDetach(
+              Effect.promise(() =>
+                publishTurnCompletionNotification({
+                  threadId: String(thread.id),
+                  turnId: String(orphanedTurnId),
+                  project:
+                    project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project",
+                  threadTitle: thread.title,
+                  provider: session.providerName ?? "provider",
+                  state: "interrupted",
+                  text: "",
+                  errorMessage: lastError,
+                  createdAt: reconciledAt,
+                }),
+              ).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to publish orphaned turn notification", {
+                    threadId: thread.id,
+                    turnId: orphanedTurnId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              ),
+            );
+          }
         }).pipe(
           Effect.retry({ times: 1 }),
           Effect.catchCause((cause) =>
@@ -966,6 +1000,9 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+          yield* startThreadScheduleRunner.pipe(Scope.provide(reactorScope));
+          yield* startThreadWorkflowRunner.pipe(Scope.provide(reactorScope));
+          yield* startMemorySync.pipe(Scope.provide(reactorScope));
         }),
       );
 

@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 
-import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
+import {
+  applyPreferredCodexDefaultModel,
+  mapCodexModelCapabilities,
+  selectVisibleCodexModels,
+} from "./CodexProvider.ts";
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
@@ -160,4 +164,33 @@ it("ignores custom models that shadow a preferred slug", () => {
   ]);
 
   assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.4");
+});
+
+it("shows only configured custom models when customModelsOnly is enabled", () => {
+  const models = selectVisibleCodexModels(
+    [
+      { slug: "gpt-6-astra", name: "GPT-6-Astra", isCustom: false, capabilities: null },
+      { slug: "gpt-5.6-sol", name: "GPT-5.6-Sol", isCustom: false, capabilities: null },
+    ],
+    [
+      { slug: "hy3", name: "Hunyuan 3" },
+      { slug: "glm-5.3-flash", name: "GLM-5.3 Flash" },
+    ],
+    true,
+  );
+
+  assert.deepStrictEqual(
+    models.map((model) => ({ slug: model.slug, isDefault: model.isDefault })),
+    [
+      { slug: "hy3", isDefault: true },
+      { slug: "glm-5.3-flash", isDefault: undefined },
+    ],
+  );
+});
+
+it("preserves discovered Codex models by default", () => {
+  const discovered = [
+    { slug: "gpt-6-astra", name: "GPT-6-Astra", isCustom: false, capabilities: null },
+  ];
+  assert.strictEqual(selectVisibleCodexModels(discovered, [], false), discovered);
 });

@@ -1,4 +1,12 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  BrainIcon,
+  CalendarClockIcon,
+  ChartNoAxesColumnIcon,
+  LibraryBigIcon,
+  SettingsIcon,
+  WorkflowIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
@@ -141,9 +149,17 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ? "project-settings"
           : location.pathname === "/usage"
             ? "usage"
-            : location.pathname === "/pull-requests"
-              ? "pull-requests"
-              : null,
+            : location.pathname === "/artifacts"
+              ? "artifacts"
+              : location.pathname === "/schedules"
+                ? "schedules"
+                : location.pathname === "/workflows"
+                  ? "workflows"
+                  : location.pathname === "/memory"
+                    ? "memory"
+                    : location.pathname === "/pull-requests"
+                      ? "pull-requests"
+                      : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -166,6 +182,26 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleArtifactsClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/artifacts" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleSchedulesClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/schedules" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleWorkflowsClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/workflows" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleMemoryClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/memory" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -207,6 +243,22 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handlePullRequestsClick}
             />
           ) : null}
+          <SidebarUtilityItem
+            icon={<LibraryBigIcon />}
+            label="Artifacts"
+            onClick={handleArtifactsClick}
+          />
+          <SidebarUtilityItem
+            icon={<CalendarClockIcon />}
+            label="Schedules"
+            onClick={handleSchedulesClick}
+          />
+          <SidebarUtilityItem
+            icon={<WorkflowIcon />}
+            label="Workflows"
+            onClick={handleWorkflowsClick}
+          />
+          <SidebarUtilityItem icon={<BrainIcon />} label="Memory" onClick={handleMemoryClick} />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"

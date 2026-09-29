@@ -168,3 +168,15 @@ Full glossary with file links: `docs/internals/glossary.md`
 
 - Don't verify with browsers or computer use unless the user explicitly agrees or requests it.
 - Security is important, but should not be over-indexed on, especially for dev mode/maintainer-only features.
+
+## Fork release flow (release-hub)
+
+This fork is managed by the owner's `release-hub`. These rules are mandatory for every provider working in this repository:
+
+1. Never develop on `main`, `master`, or `release`. Before editing, check the branch with `relflow status`; when on a protected branch, start a feature branch from the latest `origin/main` with `relflow start feat/<topic>`.
+2. Make and validate changes only on that feature branch. Push it explicitly with `git push origin <feature-branch>`, then stop. The push is the handoff to `release-hub`.
+3. Never run `relflow finish`, push a protected branch, or manually merge into `release` or `main`. `release-hub` owns those branches and completes the merge, deployment, fast-forward to `main`, and feature-branch cleanup.
+4. `relflow sync` and `relflow check` are optional local preflight commands. Merge conflicts must be resolved on the feature branch and pushed again.
+5. Deployment progress and failures are reported at [devops.zxytech.cn](https://devops.zxytech.cn). The repository's deployment recipe is `.release-hub.yml`; do not invent or bypass a different release path.
+
+The owner's canonical personal copy of this policy is `~/.kiro/steering/release-flow.md`. This section is its repository-local mirror so Codex, Claude Code, Cursor, Grok, OpenCode, and Antigravity receive the same release constraints.

@@ -1,8 +1,10 @@
 import * as Mime from "effect/unstable/http/Mime";
+import * as DateTime from "effect/DateTime";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  isProviderAvailable,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -46,9 +48,13 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
+const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
+const PROVIDER_MODELS_PATH = "/api/provider-models";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -363,6 +369,95 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
           HttpServerResponse.text("Trace export failed.", { status: 502 }),
         ),
       );
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
+);
+
+export const providerUsageSummaryRouteLayer = HttpRouter.add(
+  "GET",
+  PROVIDER_USAGE_SUMMARY_PATH,
+  Effect.gen(function* () {
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+    const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
+    const readAt = DateTime.formatIso(yield* DateTime.now);
+    const providers = yield* providerRegistry.getProviders;
+    const usageLimitSourceSnapshots = yield* usageLimitSources.current;
+
+    return HttpServerResponse.jsonUnsafe({
+      providers: [
+        ...providers.map((provider) => ({
+          id: provider.instanceId,
+          driver: provider.driver,
+          displayName: provider.displayName ?? provider.driver,
+          modelCount: provider.models.length,
+          state: provider.status,
+          usage: { available: false },
+          usageLimits: provider.usageLimits ?? {
+            checkedAt: readAt,
+            windows: [],
+            unavailable: { reason: "unsupported" },
+          },
+        })),
+        ...usageLimitSourceSnapshots.flatMap((source) =>
+          source.accounts.map((account) => ({
+            id: `${source.id}:${account.id}`,
+            driver: account.driver,
+            displayName: account.plan ?? source.label,
+            modelCount: 0,
+            state: "ready" as const,
+            usage: { available: false },
+            usageLimits: account.usageLimits,
+          })),
+        ),
+      ],
+      totals: {
+        totalTokens: 0,
+        costUsd: 0,
+        available: false,
+      },
+      readAt,
+    });
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
+);
+
+// Model picker data for HTTP-only clients (the mini program gateway) that
+// cannot subscribe to the websocket server config.
+export const providerModelsRouteLayer = HttpRouter.add(
+  "GET",
+  PROVIDER_MODELS_PATH,
+  Effect.gen(function* () {
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+    const providers = yield* providerRegistry.getProviders;
+
+    return HttpServerResponse.jsonUnsafe({
+      providers: providers.map((provider) => ({
+        instanceId: provider.instanceId,
+        driver: provider.driver,
+        displayName: provider.displayName ?? provider.driver,
+        enabled: provider.enabled,
+        available: isProviderAvailable(provider),
+        status: provider.status,
+        requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange === true,
+        models: provider.models.map((model) => ({
+          slug: model.slug,
+          name: model.name,
+          ...(model.isDefault ? { isDefault: true } : {}),
+        })),
+      })),
+    });
   }).pipe(
     Effect.catchTags({
       EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,

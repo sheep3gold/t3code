@@ -9,6 +9,7 @@ import {
   EventId,
   isToolLifecycleItemType,
   ThreadId,
+  THREAD_RETRY_PROMPT,
   type ThreadTokenUsageSnapshot,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -56,6 +57,14 @@ import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import {
+  publishTurnCompletionNotification,
+  resolveUnexpectedTurnInterruption,
+} from "../../notifications/MsgHubTurnCompletion.ts";
+import {
+  publishAttentionNotification,
+  resolveMsgHubAttentionConfig,
+} from "../../notifications/MsgHubAttentionNotification.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 // Suffixed, not prefixed: `clearTurnStateForSession` sweeps by thread prefix.
@@ -121,6 +130,11 @@ const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 // as soon as it is done.
 const MIN_ASSISTANT_DELIVERY_INTERVAL_MS = 400;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+const RECOVERABLE_TURN_RETRY_DELAYS_MS = [2_000, 5_000, 15_000] as const;
+
+export function recoverableTurnRetryDelayMs(attempt: number): number | null {
+  return RECOVERABLE_TURN_RETRY_DELAYS_MS[attempt - 1] ?? null;
+}
 
 type TurnStartRequestedDomainEvent = Extract<
   OrchestrationEvent,
@@ -1113,6 +1127,87 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
+  const recoverableRetryAttempts = new Map<string, number>();
+  const scheduledRecoverableRetries = new Set<string>();
+
+  const scheduleRecoverableTurnRetry = Effect.fn("scheduleRecoverableTurnRetry")(function* (
+    threadId: ThreadId,
+    reason: string,
+  ) {
+    const key = String(threadId);
+    if (scheduledRecoverableRetries.has(key)) return;
+    const attempt = (recoverableRetryAttempts.get(key) ?? 0) + 1;
+    const delayMs = recoverableTurnRetryDelayMs(attempt);
+    if (delayMs === null) {
+      yield* Effect.logWarning("recoverable provider turn exhausted automatic retries", {
+        threadId,
+        attempts: recoverableRetryAttempts.get(key) ?? 0,
+        reason,
+      });
+      return;
+    }
+    recoverableRetryAttempts.set(key, attempt);
+    scheduledRecoverableRetries.add(key);
+
+    yield* forkParked(
+      Effect.sleep(Duration.millis(delayMs)).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const latest = yield* projectionSnapshotQuery
+              .getThreadShellById(threadId)
+              .pipe(Effect.map(Option.getOrUndefined));
+            const retryableStatus =
+              latest?.session?.status === "stopped" || latest?.session?.status === "error";
+            if (!latest || latest.session?.activeTurnId !== null || !retryableStatus) {
+              recoverableRetryAttempts.delete(key);
+              return;
+            }
+            const commandId = CommandId.make(yield* crypto.randomUUIDv4);
+            const messageId = MessageId.make(yield* crypto.randomUUIDv4);
+            const createdAt = DateTime.formatIso(yield* DateTime.now);
+            yield* orchestrationEngine.dispatch({
+              type: "thread.turn.start",
+              commandId,
+              threadId,
+              message: {
+                messageId,
+                role: "user",
+                text: `[Automatic retry ${attempt}/${RECOVERABLE_TURN_RETRY_DELAYS_MS.length} after a recoverable provider disconnect]\n\n${THREAD_RETRY_PROMPT}`,
+                attachments: [],
+              },
+              modelSelection: latest.modelSelection,
+              runtimeMode: latest.runtimeMode,
+              interactionMode: latest.interactionMode,
+              createdAt,
+            });
+            yield* Effect.logInfo("recoverable provider turn retry dispatched", {
+              threadId,
+              attempt,
+              delayMs,
+              reason,
+            });
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("recoverable provider turn retry failed", {
+                threadId,
+                attempt,
+                delayMs,
+                reason,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            scheduledRecoverableRetries.delete(key);
+          }),
+        ),
+      ),
+    );
+  });
+
   const getThreadMessageById = Effect.fn("getThreadMessageById")(function* (
     threadId: ThreadId,
     messageId: MessageId,
@@ -1753,6 +1848,121 @@ const make = Effect.gen(function* () {
         createdAt: implementedAt,
       });
     },
+  );
+
+  type TurnNotificationJob =
+    | {
+        readonly event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>;
+        readonly turnId: TurnId;
+      }
+    | {
+        readonly event: Extract<ProviderRuntimeEvent, { type: "session.exited" }>;
+        readonly turnId: TurnId;
+        readonly errorMessage: string;
+      };
+
+  const notificationWorker = yield* makeDrainableWorker((job: TurnNotificationJob) =>
+    Effect.gen(function* () {
+      const { event, turnId } = job;
+      const thread = yield* projectionSnapshotQuery
+        .getThreadDetailById(event.threadId, { activityKinds: [] })
+        .pipe(Effect.map(Option.getOrUndefined));
+      if (!thread) return;
+      const project = yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.map(Option.getOrUndefined));
+      const text = thread.messages
+        .filter((message) => message.role === "assistant" && message.turnId === turnId)
+        .map((message) => message.text)
+        .filter((message) => message.trim().length > 0)
+        .join("\n\n");
+      yield* Effect.promise(() =>
+        publishTurnCompletionNotification({
+          threadId: String(event.threadId),
+          turnId: String(turnId),
+          project: project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project",
+          threadTitle: thread.title,
+          provider: event.provider,
+          state:
+            event.type === "turn.completed"
+              ? normalizeRuntimeTurnState(event.payload.state)
+              : "interrupted",
+          text,
+          errorMessage: "errorMessage" in job ? job.errorMessage : job.event.payload.errorMessage,
+          createdAt: event.createdAt,
+        }),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("failed to publish turn completion notification", {
+              threadId: job.event.threadId,
+              turnId: job.turnId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+    ),
+  );
+
+  const attentionNotificationWorker = yield* makeDrainableWorker(
+    (event: Extract<ProviderRuntimeEvent, { type: "request.opened" | "user-input.requested" }>) =>
+      Effect.gen(function* () {
+        const kind = event.type === "request.opened" ? "approval" : "user-input";
+        if (resolveMsgHubAttentionConfig(kind) === null) return;
+        if (event.type === "request.opened" && event.payload.requestType === "tool_user_input") {
+          return;
+        }
+        const thread = yield* projectionSnapshotQuery
+          .getThreadRuntimeContext(event.threadId)
+          .pipe(Effect.map(Option.getOrUndefined));
+        if (!thread) return;
+        const project = yield* projectionSnapshotQuery
+          .getProjectShellById(thread.projectId)
+          .pipe(Effect.map(Option.getOrUndefined));
+        const projectTitle =
+          project?.title || project?.workspaceRoot.split(/[\\/]/).at(-1) || "project";
+        const text =
+          event.type === "request.opened"
+            ? [
+                event.payload.appName
+                  ? `${event.payload.appName} 正在等待授权。`
+                  : "T3Code 正在等待授权。",
+                `类型：${event.payload.requestType}`,
+                "请回到 T3Code 会话查看详情并决定是否批准。",
+              ].join("\n")
+            : event.payload.questions
+                .map((question, index) => {
+                  const options = question.options.map((option) => option.label).join(" / ");
+                  return `${index + 1}. ${question.question}${options ? `\n选项：${options}` : ""}`;
+                })
+                .join("\n\n");
+        yield* Effect.promise(() =>
+          publishAttentionNotification({
+            kind,
+            eventId: String(event.eventId),
+            ...(event.requestId ? { requestId: String(event.requestId) } : {}),
+            threadId: String(event.threadId),
+            ...(event.turnId ? { turnId: String(event.turnId) } : {}),
+            project: projectTitle,
+            threadTitle: thread.title,
+            provider: event.provider,
+            text,
+            createdAt: event.createdAt,
+          }),
+        );
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("failed to publish attention notification", {
+                eventType: event.type,
+                threadId: event.threadId,
+                turnId: event.turnId ?? null,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
   );
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
@@ -2401,6 +2611,47 @@ const make = Effect.gen(function* () {
         }
       }
 
+      if (
+        event.type === "turn.completed" &&
+        shouldApplyThreadLifecycle &&
+        eventTurnId !== undefined
+      ) {
+        yield* notificationWorker.enqueue({ event, turnId: eventTurnId });
+      }
+
+      // A normal completion or user abort clears activeTurnId before the later
+      // session.exited event arrives. If it is still present here, the provider
+      // process disappeared without reporting a terminal turn state.
+      const unexpectedInterruption =
+        event.type === "session.exited"
+          ? resolveUnexpectedTurnInterruption(activeTurnId, event.payload.reason)
+          : null;
+      if (event.type === "session.exited" && unexpectedInterruption !== null) {
+        yield* notificationWorker.enqueue({
+          event,
+          turnId: TurnId.make(unexpectedInterruption.turnId),
+          errorMessage: unexpectedInterruption.errorMessage,
+        });
+        if (event.payload.recoverable === true) {
+          yield* scheduleRecoverableTurnRetry(
+            thread.id,
+            event.payload.reason ?? "recoverable provider disconnect",
+          );
+        }
+      }
+
+      if (
+        event.type === "turn.aborted" ||
+        (event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "completed")
+      ) {
+        recoverableRetryAttempts.delete(String(thread.id));
+      }
+
+      if (event.type === "request.opened" || event.type === "user-input.requested") {
+        yield* attentionNotificationWorker.enqueue(event);
+      }
+
       if (event.type === "session.exited") {
         yield* clearTurnStateForSession(thread.id);
       }
@@ -2704,8 +2955,12 @@ const make = Effect.gen(function* () {
 
   return {
     start,
-    // The diff worker feeds the lifecycle worker, so drain it first.
-    drain: diffWorker.drain.pipe(Effect.andThen(worker.drain)),
+    // The diff worker feeds the lifecycle worker, which can enqueue notifications.
+    drain: diffWorker.drain.pipe(
+      Effect.andThen(worker.drain),
+      Effect.andThen(notificationWorker.drain),
+      Effect.andThen(attentionNotificationWorker.drain),
+    ),
   } satisfies ProviderRuntimeIngestionShape;
 });
 

@@ -84,6 +84,40 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+## Retry interrupted work
+
+When a provider reports a recoverable connection or process failure, the environment retries the
+thread up to three times with short backoff. It continues from the conversation's last confirmed
+step instead of resending attachments or assuming unfinished work is safe to repeat. Normal stops,
+pending approvals, and permanent provider errors do not trigger automatic retries.
+
+A failed or interrupted thread shows **Retry** beside its error on web, desktop, and mobile. Retry
+starts a visible follow-up turn asking the agent to inspect what already completed before it
+continues. T3 Code does not call a quiet thread stuck just because it produced no text for a while:
+long builds and tools can legitimately stay silent, so recovery requires an explicit provider exit
+or error signal.
+
+## Schedule agent work
+
+Agents can use `schedule_thread_task` to run a prompt in the current thread at a future time or on
+a recurring interval. Schedules live on the environment server, survive restarts, and continue when
+web, desktop, and mobile clients are closed. Use `list_thread_schedules`,
+`pause_thread_schedule`, `resume_thread_schedule`, or `delete_thread_schedule` to manage them.
+
+A scheduled run never overlaps an active turn or a pending approval or question; the server defers
+it and tries again. After downtime, a recurring schedule runs once and advances to the next future
+slot instead of replaying every missed interval. One-shot schedules remain visible as completed
+after they run.
+
+Agents can create a sequential multi-step workflow with `workflow_start`. Each step runs as its own
+turn and must finish with `workflow_complete_step` or `workflow_fail_step`; the next pending step
+starts only after the thread is idle. Workflow and step state, attempts, and concise results persist
+across restarts. A running step left orphaned for five minutes is retried from its recorded state,
+up to three attempts, then the workflow stops as failed. `workflow_restart_from` reuses the
+completed prefix and clears the selected step plus every later result before re-executing them. Use
+`workflow_list`, `workflow_get`, `workflow_pause`, `workflow_resume`, `workflow_retry_step`, or
+`workflow_cancel` to manage it.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list
@@ -116,7 +150,12 @@ automatic branch links do not appear.
 On web and desktop, right-click a pull request link in a thread and choose
 **Link to thread** to select a different PR. Use **Unlink from thread** on the
 same link to return to the branch PR, if one exists.
-The linked pull request participates in automatic settlement.
+The linked pull request participates in automatic settlement. Pull requests created or linked by an
+agent are also monitored while their thread is active. A new failing CI rollup, changes-requested
+review decision, or merge conflict wakes the thread so the agent can inspect the latest provider
+evidence and address verified findings. Pending checks and review-required states do not wake the
+agent, and each provider-state fingerprint wakes at most once across server restarts. Manually
+linked pull requests remain status-only so adding one for reference never starts the agent.
 
 ## Find and reference work
 
@@ -136,6 +175,31 @@ On web and desktop, use **Agents** to follow work delegated to subagents.
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
+
+## Keep durable work state
+
+Agents can use `thread_ledger_record` to keep a compact goal, phase, concrete next step, artifact
+pointers, and progress events outside the conversation transcript. `thread_ledger_read` returns the
+current record. T3 Code injects a bounded ledger snapshot before later turns, so a restarted
+provider or compacted conversation can resume from the recorded step without re-deriving the whole
+history. Changing the phase requires a classified progress event in the same write.
+
+The ledger is for resumable work state, not source code, secrets, or a second copy of the chat. Its
+injected snapshot is capped and carries only the eight most recent events.
+
+Agents can explicitly save reusable knowledge with `memory_add`. Project-scoped entries are visible
+to later threads in the same project; global entries apply across projects in that environment.
+Lessons are injected automatically into later turns, while ordinary memories stay out of context
+until an agent calls `memory_search`. Search uses local deterministic keyword scoring, and
+`memory_remove` deletes only the specified entry ID. T3 Code does not automatically archive whole
+conversations into memory or send project text to an embedding provider.
+
+Agents can save generated text, Markdown, JSON, HTML, and SVG with `artifact_save`. Artifacts are
+shared by threads in the same project and addressed by a stable slug. `artifact_update` creates a
+new immutable version when content changes, `artifact_versions` lists history, and
+`artifact_revert` restores an older version as a new current version without deleting later
+history. `artifact_delete` permanently removes one artifact and all versions. Stored HTML and SVG
+are returned as data and are never executed by the server.
 
 ## Snooze until later
 

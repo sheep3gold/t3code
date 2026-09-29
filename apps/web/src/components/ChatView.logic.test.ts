@@ -1232,6 +1232,35 @@ describe("resolveComposerProviderSelection", () => {
     ).toEqual({ enabled: false, interactionMode: "default" });
   });
 
+  it("uses the explicitly selected provider when a started thread switches drivers", () => {
+    const original = entry("codex");
+    const selected = entry("claudeAgent", "claude_work");
+    const selection = resolveComposerProviderSelection({
+      entries: [original, selected],
+      candidateInstanceIds: [selected.instanceId, original.instanceId],
+      lockedProvider: null,
+      lockedInstanceId: null,
+      preserveRequestedInstance: true,
+    });
+
+    expect(selection.selectedProviderEntry?.instanceId).toBe(selected.instanceId);
+  });
+
+  it("does not silently fall back when a started thread's selected provider is unavailable", () => {
+    const unavailable = entry("claudeAgent", "claude_work", { enabled: false });
+    const fallback = entry("codex");
+    const selection = resolveComposerProviderSelection({
+      entries: [fallback, unavailable],
+      candidateInstanceIds: [unavailable.instanceId, fallback.instanceId],
+      lockedProvider: null,
+      lockedInstanceId: null,
+      preserveRequestedInstance: true,
+    });
+
+    expect(selection.selectedProviderEntry).toBeUndefined();
+    expect(selection.unavailableProviderInstanceId).toBe(unavailable.instanceId);
+  });
+
   it("uses the fallback provider's plan capability after the draft's instance is disabled", () => {
     const disabledEntry = entry("antigravity", "antigravity", {
       enabled: false,
@@ -1601,7 +1630,7 @@ describe("getStartedThreadModelChangeBlockReason", () => {
     ).toBeNull();
   });
 
-  it("blocks started-session model changes when either provider requires a new thread", () => {
+  it("allows a started thread to switch provider instances with a fresh native session", () => {
     expect(
       getStartedThreadModelChangeBlockReason({
         providers,
@@ -1613,6 +1642,23 @@ describe("getStartedThreadModelChangeBlockReason", () => {
         nextModelSelection: {
           instanceId: ProviderInstanceId.make("grok"),
           model: "grok-build",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("blocks started-session model changes within a restricted provider", () => {
+    expect(
+      getStartedThreadModelChangeBlockReason({
+        providers,
+        hasStartedSession: true,
+        currentModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-build",
+        },
+        nextModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-other",
         },
       }),
     ).toEqual({

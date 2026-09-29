@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
-import { CircleAlertIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function getThreadErrorBannerKey(threadKey: string, error: string | null): string | null {
@@ -36,9 +36,13 @@ export function isThreadErrorBannerDismissedForSession(bannerKey: string | null)
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
   onDismiss,
+  onRetry,
+  retrying = false,
 }: {
   error: string | null;
   onDismiss?: () => void;
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   if (!error) return null;
   return (
@@ -53,11 +57,26 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
             </TooltipPopup>
           </Tooltip>
         </AlertDescription>
-        {onDismiss && (
+        {(onRetry || onDismiss) && (
           <AlertAction>
-            <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
-              <XIcon className="text-destructive" />
-            </Button>
+            <div className="flex items-center gap-1">
+              {onRetry ? (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={retrying}
+                  onClick={onRetry}
+                >
+                  <RefreshCwIcon />
+                  {retrying ? "Retrying…" : "Retry"}
+                </Button>
+              ) : null}
+              {onDismiss ? (
+                <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
+                  <XIcon className="text-destructive" />
+                </Button>
+              ) : null}
+            </div>
           </AlertAction>
         )}
       </Alert>

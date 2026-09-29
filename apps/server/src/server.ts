@@ -23,6 +23,8 @@ import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
+  providerUsageSummaryRouteLayer,
+  providerModelsRouteLayer,
   assetRouteLayer,
   attachmentUploadRouteLayer,
   serverEnvironmentHttpApiLayer,
@@ -152,6 +154,17 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { artifactsHttpApiLayer } from "./artifacts/http.ts";
+import { schedulesHttpApiLayer } from "./schedules/http.ts";
+import { workflowsHttpApiLayer } from "./workflows/http.ts";
+import { memoryLedgerHttpApiLayer } from "./memoryLedger/http.ts";
+import { threadWebhookRouteLayer } from "./orchestration/ThreadWebhook.ts";
+import * as ThreadSchedulesRepository from "./persistence/ThreadSchedules.ts";
+import * as ThreadPullRequestMonitors from "./persistence/ThreadPullRequestMonitors.ts";
+import * as ThreadLedgerPersistence from "./persistence/ThreadLedger.ts";
+import * as AgentMemoryPersistence from "./persistence/AgentMemories.ts";
+import * as ArtifactPersistence from "./persistence/Artifacts.ts";
+import * as WorkflowPersistence from "./persistence/ThreadWorkflows.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -273,6 +286,24 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
+const ThreadScheduleRepositoryLayerLive = ThreadSchedulesRepository.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const ThreadPullRequestMonitorRepositoryLayerLive = ThreadPullRequestMonitors.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const ThreadLedgerRepositoryLayerLive = ThreadLedgerPersistence.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const AgentMemoryRepositoryLayerLive = AgentMemoryPersistence.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const ArtifactRepositoryLayerLive = ArtifactPersistence.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const WorkflowRepositoryLayerLive = WorkflowPersistence.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
 
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
@@ -500,6 +531,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(ThreadScheduleRepositoryLayerLive),
+  Layer.provideMerge(ThreadPullRequestMonitorRepositoryLayerLive),
+  Layer.provideMerge(ThreadLedgerRepositoryLayerLive),
+  Layer.provideMerge(AgentMemoryRepositoryLayerLive),
+  Layer.provideMerge(ArtifactRepositoryLayerLive),
+  Layer.provideMerge(WorkflowRepositoryLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
   Layer.provideMerge(
@@ -575,13 +612,20 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(artifactsHttpApiLayer),
+      Layer.provide(schedulesHttpApiLayer),
+      Layer.provide(workflowsHttpApiLayer),
+      Layer.provide(memoryLedgerHttpApiLayer),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
     otlpTracesProxyRouteLayer,
+    providerUsageSummaryRouteLayer,
+    providerModelsRouteLayer,
     assetRouteLayer,
     attachmentUploadRouteLayer,
+    threadWebhookRouteLayer,
     deviceHubProxyRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,

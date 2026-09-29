@@ -68,6 +68,8 @@ import {
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import * as ThreadLedgerPersistence from "../../persistence/ThreadLedger.ts";
+import * as AgentMemoryPersistence from "../../persistence/AgentMemories.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -120,7 +122,9 @@ describe("ProviderCommandReactor", () => {
     | OrchestrationEngineService
     | ProviderCommandReactor
     | ProjectionSnapshotQuery
-    | SqlClient.SqlClient,
+    | SqlClient.SqlClient
+    | AgentMemoryPersistence.AgentMemoryRepository
+    | ThreadLedgerPersistence.ThreadLedgerRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -491,6 +495,8 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ThreadLedgerPersistence.layer),
+      Layer.provideMerge(AgentMemoryPersistence.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -500,7 +506,14 @@ describe("ProviderCommandReactor", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
-    const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    const runEffect = <A, E>(
+      effect: Effect.Effect<
+        A,
+        E,
+        | AgentMemoryPersistence.AgentMemoryRepository
+        | ThreadLedgerPersistence.ThreadLedgerRepository
+      >,
+    ) => runtime!.runPromise(effect);
 
     await Effect.runPromise(
       engine.dispatch({
@@ -848,6 +861,76 @@ describe("ProviderCommandReactor", () => {
       );
     }),
   );
+
+  it("injects the durable thread ledger before the current provider request", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    await harness.runEffect(
+      AgentMemoryPersistence.AgentMemoryRepository.pipe(
+        Effect.flatMap((repository) =>
+          repository.upsert({
+            id: "memory-1",
+            fingerprint: "lesson-fingerprint",
+            kind: "lesson",
+            scope: "project",
+            projectId: asProjectId("project-1"),
+            content: "Always run the focused test before publishing.",
+            negative: "Do not claim success from a build alone.",
+            tags: ["validation"],
+            sourceThreadId: threadId,
+            now: "2026-01-01T00:00:00.000Z",
+          }),
+        ),
+      ),
+    );
+    await harness.runEffect(
+      ThreadLedgerPersistence.ThreadLedgerRepository.pipe(
+        Effect.flatMap((repository) =>
+          repository.record({
+            threadId,
+            state: {
+              goal: "Ship the feature",
+              phase: "validating",
+              next: "Run focused tests",
+              artifacts: { branch: "feat/ledger" },
+            },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            event: { kind: "progress", message: "Implementation completed" },
+          }),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-ledger-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-ledger"),
+          role: "user",
+          text: "Continue now",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input =
+      (harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined)?.input ?? "";
+    expect(input).toContain("[Saved lessons — reusable behavior for this environment/project]");
+    expect(input).toContain("Always run the focused test before publishing.");
+    expect(input).toContain("Avoid: Do not claim success from a build alone.");
+    expect(input).toContain("[Persistent thread ledger — durable resume state]");
+    expect(input).toContain("Goal: Ship the feature");
+    expect(input).toContain("Next: Run focused tests");
+    expect(input).toContain("[Current turn request]\nContinue now");
+    expect(input.indexOf("Saved lessons")).toBeLessThan(input.indexOf("Goal: Ship the feature"));
+    expect(input.indexOf("Goal: Ship the feature")).toBeLessThan(input.indexOf("Continue now"));
+  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
@@ -3450,7 +3533,7 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("full-access");
   });
 
-  it("rejects provider changes after a thread is already bound to a session provider", async () => {
+  it("switches providers with a fresh native session and a persisted-history handoff", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -3495,36 +3578,61 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      return (
-        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
-        false
-      );
-    });
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
 
-    expect(harness.startSession.mock.calls.length).toBe(1);
-    expect(harness.sendTurn.mock.calls.length).toBe(1);
-    expect(harness.stopSession.mock.calls.length).toBe(0);
+    const replacementStart = harness.startSession.mock.calls[1]?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(replacementStart).toMatchObject({
+      provider: "claudeAgent",
+      providerInstanceId: "claudeAgent",
+      modelSelection: { instanceId: "claudeAgent", model: "claude-opus-4-6" },
+    });
+    expect(replacementStart).not.toHaveProperty("resumeCursor");
+
+    const replacementTurn = harness.sendTurn.mock.calls[1]?.[0] as
+      | { readonly input?: string; readonly modelSelection?: ModelSelection }
+      | undefined;
+    expect(replacementTurn?.modelSelection).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-4-6",
+    });
+    expect(replacementTurn?.input).toContain("[T3 Code provider handoff]");
+    expect(replacementTurn?.input).toContain("User:\nfirst");
+    expect(replacementTurn?.input).toContain("[Current turn request]\nsecond");
+    expect(replacementTurn?.input?.match(/second/g)).toHaveLength(1);
 
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.session?.threadId).toBe("thread-1");
-    expect(thread?.session?.providerName).toBe("codex");
-    expect(thread?.session?.runtimeMode).toBe("approval-required");
+    expect(thread?.session?.providerName).toBe("claudeAgent");
+    expect(thread?.session?.providerInstanceId).toBe("claudeAgent");
     expect(
-      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
-    ).toMatchObject({
-      payload: {
-        detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
-      },
-    });
+      thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toBe(false);
   });
 
-  it("rejects cross-driver provider changes after the existing thread session has stopped", async () => {
+  it("switches providers after the existing native session has stopped", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-stopped-provider-switch"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-stopped-provider-switch"),
+          role: "user",
+          text: "existing context",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3566,26 +3674,18 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      return (
-        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
-        false
-      );
-    });
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const replacementTurn = harness.sendTurn.mock.calls[1]?.[0] as
+      | { readonly input?: string }
+      | undefined;
+    expect(replacementTurn?.input).toContain("User:\nexisting context");
+    expect(replacementTurn?.input).toContain("[Current turn request]\ncontinue with claude");
 
-    expect(harness.startSession.mock.calls.length).toBe(0);
-    expect(harness.sendTurn.mock.calls.length).toBe(0);
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(
-      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
-    ).toMatchObject({
-      payload: {
-        detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
-      },
-    });
+    expect(thread?.session?.providerName).toBe("claudeAgent");
+    expect(thread?.session?.providerInstanceId).toBe("claudeAgent");
   });
 
   it("reacts to thread.turn.interrupt-requested by calling provider interrupt", async () => {

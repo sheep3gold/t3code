@@ -4,6 +4,8 @@ import {
   resetVoiceInputGlobalsForTests,
   resolveTranscriptCommit,
   VoiceInputController,
+  VOICE_PREPARATION_TIMEOUT_MS,
+  VOICE_TRANSCRIPTION_TIMEOUT_MS,
   VOICE_RECORDING_LIMIT_SECONDS,
   voiceInputBlocksSubmission,
   type VoiceDraftSnapshot,
@@ -151,6 +153,83 @@ describe("resolveTranscriptCommit", () => {
 
 describe("VoiceInputController", () => {
   beforeEach(() => resetVoiceInputGlobalsForTests());
+
+  it("recovers a wedged session by stealing the lock on the next start", async () => {
+    const wedgedPreparation = deferred<PreparedVoiceTranscription>();
+    const wedgedEntered = deferred<void>();
+    const wedged = createHarness({
+      getTranscriber: () => ({
+        prepare: () => {
+          wedgedEntered.resolve();
+          return wedgedPreparation.promise;
+        },
+      }),
+    });
+    const wedgedStart = wedged.controller.start();
+    await wedgedEntered.promise;
+    // Never cancel; the preparation hangs forever, which previously left the
+    // global session locked until process restart.
+
+    const next = createHarness();
+    await next.controller.start();
+    expect(next.controller.currentState.phase).toBe("recording");
+    await next.controller.interruptRecording();
+
+    wedged.controller.dispose();
+    wedgedPreparation.resolve(preparedTranscription());
+    await wedgedStart;
+  });
+
+  it("times out a preparation that never settles and frees the session", async () => {
+    vi.useFakeTimers();
+    try {
+      const hangingPreparation = deferred<PreparedVoiceTranscription>();
+      const harness = createHarness({
+        getTranscriber: () => ({ prepare: () => hangingPreparation.promise }),
+      });
+      const starting = harness.controller.start();
+      await vi.advanceTimersByTimeAsync(VOICE_PREPARATION_TIMEOUT_MS * 2 + 1);
+      await starting;
+
+      expect(harness.controller.currentState.phase).toBe("idle");
+      expect(harness.recorder.record).not.toHaveBeenCalled();
+
+      const next = createHarness();
+      await next.controller.start();
+      expect(next.controller.currentState.phase).toBe("recording");
+      await next.controller.interruptRecording();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a transcription that never settles and frees the operation slot", async () => {
+    vi.useFakeTimers();
+    try {
+      const hangingTranscription = deferred<string>();
+      const harness = createHarness({
+        getTranscriber: () => ({
+          prepare: async () => preparedTranscription(() => hangingTranscription.promise),
+        }),
+      });
+      await harness.controller.start();
+      expect(harness.controller.currentState.phase).toBe("recording");
+
+      const stopping = harness.controller.stop();
+      await vi.advanceTimersByTimeAsync(VOICE_TRANSCRIPTION_TIMEOUT_MS + 1);
+      await stopping;
+
+      expect(harness.controller.currentState.error).toContain("took too long");
+      expect(harness.commits).toEqual([]);
+
+      const next = createHarness();
+      await next.controller.start();
+      expect(next.controller.currentState.phase).toBe("recording");
+      await next.controller.interruptRecording();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("checks support and permission before recording", async () => {
     const unsupported = createHarness({ getTranscriber: () => null });
@@ -321,10 +400,12 @@ describe("VoiceInputController", () => {
       harness.controller[action]();
       expect(signal.aborted).toBe(true);
 
+      // A new session recovers immediately by stealing the wedged locks; the
+      // orphaned transcription becomes a no-op when it settles.
       const next = createHarness();
       await next.controller.start();
-      expect(next.controller.currentState.error).toContain("already active");
-      expect(next.recorder.record).not.toHaveBeenCalled();
+      expect(next.controller.currentState.phase).toBe("recording");
+      await next.controller.interruptRecording();
 
       transcription.resolve("late text");
       await stopping;
@@ -332,10 +413,6 @@ describe("VoiceInputController", () => {
       expect(harness.commits).toEqual([]);
       expect(harness.deleted).toEqual(["file:///voice.m4a"]);
       expect(harness.controller.currentState.phase).toBe("idle");
-
-      await next.controller.start();
-      expect(next.controller.currentState.phase).toBe("recording");
-      await next.controller.interruptRecording();
     },
   );
 
@@ -431,7 +508,7 @@ describe("VoiceInputController", () => {
     expect(harness.controller.currentState.error).toContain("draft changed");
   });
 
-  it("keeps the app-wide session locked until canceled preparation settles", async () => {
+  it("recovers the app-wide session while a canceled preparation is still settling", async () => {
     const preparation = deferred<PreparedVoiceTranscription>();
     const preparationEntered = deferred<AbortSignal>();
     const first = createHarness({
@@ -447,14 +524,14 @@ describe("VoiceInputController", () => {
     first.controller.cancel();
     expect(signal.aborted).toBe(true);
 
-    const blocked = createHarness();
-    await blocked.controller.start();
-    expect(blocked.controller.currentState.error).toContain("already active");
+    const recovered = createHarness();
+    await recovered.controller.start();
+    expect(recovered.controller.currentState.phase).toBe("recording");
 
     preparation.resolve(preparedTranscription());
     await firstStart;
     expect(first.recorder.record).not.toHaveBeenCalled();
-    blocked.controller.cancel();
+    await recovered.controller.interruptRecording();
 
     const next = createHarness();
     await next.controller.start();

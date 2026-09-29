@@ -449,7 +449,9 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             threadId: context.threadId,
             payload: {
               exitKind: context.disconnected ? "error" : "graceful",
-              ...(context.disconnected ? { reason: "Antigravity process stopped." } : {}),
+              ...(context.disconnected
+                ? { reason: "Antigravity process stopped.", recoverable: true }
+                : {}),
             },
           });
         }),

@@ -29,6 +29,11 @@ import {
   type RenderFailureProps,
 } from "./components/RenderErrorBoundary";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
+import {
+  SettingsArtifactDetailRouteScreen,
+  SettingsArtifactsRouteScreen,
+} from "./features/artifacts/ArtifactLibraryRouteScreens";
+import { SettingsSchedulesRouteScreen } from "./features/schedules/SettingsSchedulesRouteScreen";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
@@ -71,6 +76,7 @@ import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppea
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
+import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import {
   SettingsEnvironmentAgentBehaviorRouteScreen,
@@ -192,6 +198,11 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Environments",
       },
+    }),
+    SettingsEnvironmentDetail: createNativeStackScreen({
+      screen: SettingsEnvironmentDetailRouteScreen,
+      linking: "environments/:environmentId",
+      options: { title: "Environment" },
     }),
     SettingsEnvironmentNewThreads: createNativeStackScreen({
       screen: SettingsEnvironmentNewThreadsRouteScreen,
@@ -315,6 +326,21 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "License notice",
       },
+    }),
+    SettingsArtifacts: createNativeStackScreen({
+      screen: SettingsArtifactsRouteScreen,
+      linking: "artifacts",
+      options: { title: "Artifacts" },
+    }),
+    SettingsArtifactDetail: createNativeStackScreen({
+      screen: SettingsArtifactDetailRouteScreen,
+      linking: "artifacts/:slug",
+      options: { title: "Artifact" },
+    }),
+    SettingsSchedules: createNativeStackScreen({
+      screen: SettingsSchedulesRouteScreen,
+      linking: "schedules",
+      options: { title: "Schedules" },
     }),
     SettingsUsage: createNativeStackScreen({
       screen: UsageRouteScreen,

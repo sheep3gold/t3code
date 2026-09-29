@@ -1243,7 +1243,13 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map(({ pr }) => pr),
       Effect.catch((error) =>
-        Effect.logWarning("PR lookup failed; keeping last known PR state.").pipe(
+        // A repository whose remote is no known host (or has no remote at all)
+        // has no pull requests to find; status polling would otherwise warn
+        // about it every refresh.
+        (isSourceControlProviderError(error) && error.provider === "unknown"
+          ? Effect.logDebug("PR lookup skipped; no source control provider for this remote.")
+          : Effect.logWarning("PR lookup failed; keeping last known PR state.")
+        ).pipe(
           Effect.annotateLogs({
             operation: "lookupStatusPr",
             branch: details.branch,

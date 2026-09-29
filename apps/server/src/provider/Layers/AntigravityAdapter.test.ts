@@ -1202,6 +1202,7 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       });
       const exited = yield* h.waitForEvent((event) => event.type === "session.exited");
       expect(exited.payload.exitKind).toBe("error");
+      expect(exited.payload.recoverable).toBe(true);
       expect(yield* h.adapter.hasSession(threadId)).toBe(false);
       expect(
         Exit.isFailure(yield* h.adapter.sendTurn({ threadId, input: "Hello" }).pipe(Effect.exit)),

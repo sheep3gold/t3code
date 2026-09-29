@@ -174,6 +174,7 @@ import {
 import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
+import { parseAssistantOptions } from "./assistant-options";
 import {
   assetEnvironment,
   useAssetUrl,
@@ -1515,7 +1516,11 @@ function renderFeedEntry(
       );
     }
     const isUser = message.role === "user";
-    const renderedText = renderAssistantCitationsAsText(message.text);
+    const parsedOptions =
+      message.role === "assistant" && !message.streaming
+        ? parseAssistantOptions(message.text)
+        : null;
+    const renderedText = renderAssistantCitationsAsText(parsedOptions?.body ?? message.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];

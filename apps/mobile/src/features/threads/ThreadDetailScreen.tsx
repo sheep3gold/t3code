@@ -86,10 +86,13 @@ import type {
   ThreadFeedEntry,
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
+import { AssistantOptionChips } from "./AssistantOptionChips";
+import { parseAssistantOptions, toggleOptionInPrompt } from "./assistant-options";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
+import { ThreadRetryCard } from "./ThreadRetryCard";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
@@ -118,6 +121,9 @@ export interface ThreadDetailScreenProps {
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
   readonly connectionError: string | null;
+  readonly threadError: string | null;
+  readonly retryingThread: boolean;
+  readonly onRetryThread: () => void;
   readonly environmentLabel: string | null;
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
@@ -165,6 +171,7 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onSendOption: (label: string) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
@@ -417,6 +424,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       (entry) => "acknowledged" in entry && entry.acknowledged === true,
     );
   const selectedThreadFeed = props.selectedThreadFeed;
+  const activeOptionLabels = useMemo<ReadonlyArray<string>>(() => {
+    for (let index = selectedThreadFeed.length - 1; index >= 0; index -= 1) {
+      const entry = selectedThreadFeed[index];
+      if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
+      if (entry.message.streaming) return [];
+      return parseAssistantOptions(entry.message.text)?.options ?? [];
+    }
+    return [];
+  }, [selectedThreadFeed]);
   const hasCompactableConversation =
     selectedThreadFeed.some(
       (entry) =>
@@ -798,6 +814,57 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     selectedThreadKey,
   ]);
 
+  const handleOptionToggle = useCallback(
+    (label: string) => {
+      const current = draftMessageRef.current;
+      const next = toggleOptionInPrompt(current, label);
+      if (next === current) return;
+      void Haptics.selectionAsync();
+      draftMessageRef.current = next;
+      props.onChangeDraftMessage(next);
+      requestAnimationFrame(() => {
+        composerEditorRef.current?.focus();
+        composerEditorRef.current?.setSelection({ start: next.length, end: next.length });
+      });
+    },
+    [props.onChangeDraftMessage],
+  );
+
+  const handleOptionSend = useCallback(
+    async (label: string) => {
+      const targetThreadKey = selectedThreadKey;
+      const hasUserMessage = selectedThreadFeed.some(
+        (entry) => entry.type === "message" && entry.message.role === "user",
+      );
+      const messageId = await props.onSendOption(label);
+      if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
+        return messageId;
+      }
+      void Haptics.selectionAsync();
+      clearUsageLimitsFor(targetThreadKey);
+      setSubmittedMessageId(messageId);
+      setAnchorMessageId(
+        resolveThreadFeedSubmissionAnchor({
+          currentAnchorMessageId: anchorMessageId,
+          submittedMessageId: messageId,
+          hasStartedTurn: props.selectedThread.latestTurn !== null,
+          hasUserMessage,
+          queuedMessageCount: props.selectedThreadQueueCount,
+        }),
+      );
+      return messageId;
+    },
+    [
+      anchorMessageId,
+      clearUsageLimitsFor,
+      props.onSendOption,
+      props.selectedThread.latestTurn,
+      props.selectedThreadQueueCount,
+      selectedThreadFeed,
+      selectedThreadKey,
+    ],
+  );
+
   const handleEditPendingMessage = useCallback(async (message: QueuedThreadMessage) => {
     try {
       if (
@@ -998,6 +1065,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     />
                   </Animated.View>
                 ) : null}
+                {props.threadError !== null && props.creationState === null ? (
+                  <Animated.View
+                    className="shrink-0 px-4 pb-3"
+                    entering={FadeInDown.duration(220)}
+                    exiting={FadeOut.duration(140)}
+                  >
+                    <ThreadRetryCard
+                      error={props.threadError}
+                      retrying={props.retryingThread}
+                      onRetry={props.onRetryThread}
+                    />
+                  </Animated.View>
+                ) : null}
                 {props.creationState?.kind === "failed" ? (
                   <Animated.View
                     className="shrink-0 px-4"
@@ -1065,6 +1145,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     : undefined
                 }
               >
+                {activeOptionLabels.length > 0 &&
+                !props.activePendingApproval &&
+                !props.activePendingUserInput ? (
+                  <AssistantOptionChips
+                    options={activeOptionLabels}
+                    prompt={props.draftMessage}
+                    onToggle={handleOptionToggle}
+                    onSend={(label) => void handleOptionSend(label)}
+                  />
+                ) : null}
                 <ThreadComposer
                   editorRef={composerEditorRef}
                   draftMessage={props.draftMessage}

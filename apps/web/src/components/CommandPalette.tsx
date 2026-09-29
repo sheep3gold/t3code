@@ -42,12 +42,15 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  CalendarClockIcon,
+  BrainIcon,
   ChartNoAxesColumnIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
   LinkIcon,
+  LibraryBigIcon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
@@ -56,6 +59,7 @@ import {
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -2016,6 +2020,50 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:artifacts",
+    searchTerms: ["artifacts", "library", "saved", "versions", "documents"],
+    title: "Open artifact library",
+    icon: <LibraryBigIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/artifacts" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:schedules",
+    searchTerms: ["schedules", "scheduled tasks", "cron", "recurring", "automation"],
+    title: "Open schedules",
+    icon: <CalendarClockIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/schedules" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:workflows",
+    searchTerms: ["workflows", "steps", "automation", "retry", "durable"],
+    title: "Open workflows",
+    icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/workflows" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:memory",
+    searchTerms: ["memory", "memories", "lessons", "ledger", "resume state"],
+    title: "Open memory and ledgers",
+    icon: <BrainIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/memory" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

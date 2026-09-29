@@ -261,6 +261,19 @@ export const CursorIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+export const MiniMaxIcon: Icon = ({ className, ...props }) => (
+  <svg {...props} className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M4 18V6l8 7 8-7v12"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M8 18v-5m8 5v-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
+
 export const GrokIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}
