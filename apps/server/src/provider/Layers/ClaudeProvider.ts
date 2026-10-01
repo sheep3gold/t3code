@@ -1,6 +1,7 @@
 import {
   type ClaudeSettings,
   type ModelCapabilities,
+  type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -416,6 +417,29 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
 });
 
+/**
+ * Built-ins plus custom models, or only the custom models when the instance
+ * sets `T3_CLAUDE_CUSTOM_MODELS_ONLY` (an Anthropic-compatible gateway that
+ * serves none of the built-in Claude models). The first custom model is then
+ * the default.
+ */
+export function selectVisibleClaudeModels(
+  builtInModels: ReadonlyArray<ServerProviderModel>,
+  customModels: ClaudeSettings["customModels"],
+  environment: NodeJS.ProcessEnv,
+): ReadonlyArray<ServerProviderModel> {
+  if (!/^(?:1|true|yes|on)$/i.test(environment.T3_CLAUDE_CUSTOM_MODELS_ONLY ?? "")) {
+    return providerModelsFromSettings(
+      builtInModels,
+      customModels,
+      DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+    );
+  }
+  return providerModelsFromSettings([], customModels, DEFAULT_CLAUDE_MODEL_CAPABILITIES).map(
+    (model, index) => (index === 0 ? { ...model, isDefault: true } : model),
+  );
+}
+
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
@@ -433,10 +457,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const allModels = providerModelsFromSettings(
+  const allModels = selectVisibleClaudeModels(
     modelCatalog.models.map((entry) => entry.model),
     claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+    resolvedEnvironment,
   );
 
   if (!claudeSettings.enabled) {
@@ -564,10 +588,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const models = providerModelsFromSettings(
+  const models = selectVisibleClaudeModels(
     resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
     claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+    resolvedEnvironment,
   );
   const versionUpgradeMessage = formatClaudeVersionUpgradeMessage(modelCatalog, parsedVersion);
 
@@ -636,13 +660,14 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 export const makePendingClaudeProvider = (
   claudeSettings: ClaudeSettings,
   modelCatalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
+  environment: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<ServerProviderDraft> =>
   Effect.gen(function* () {
     const checkedAt = yield* nowIso;
-    const models = providerModelsFromSettings(
+    const models = selectVisibleClaudeModels(
       modelCatalog.models.map((entry) => entry.model),
       claudeSettings.customModels,
-      DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+      environment,
     );
 
     if (!claudeSettings.enabled) {
