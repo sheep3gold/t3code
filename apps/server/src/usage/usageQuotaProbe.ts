@@ -248,13 +248,28 @@ const glmProbe = (
       .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
       .pipe(Effect.mapError(probeError("glm")));
     const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError("glm")));
-    const env =
+    const record =
       typeof settings === "object" && settings !== null
-        ? (settings as { env?: Record<string, unknown> }).env
+        ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
+        : {};
+    // `apiKeyHelper` is `<script> <etcd-key-path>`; the path is the argument.
+    const helperArg =
+      typeof record.apiKeyHelper === "string"
+        ? record.apiKeyHelper
+            .trim()
+            .split(/\s+/)
+            .findLast((part) => part.startsWith("/"))
         : undefined;
-    const token = typeof env?.ANTHROPIC_AUTH_TOKEN === "string" ? env.ANTHROPIC_AUTH_TOKEN : "";
+    const staticKey =
+      typeof record.env?.ANTHROPIC_AUTH_TOKEN === "string"
+        ? record.env.ANTHROPIC_AUTH_TOKEN
+        : undefined;
+    const token = yield* resolveEtcdKey(
+      helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
+      staticKey,
+    );
     if (token.length === 0) {
-      return windowUnavailable(checkedAt, "glm settings.json 缺少 ANTHROPIC_AUTH_TOKEN");
+      return windowUnavailable(checkedAt, "glm 缺少可用的 API key");
     }
 
     const document = yield* getJson(
@@ -642,10 +657,16 @@ const kimiProbe = (
 /* Factory (Droid subscription token allowance)                         */
 /* ------------------------------------------------------------------ */
 
-interface FactoryAllowance {
-  readonly orgTotalTokensUsed?: number;
-  readonly totalAllowance?: number;
-  readonly usedRatio?: number;
+interface FactoryBillingWindow {
+  readonly usedPercent?: number;
+  readonly windowEnd?: string | null;
+  readonly secondsRemaining?: number | null;
+}
+
+interface FactoryBillingTier {
+  readonly fiveHour?: FactoryBillingWindow;
+  readonly weekly?: FactoryBillingWindow;
+  readonly monthly?: FactoryBillingWindow;
 }
 
 const factoryProbe = (
@@ -656,37 +677,43 @@ const factoryProbe = (
     const key = yield* resolveEtcdKey(etcdKey, process.env.FACTORY_API_KEY);
     if (key.length === 0) return windowUnavailable(checkedAt, "factory 缺少可用的 API key");
 
-    const document = yield* getJsonViaXjp(
-      "factory",
-      "api.factory.ai",
-      "/api/organization/subscription/usage",
-      key,
-      { "User-Agent": "droid/0.233.0" },
-    );
-    const usage =
+    const document = yield* getJsonViaXjp("factory", "api.factory.ai", "/api/billing/limits", key, {
+      "User-Agent": "droid/0.233.0",
+    });
+    const limits =
       typeof document === "object" && document !== null
-        ? (document as { usage?: { standard?: FactoryAllowance; premium?: FactoryAllowance } })
-            .usage
+        ? (
+            document as {
+              limits?: { standard?: FactoryBillingTier; core?: FactoryBillingTier };
+            }
+          ).limits
         : undefined;
 
     const windows: ServerProviderUsageWindow[] = [];
-    for (const [id, name, allowance] of [
-      ["standard_tokens", "标准 token 额度", usage?.standard],
-      ["premium_tokens", "高级 token 额度", usage?.premium],
-    ] as const) {
-      if (allowance === undefined || typeof allowance.totalAllowance !== "number") continue;
-      if (allowance.totalAllowance <= 0) continue;
-      const used = allowance.orgTotalTokensUsed ?? 0;
-      const ratio =
-        typeof allowance.usedRatio === "number"
-          ? allowance.usedRatio
-          : used / allowance.totalAllowance;
-      windows.push({
-        id,
-        kind: "monthly",
-        label: `${name}（${formatCompactCount(used)} / ${formatCompactCount(allowance.totalAllowance)}）`,
-        usedPercent: Math.max(0, Math.min(100, ratio * 100)),
-      });
+    const tiers = [
+      ["standard", "标准", limits?.standard],
+      ["core", "Droid Core", limits?.core],
+    ] as const;
+    const windowDefs = [
+      ["fiveHour", "5 小时", "session", 300] as const,
+      ["weekly", "周", "weekly", 7 * 24 * 60] as const,
+      ["monthly", "月", "monthly", 30 * 24 * 60] as const,
+    ] as const;
+    for (const [tierId, tierName, tier] of tiers) {
+      if (tier === undefined) continue;
+      for (const [winKey, winLabel, kind, durationMins] of windowDefs) {
+        const win = tier[winKey];
+        if (win === undefined || typeof win.usedPercent !== "number") continue;
+        if (win.usedPercent === 0 && win.windowEnd == null) continue;
+        windows.push({
+          id: `${tierId}_${winKey}`,
+          kind,
+          label: `${tierName} ${winLabel}用量`,
+          windowDurationMins: durationMins,
+          usedPercent: Math.max(0, Math.min(100, win.usedPercent)),
+          ...(typeof win.windowEnd === "string" ? { resetsAt: win.windowEnd } : {}),
+        });
+      }
     }
     if (windows.length === 0) return windowUnavailable(checkedAt, "Factory 用量接口未返回额度");
     return { checkedAt, windows } satisfies ServerProviderUsageLimits;
