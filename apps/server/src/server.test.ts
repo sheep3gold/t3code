@@ -2362,6 +2362,40 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves the usage summary without credentials for allowlisted proxies", () =>
+    Effect.gen(function* () {
+      const provider = {
+        instanceId: ProviderInstanceId.make("codex-xjp"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex Plus · XJP",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([provider]) },
+        },
+      });
+
+      // No cookie and no bearer token: the nginx allowlist in front of this
+      // route is the access boundary, so the summary must still resolve.
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-usage-summary"));
+      const summary = yield* responseJsonEffect<{
+        providers: Array<{ id: string }>;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(summary.providers[0]?.id, "codex-xjp");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves authenticated provider model lists", () =>
     Effect.gen(function* () {
       const provider = {
