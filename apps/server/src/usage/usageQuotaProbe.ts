@@ -2,7 +2,7 @@
  * usageQuotaProbe — per-request, short-cached quota reads for the provider
  * usage summary endpoint.
  *
- * Five probe kinds, each reading state the provider CLIs and hubs already
+ * Six probe kinds, each reading state the provider CLIs and hubs already
  * hold locally; nothing here invents a credential:
  *
  * - `glm`: Zhipu's `GET /api/monitor/usage/quota/limit`, authenticated with
@@ -24,6 +24,10 @@
  *   data behind app.factory.ai/settings/usage, authenticated with the same
  *   etcd-held key the Droid provider spawns with and riding the same xjp
  *   proxy so every Factory egress leaves through the chosen node.
+ * - `minimax`: `GET www.minimaxi.com/v1/api/openplatform/coding_plan/remains`,
+ *   the endpoint `mcode` itself polls, authenticated with the API key the
+ *   instance's `config.yaml` (`minimax_api.apiKey`) already holds. Reports
+ *   the 5-hour window and the weekly window (`status 3` = unlimited).
  *
  * Results are cached briefly so the model-usage page's 30s polling does not
  * turn into upstream traffic on every refresh. Probe failures degrade to a
@@ -62,6 +66,8 @@ const WORKBUDDY_ACCOUNTS_DIR = "/home/ubuntu/.workbuddy2api-hub/accounts";
 const WORKBUDDY_CREDITS_STALE_MS = 24 * 60 * 60 * 1000;
 const GLM_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 const KIMI_BALANCE_URL = "https://api.moonshot.cn/v1/users/me/balance";
+const MINIMAX_REMAINS_URL = "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+const MINIMAX_CONFIG_FILE = "config.yaml";
 const ANTHROPIC_OAUTH_USAGE_PATH = "/api/oauth/usage";
 /** Local CONNECT exit the xjp CLI rides (see /usr/local/bin/claude-xjp). */
 const XJP_PROXY_HOST = "127.0.0.1";
@@ -723,10 +729,112 @@ const factoryProbe = (
   });
 
 /* ------------------------------------------------------------------ */
+/* MiniMax (Token Plan windows, same endpoint `mcode` polls)            */
+/* ------------------------------------------------------------------ */
+
+interface MinimaxModelRemain {
+  readonly model_name?: string;
+  readonly end_time?: number;
+  readonly weekly_end_time?: number;
+  readonly current_interval_status?: number;
+  readonly current_interval_remaining_percent?: number;
+  readonly current_weekly_status?: number;
+  readonly current_weekly_remaining_percent?: number;
+}
+
+/** `minimax_api.apiKey` from mcode's config.yaml, without a YAML parser. */
+const minimaxApiKey = (configText: string): string =>
+  /^minimax_api:[ \t]*\r?\n[ \t]+apiKey:[ \t]*["']?([^\s"']+)/m.exec(configText)?.[1] ?? "";
+
+const minimaxProbe = (
+  client: HttpClient.HttpClient,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  dataDir: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const configText = yield* fileSystem
+      .readFileString(path.join(dataDir, MINIMAX_CONFIG_FILE))
+      .pipe(Effect.mapError(probeError("minimax")));
+    const key = minimaxApiKey(configText);
+    if (key.length === 0) return windowUnavailable(checkedAt, "minimax 缺少可用的 API key");
+
+    const document = yield* getJson(
+      client,
+      "minimax",
+      HttpClientRequest.get(MINIMAX_REMAINS_URL).pipe(
+        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+        HttpClientRequest.acceptJson,
+      ),
+    );
+    const body =
+      typeof document === "object" && document !== null
+        ? (document as {
+            base_resp?: { status_code?: number; status_msg?: string };
+            model_remains?: MinimaxModelRemain[];
+          })
+        : {};
+    if (typeof body.base_resp?.status_code === "number" && body.base_resp.status_code !== 0) {
+      return windowUnavailable(
+        checkedAt,
+        `MiniMax 额度接口：${body.base_resp.status_msg ?? "失败"}`,
+      );
+    }
+    // The first entry is the text-model pool; video has its own count quota.
+    const general = body.model_remains?.[0];
+    if (general === undefined) return windowUnavailable(checkedAt, "MiniMax 额度接口未返回窗口");
+
+    const windows: ServerProviderUsageWindow[] = [];
+    const push = (
+      id: string,
+      kind: "session" | "weekly",
+      name: string,
+      durationMins: number,
+      status: number | undefined,
+      remainingPercent: number | undefined,
+      endMs: number | undefined,
+    ) => {
+      const unlimited = status === 3;
+      if (!unlimited && remainingPercent === undefined) return;
+      windows.push({
+        id,
+        kind,
+        label: unlimited ? `${name}（无限制）` : name,
+        windowDurationMins: durationMins,
+        usedPercent: unlimited ? 0 : Math.max(0, Math.min(100, 100 - (remainingPercent ?? 100))),
+        ...(!unlimited && typeof endMs === "number" && endMs > 0
+          ? { resetsAt: isoFromEpochMs(endMs) }
+          : {}),
+      });
+    };
+    push(
+      "five_hour",
+      "session",
+      "5 小时额度",
+      300,
+      general.current_interval_status,
+      general.current_interval_remaining_percent,
+      general.end_time,
+    );
+    push(
+      "weekly",
+      "weekly",
+      "周额度",
+      7 * 24 * 60,
+      general.current_weekly_status,
+      general.current_weekly_remaining_percent,
+      general.weekly_end_time,
+    );
+    if (windows.length === 0) return windowUnavailable(checkedAt, "MiniMax 额度接口未返回窗口");
+    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+  });
+
+/* ------------------------------------------------------------------ */
 /* Instance wiring + cache                                              */
 /* ------------------------------------------------------------------ */
 
-type ProbeKind = "glm" | "claudeOAuth" | "workbuddy" | "kimi" | "factory";
+type ProbeKind = "glm" | "claudeOAuth" | "workbuddy" | "kimi" | "factory" | "minimax";
 
 const HOME_ENV_BY_DRIVER: Record<string, string> = {
   claudeAgent: "CLAUDE_CONFIG_DIR",
@@ -768,6 +876,13 @@ const probeForInstance = (
   if (instanceKey === "claude_kimi")
     return { kind: "kimi", home: instanceHome(settings, instanceKey) };
   const instance = settings.providerInstances[instanceKey as never];
+  if (instance?.driver === "minimax") {
+    const dataDir = ((instance.config ?? {}) as { dataDir?: unknown }).dataDir;
+    return {
+      kind: "minimax",
+      home: typeof dataDir === "string" && dataDir.trim().length > 0 ? dataDir.trim() : null,
+    };
+  }
   if (instance?.driver === "factory") {
     const etcdKey = ((instance.config ?? {}) as { apiKeyEtcdKey?: unknown }).apiKeyEtcdKey;
     return {
@@ -816,14 +931,16 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
             ? workbuddyProbe(fileSystem, path)
             : probe.kind === "kimi" && probe.home !== null
               ? kimiProbe(client, fileSystem, path, probe.home)
-              : probe.kind === "factory"
-                ? factoryProbe(probe.etcdKey)
-                : Effect.fail(
-                    new UsageQuotaProbeError({
-                      probe: probe.kind,
-                      detail: "instance home could not be resolved",
-                    }),
-                  );
+              : probe.kind === "minimax" && probe.home !== null
+                ? minimaxProbe(client, fileSystem, path, probe.home)
+                : probe.kind === "factory"
+                  ? factoryProbe(probe.etcdKey)
+                  : Effect.fail(
+                      new UsageQuotaProbeError({
+                        probe: probe.kind,
+                        detail: "instance home could not be resolved",
+                      }),
+                    );
 
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const limits = yield* run.pipe(
