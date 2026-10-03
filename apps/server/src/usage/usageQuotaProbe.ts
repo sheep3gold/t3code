@@ -2,7 +2,7 @@
  * usageQuotaProbe — per-request, short-cached quota reads for the provider
  * usage summary endpoint.
  *
- * Six probe kinds, each reading state the provider CLIs and hubs already
+ * Seven probe kinds, each reading state the provider CLIs and hubs already
  * hold locally; nothing here invents a credential:
  *
  * - `glm`: Zhipu's `GET /api/monitor/usage/quota/limit`, authenticated with
@@ -19,6 +19,8 @@
  *   proxy refreshes on its own schedule and reports the remaining points
  *   pool across accounts, flagging when the cache is more than a day old.
  * - `kimi`: Moonshot's `GET /v1/users/me/balance` (prepaid balance in CNY),
+ *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
+ * - `deepseek`: `GET api.deepseek.com/user/balance` (prepaid balance, CNY),
  *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
  * - `factory`: `GET api.factory.ai/api/organization/subscription/usage`, the
  *   data behind app.factory.ai/settings/usage, authenticated with the same
@@ -66,6 +68,7 @@ const WORKBUDDY_ACCOUNTS_DIR = "/home/ubuntu/.workbuddy2api-hub/accounts";
 const WORKBUDDY_CREDITS_STALE_MS = 24 * 60 * 60 * 1000;
 const GLM_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 const KIMI_BALANCE_URL = "https://api.moonshot.cn/v1/users/me/balance";
+const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 const MINIMAX_REMAINS_URL = "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains";
 const MINIMAX_CONFIG_FILE = "config.yaml";
 const ANTHROPIC_OAUTH_USAGE_PATH = "/api/oauth/usage";
@@ -578,27 +581,23 @@ const formatCompactCount = (value: number): string =>
       ? `${(value / 1e4).toFixed(0)} 万`
       : String(Math.round(value));
 
-/* ------------------------------------------------------------------ */
-/* Kimi (Moonshot prepaid balance)                                      */
-/* ------------------------------------------------------------------ */
-
-const kimiProbe = (
-  client: HttpClient.HttpClient,
+/** Key for a Claude-home provider (Kimi, DeepSeek): the etcd path named by
+ * `apiKeyHelper` (`<script> <etcd-key-path>`), else a static env token. */
+const readClaudeHomeApiKey = (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  probe: string,
+) =>
   Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const settingsText = yield* fileSystem
       .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
-      .pipe(Effect.mapError(probeError("kimi")));
-    const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError("kimi")));
+      .pipe(Effect.mapError(probeError(probe)));
+    const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError(probe)));
     const record =
       typeof settings === "object" && settings !== null
         ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
         : {};
-    // `apiKeyHelper` is `<script> <etcd-key-path>`; the path is the argument.
     const helperArg =
       typeof record.apiKeyHelper === "string"
         ? record.apiKeyHelper
@@ -612,10 +611,25 @@ const kimiProbe = (
         : typeof record.env?.ANTHROPIC_API_KEY === "string"
           ? record.env.ANTHROPIC_API_KEY
           : undefined;
-    const key = yield* resolveEtcdKey(
+    return yield* resolveEtcdKey(
       helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
       staticKey,
     );
+  });
+
+/* ------------------------------------------------------------------ */
+/* Kimi (Moonshot prepaid balance)                                      */
+/* ------------------------------------------------------------------ */
+
+const kimiProbe = (
+  client: HttpClient.HttpClient,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  home: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
     if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
 
     const document = yield* getJson(
@@ -657,6 +671,69 @@ const kimiProbe = (
           usedPercent: 0,
           remaining: Math.max(0, Math.round(available * 100) / 100),
           remainingUnit: "元",
+        },
+      ],
+    } satisfies ServerProviderUsageLimits;
+  });
+
+/* ------------------------------------------------------------------ */
+/* DeepSeek (prepaid balance)                                           */
+/* ------------------------------------------------------------------ */
+
+interface DeepseekBalanceInfo {
+  readonly currency?: string;
+  readonly total_balance?: string;
+  readonly granted_balance?: string;
+  readonly topped_up_balance?: string;
+}
+
+const deepseekProbe = (
+  client: HttpClient.HttpClient,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  home: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "deepseek");
+    if (key.length === 0) return windowUnavailable(checkedAt, "deepseek 缺少可用的 API key");
+
+    const document = yield* getJson(
+      client,
+      "deepseek",
+      HttpClientRequest.get(DEEPSEEK_BALANCE_URL).pipe(
+        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+        HttpClientRequest.acceptJson,
+      ),
+    );
+    const body =
+      typeof document === "object" && document !== null
+        ? (document as { is_available?: unknown; balance_infos?: DeepseekBalanceInfo[] })
+        : {};
+    const infos = body.balance_infos ?? [];
+    const info = infos.find((entry) => entry.currency === "CNY") ?? infos[0];
+    const total = Number(info?.total_balance);
+    if (info === undefined || !Number.isFinite(total)) {
+      return windowUnavailable(checkedAt, "DeepSeek 余额接口未返回余额");
+    }
+
+    const parts: string[] = [];
+    const toppedUp = Number(info.topped_up_balance);
+    const granted = Number(info.granted_balance);
+    if (Number.isFinite(toppedUp)) parts.push(`充值 ${toppedUp.toFixed(2)}`);
+    if (Number.isFinite(granted) && granted > 0) parts.push(`赠送 ${granted.toFixed(2)}`);
+    const unit = info.currency === "USD" ? "美元" : "元";
+    const detail = parts.length > 0 ? `（${parts.join(" + ")}）` : "";
+    return {
+      checkedAt,
+      windows: [
+        {
+          id: "balance",
+          kind: "other",
+          label: `账户余额${detail}${body.is_available === false ? "，余额不足" : ""}`,
+          usedPercent: 0,
+          remaining: Math.max(0, Math.round(total * 100) / 100),
+          remainingUnit: unit,
         },
       ],
     } satisfies ServerProviderUsageLimits;
@@ -834,7 +911,7 @@ const minimaxProbe = (
 /* Instance wiring + cache                                              */
 /* ------------------------------------------------------------------ */
 
-type ProbeKind = "glm" | "claudeOAuth" | "workbuddy" | "kimi" | "factory" | "minimax";
+type ProbeKind = "glm" | "claudeOAuth" | "workbuddy" | "kimi" | "deepseek" | "factory" | "minimax";
 
 const HOME_ENV_BY_DRIVER: Record<string, string> = {
   claudeAgent: "CLAUDE_CONFIG_DIR",
@@ -875,6 +952,8 @@ const probeForInstance = (
   if (instanceKey === "codex_workbuddy") return { kind: "workbuddy", home: null };
   if (instanceKey === "claude_kimi")
     return { kind: "kimi", home: instanceHome(settings, instanceKey) };
+  if (instanceKey === "claude_deepseek")
+    return { kind: "deepseek", home: instanceHome(settings, instanceKey) };
   const instance = settings.providerInstances[instanceKey as never];
   if (instance?.driver === "minimax") {
     const dataDir = ((instance.config ?? {}) as { dataDir?: unknown }).dataDir;
@@ -931,16 +1010,18 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
             ? workbuddyProbe(fileSystem, path)
             : probe.kind === "kimi" && probe.home !== null
               ? kimiProbe(client, fileSystem, path, probe.home)
-              : probe.kind === "minimax" && probe.home !== null
-                ? minimaxProbe(client, fileSystem, path, probe.home)
-                : probe.kind === "factory"
-                  ? factoryProbe(probe.etcdKey)
-                  : Effect.fail(
-                      new UsageQuotaProbeError({
-                        probe: probe.kind,
-                        detail: "instance home could not be resolved",
-                      }),
-                    );
+              : probe.kind === "deepseek" && probe.home !== null
+                ? deepseekProbe(client, fileSystem, path, probe.home)
+                : probe.kind === "minimax" && probe.home !== null
+                  ? minimaxProbe(client, fileSystem, path, probe.home)
+                  : probe.kind === "factory"
+                    ? factoryProbe(probe.etcdKey)
+                    : Effect.fail(
+                        new UsageQuotaProbeError({
+                          probe: probe.kind,
+                          detail: "instance home could not be resolved",
+                        }),
+                      );
 
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const limits = yield* run.pipe(

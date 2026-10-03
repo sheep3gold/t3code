@@ -37,7 +37,7 @@ describe("usageQuotaProbe", () => {
       const settings = { providerInstances: {} } as never;
       assert.isUndefined(yield* readInstanceUsageLimits(settings, "codex_xjp"));
       assert.isUndefined(yield* readInstanceUsageLimits(settings, "minimax"));
-      assert.isUndefined(yield* readInstanceUsageLimits(settings, "claude_deepseek"));
+      assert.isUndefined(yield* readInstanceUsageLimits(settings, "claude_grok"));
     }).pipe(Effect.provide(layers)),
   );
 
@@ -102,6 +102,98 @@ describe("usageQuotaProbe", () => {
               cash_balance: 47.046238,
               voucher_balance: 12.046269,
             },
+          },
+          requests,
+        ),
+      ),
+    );
+  });
+
+  it.live("deepseek probe reports the CNY prepaid balance with its top-up/granted split", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(
+        path.join(home, "settings.json"),
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - fixture file, not a decoded value.
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "sk-ds" } }),
+      );
+      const settings = {
+        providerInstances: {
+          claude_deepseek: { driver: "claudeAgent", config: { homePath: home } },
+        },
+      } as never;
+      const limits = yield* readInstanceUsageLimits(settings, "claude_deepseek");
+      assert.isUndefined(limits?.unavailable);
+      const window = limits?.windows[0];
+      assert.strictEqual(window?.id, "balance");
+      assert.strictEqual(window?.remaining, 120.37);
+      assert.strictEqual(window?.remainingUnit, "元");
+      assert.include(window?.label ?? "", "充值 120.37");
+      assert.notInclude(window?.label ?? "", "赠送");
+      assert.notInclude(window?.label ?? "", "余额不足");
+      assert.deepStrictEqual(requests, [
+        { url: "https://api.deepseek.com/user/balance", authorization: "Bearer sk-ds" },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClient(
+          {
+            is_available: true,
+            balance_infos: [
+              {
+                currency: "CNY",
+                total_balance: "120.37",
+                granted_balance: "0.00",
+                topped_up_balance: "120.37",
+              },
+            ],
+          },
+          requests,
+        ),
+      ),
+    );
+  });
+
+  it.live("deepseek probe flags an unavailable (exhausted) account and shows grants", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(
+        path.join(home, "settings.json"),
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - fixture file, not a decoded value.
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "sk-ds" } }),
+      );
+      const settings = {
+        providerInstances: {
+          claude_deepseek: { driver: "claudeAgent", config: { homePath: home } },
+        },
+      } as never;
+      const window = (yield* readInstanceUsageLimits(settings, "claude_deepseek"))?.windows[0];
+      assert.strictEqual(window?.remaining, 0.5);
+      assert.include(window?.label ?? "", "赠送 0.50");
+      assert.include(window?.label ?? "", "余额不足");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClient(
+          {
+            is_available: false,
+            balance_infos: [
+              {
+                currency: "CNY",
+                total_balance: "0.50",
+                granted_balance: "0.50",
+                topped_up_balance: "0.00",
+              },
+            ],
           },
           requests,
         ),
