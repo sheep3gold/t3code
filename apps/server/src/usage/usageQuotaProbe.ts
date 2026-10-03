@@ -54,6 +54,9 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 /** Instances refresh at most this often; the page polls every 30s, and
  * Anthropic's OAuth usage endpoint answers bursts with 429s. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
+/** A manual refresh bypasses the TTL but not a read this recent, so a
+ * double-click (or several tabs) cannot hammer rate-limited upstreams. */
+const REFRESH_FLOOR_MS = 5 * 1000;
 const PROBE_TIMEOUT = "10 seconds";
 
 const CLAUDE_SETTINGS_FILE = "settings.json";
@@ -894,18 +897,24 @@ const probeForInstance = (
 const cache = new Map<string, { atMs: number; limits: ServerProviderUsageLimits }>();
 
 /**
- * Reads one instance's quota windows, cached for {@link CACHE_TTL_MS}.
+ * Reads one instance's quota windows, cached for {@link CACHE_TTL_MS};
+ * `refresh` shortens that to {@link REFRESH_FLOOR_MS}.
  * Instances without a probe resolve to `undefined`, letting the endpoint
  * fall back to its existing unavailable row.
  */
 export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUsageLimits")(
-  function* (settings: ServerSettings, instanceKey: string) {
+  function* (
+    settings: ServerSettings,
+    instanceKey: string,
+    options?: { readonly refresh?: boolean },
+  ) {
     const probe = probeForInstance(settings, instanceKey);
     if (probe === null) return undefined;
 
     const cached = cache.get(instanceKey);
     const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
-    if (cached !== undefined && nowMs - cached.atMs < CACHE_TTL_MS) {
+    const maxAgeMs = options?.refresh === true ? REFRESH_FLOOR_MS : CACHE_TTL_MS;
+    if (cached !== undefined && nowMs - cached.atMs < maxAgeMs) {
       return cached.limits;
     }
 
