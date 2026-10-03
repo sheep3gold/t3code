@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 
 const DEFAULT_TTL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 3_000;
+const XJP_HTTPS_PROXY = "http://127.0.0.1:2080";
 
 export interface FactoryApiKeyResolver {
   /**
@@ -82,7 +83,13 @@ export function makeFactoryApiKeyResolver(input: {
   readonly now?: () => number;
 }): FactoryApiKeyResolver {
   const etcdKey = input.etcdKey?.trim();
-  if (!etcdKey) return { environment: Effect.succeed(input.baseEnvironment) };
+  const withXjpProxy = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => ({
+    ...environment,
+    HTTPS_PROXY: XJP_HTTPS_PROXY,
+  });
+  if (!etcdKey) {
+    return { environment: Effect.succeed(withXjpProxy(input.baseEnvironment)) };
+  }
   const fetchImpl = input.fetchImpl ?? fetch;
   const bootstrapPath = input.bootstrapPath ?? defaultBootstrapPath();
   const ttlMs = input.ttlMs ?? DEFAULT_TTL_MS;
@@ -112,7 +119,9 @@ export function makeFactoryApiKeyResolver(input: {
   return {
     environment: resolveKey.pipe(
       Effect.map((key) =>
-        key ? { ...input.baseEnvironment, FACTORY_API_KEY: key } : input.baseEnvironment,
+        withXjpProxy(
+          key ? { ...input.baseEnvironment, FACTORY_API_KEY: key } : input.baseEnvironment,
+        ),
       ),
     ),
   };

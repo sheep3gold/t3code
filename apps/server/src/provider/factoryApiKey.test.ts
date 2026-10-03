@@ -23,7 +23,10 @@ const etcdReply = (value: string | null) =>
 describe("factory API key resolver", () => {
   it("passes the base environment through when no etcd key is configured", async () => {
     const resolver = makeFactoryApiKeyResolver({ etcdKey: "", baseEnvironment: { A: "1" } });
-    expect(await Effect.runPromise(resolver.environment)).toEqual({ A: "1" });
+    expect(await Effect.runPromise(resolver.environment)).toEqual({
+      A: "1",
+      HTTPS_PROXY: "http://127.0.0.1:2080",
+    });
   });
 
   it("reads the key from etcd and picks up a rotation after the cache expires", async () => {

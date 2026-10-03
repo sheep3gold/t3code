@@ -2,7 +2,7 @@
  * usageQuotaProbe — per-request, short-cached quota reads for the provider
  * usage summary endpoint.
  *
- * Three probe kinds, each reading state the provider CLIs and hubs already
+ * Five probe kinds, each reading state the provider CLIs and hubs already
  * hold locally; nothing here invents a credential:
  *
  * - `glm`: Zhipu's `GET /api/monitor/usage/quota/limit`, authenticated with
@@ -18,6 +18,12 @@
  *   password only ever stored hashed, so the probe reads the same files the
  *   proxy refreshes on its own schedule and reports the remaining points
  *   pool across accounts, flagging when the cache is more than a day old.
+ * - `kimi`: Moonshot's `GET /v1/users/me/balance` (prepaid balance in CNY),
+ *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
+ * - `factory`: `GET api.factory.ai/api/organization/subscription/usage`, the
+ *   data behind app.factory.ai/settings/usage, authenticated with the same
+ *   etcd-held key the Droid provider spawns with and riding the same xjp
+ *   proxy so every Factory egress leaves through the chosen node.
  *
  * Results are cached briefly so the model-usage page's 30s polling does not
  * turn into upstream traffic on every refresh. Probe failures degrade to a
@@ -31,13 +37,14 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import * as NodeNet from "node:net";
-import * as NodeTLS from "node:tls";
+import * as NodeTls from "node:tls";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { makeFactoryApiKeyResolver } from "../provider/factoryApiKey.ts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 /** Instances refresh at most this often; the page polls every 30s, and
@@ -51,6 +58,7 @@ const WORKBUDDY_ACCOUNTS_DIR = "/home/ubuntu/.workbuddy2api-hub/accounts";
 /** Credits older than this are labelled stale rather than silently served. */
 const WORKBUDDY_CREDITS_STALE_MS = 24 * 60 * 60 * 1000;
 const GLM_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
+const KIMI_BALANCE_URL = "https://api.moonshot.cn/v1/users/me/balance";
 const ANTHROPIC_OAUTH_USAGE_PATH = "/api/oauth/usage";
 /** Local CONNECT exit the xjp CLI rides (see /usr/local/bin/claude-xjp). */
 const XJP_PROXY_HOST = "127.0.0.1";
@@ -92,6 +100,120 @@ const getJson = (
     Effect.timeout(PROBE_TIMEOUT),
     Effect.mapError(probeError(probe)),
   );
+
+/** Reads one HTTPS JSON document through the local xjp CONNECT proxy. */
+const getJsonViaXjp = (
+  probe: string,
+  hostname: string,
+  path: string,
+  accessToken: string,
+  headers: Readonly<Record<string, string>> = {},
+): Effect.Effect<unknown, UsageQuotaProbeError> =>
+  Effect.tryPromise({
+    try: () =>
+      new Promise<unknown>((resolve, reject) => {
+        const fail = (error: Error) => reject(error);
+        const proxySocket = NodeNet.connect(XJP_PROXY_PORT, XJP_PROXY_HOST);
+        proxySocket.setTimeout(10_000, () => {
+          proxySocket.destroy();
+          fail(new Error("xjp proxy connect timed out"));
+        });
+        proxySocket.once("error", () =>
+          fail(new Error(`xjp proxy (${XJP_PROXY_HOST}:${XJP_PROXY_PORT}) is not reachable`)),
+        );
+        proxySocket.once("connect", () => {
+          proxySocket.write(
+            `CONNECT ${hostname}:443 HTTP/1.1\r\nHost: ${hostname}:443\r\n` +
+              `User-Agent: Node\r\n\r\n`,
+          );
+          let handshake = "";
+          const onHandshakeData = (chunk: Buffer) => {
+            handshake += chunk.toString("latin1");
+            const headerEnd = handshake.indexOf("\r\n\r\n");
+            if (headerEnd === -1) return;
+            proxySocket.off("data", onHandshakeData);
+            proxySocket.setTimeout(0);
+            const statusLine = handshake.slice(0, handshake.indexOf("\r\n"));
+            if (!/^HTTP\/1\.[01] 200/.test(statusLine)) {
+              proxySocket.destroy();
+              fail(new Error(`xjp proxy CONNECT failed: ${statusLine}`));
+              return;
+            }
+            const tlsSocket = NodeTls.connect({
+              socket: proxySocket,
+              servername: hostname,
+              ALPNProtocols: ["http/1.1"],
+            });
+            tlsSocket.setTimeout(10_000, () => {
+              tlsSocket.destroy();
+              fail(new Error(`${probe} read timed out`));
+            });
+            tlsSocket.once("secureConnect", () => {
+              tlsSocket.write(
+                `GET ${path} HTTP/1.1\r\n` +
+                  `Host: ${hostname}\r\n` +
+                  `Authorization: Bearer ${accessToken}\r\n` +
+                  `Accept: application/json\r\n` +
+                  Object.entries(headers)
+                    .map(([name, value]) => `${name}: ${value}\r\n`)
+                    .join("") +
+                  `Connection: close\r\n\r\n`,
+              );
+              let raw = "";
+              tlsSocket.on("data", (chunk: Buffer) => {
+                raw += chunk.toString("latin1");
+              });
+              tlsSocket.once("error", (error) => {
+                if (raw.length > 0) {
+                  const bodyStart = raw.indexOf("\r\n\r\n");
+                  const headers = raw.slice(0, bodyStart);
+                  let body = raw.slice(bodyStart + 4);
+                  if (bodyStart !== -1 && /transfer-encoding:\s*chunked/i.test(headers)) {
+                    body = body
+                      .split("\r\n")
+                      .filter((line) => !/^[0-9a-fA-F]+$/.test(line) && line.length > 0)
+                      .join("");
+                  }
+                  if (bodyStart !== -1) {
+                    resolve(JSON.parse(body) as unknown);
+                    return;
+                  }
+                  tlsSocket.destroy();
+                  return;
+                }
+                fail(error);
+              });
+              tlsSocket.once("close", () => {
+                const bodyStart = raw.indexOf("\r\n\r\n");
+                const statusLine = raw.slice(0, raw.indexOf("\r\n"));
+                if (bodyStart === -1) {
+                  fail(new Error(`${probe} response was empty`));
+                  return;
+                }
+                if (!/^HTTP\/1\.[01] 200/.test(statusLine)) {
+                  fail(new Error(`${probe} returned ${statusLine}`));
+                  return;
+                }
+                let body = raw.slice(bodyStart + 4);
+                if (/transfer-encoding:\s*chunked/i.test(raw.slice(0, bodyStart))) {
+                  body = body
+                    .split("\r\n")
+                    .filter((line) => !/^[0-9a-fA-F]+$/.test(line) && line.length > 0)
+                    .join("");
+                }
+                try {
+                  resolve(JSON.parse(body) as unknown);
+                } catch {
+                  fail(new Error(`${probe} response was not JSON`));
+                }
+              });
+            });
+          };
+          proxySocket.on("data", onHandshakeData);
+        });
+      }),
+    catch: probeError(probe),
+  });
 
 const windowUnavailable = (checkedAt: string, message: string): ServerProviderUsageLimits => ({
   checkedAt,
@@ -251,7 +373,7 @@ const readAnthropicUsageViaXjp = (
               fail(new Error(`xjp proxy CONNECT failed: ${statusLine}`));
               return;
             }
-            const tlsSocket = NodeTLS.connect({
+            const tlsSocket = NodeTls.connect({
               socket: proxySocket,
               servername: "api.anthropic.com",
             });
@@ -413,10 +535,168 @@ const workbuddyProbe = (
   });
 
 /* ------------------------------------------------------------------ */
+/* Etcd-held keys (Kimi, Factory)                                       */
+/* ------------------------------------------------------------------ */
+
+/** Current value of an etcd-held key, falling back to `fallback` when etcd
+ * is unreachable or holds nothing. Reuses the Droid provider's resolver so
+ * the bootstrap credential and caching behave identically. */
+const resolveEtcdKey = (etcdKey: string | undefined, fallback: string | undefined) =>
+  makeFactoryApiKeyResolver({
+    etcdKey,
+    baseEnvironment: fallback ? { FACTORY_API_KEY: fallback } : {},
+  }).environment.pipe(Effect.map((environment) => environment.FACTORY_API_KEY?.trim() ?? ""));
+
+const formatCompactCount = (value: number): string =>
+  value >= 1e8
+    ? `${(value / 1e8).toFixed(1)} 亿`
+    : value >= 1e4
+      ? `${(value / 1e4).toFixed(0)} 万`
+      : String(Math.round(value));
+
+/* ------------------------------------------------------------------ */
+/* Kimi (Moonshot prepaid balance)                                      */
+/* ------------------------------------------------------------------ */
+
+const kimiProbe = (
+  client: HttpClient.HttpClient,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  home: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const settingsText = yield* fileSystem
+      .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
+      .pipe(Effect.mapError(probeError("kimi")));
+    const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError("kimi")));
+    const record =
+      typeof settings === "object" && settings !== null
+        ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
+        : {};
+    // `apiKeyHelper` is `<script> <etcd-key-path>`; the path is the argument.
+    const helperArg =
+      typeof record.apiKeyHelper === "string"
+        ? record.apiKeyHelper
+            .trim()
+            .split(/\s+/)
+            .findLast((part) => part.startsWith("/"))
+        : undefined;
+    const staticKey =
+      typeof record.env?.ANTHROPIC_AUTH_TOKEN === "string"
+        ? record.env.ANTHROPIC_AUTH_TOKEN
+        : typeof record.env?.ANTHROPIC_API_KEY === "string"
+          ? record.env.ANTHROPIC_API_KEY
+          : undefined;
+    const key = yield* resolveEtcdKey(
+      helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
+      staticKey,
+    );
+    if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
+
+    const document = yield* getJson(
+      client,
+      "kimi",
+      HttpClientRequest.get(KIMI_BALANCE_URL).pipe(
+        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+        HttpClientRequest.acceptJson,
+      ),
+    );
+    const data =
+      typeof document === "object" && document !== null
+        ? (
+            document as {
+              data?: {
+                available_balance?: unknown;
+                cash_balance?: unknown;
+                voucher_balance?: unknown;
+              };
+            }
+          ).data
+        : undefined;
+    const available = data?.available_balance;
+    if (typeof available !== "number")
+      return windowUnavailable(checkedAt, "Kimi 余额接口未返回余额");
+
+    const parts: string[] = [];
+    if (typeof data?.cash_balance === "number") parts.push(`现金 ${data.cash_balance.toFixed(2)}`);
+    if (typeof data?.voucher_balance === "number") {
+      parts.push(`代金券 ${data.voucher_balance.toFixed(2)}`);
+    }
+    return {
+      checkedAt,
+      windows: [
+        {
+          id: "balance",
+          kind: "other",
+          label: parts.length > 0 ? `账户余额（${parts.join(" + ")}）` : "账户余额",
+          usedPercent: 0,
+          remaining: Math.max(0, Math.round(available * 100) / 100),
+          remainingUnit: "元",
+        },
+      ],
+    } satisfies ServerProviderUsageLimits;
+  });
+
+/* ------------------------------------------------------------------ */
+/* Factory (Droid subscription token allowance)                         */
+/* ------------------------------------------------------------------ */
+
+interface FactoryAllowance {
+  readonly orgTotalTokensUsed?: number;
+  readonly totalAllowance?: number;
+  readonly usedRatio?: number;
+}
+
+const factoryProbe = (
+  etcdKey: string | undefined,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const key = yield* resolveEtcdKey(etcdKey, process.env.FACTORY_API_KEY);
+    if (key.length === 0) return windowUnavailable(checkedAt, "factory 缺少可用的 API key");
+
+    const document = yield* getJsonViaXjp(
+      "factory",
+      "api.factory.ai",
+      "/api/organization/subscription/usage",
+      key,
+      { "User-Agent": "droid/0.233.0" },
+    );
+    const usage =
+      typeof document === "object" && document !== null
+        ? (document as { usage?: { standard?: FactoryAllowance; premium?: FactoryAllowance } })
+            .usage
+        : undefined;
+
+    const windows: ServerProviderUsageWindow[] = [];
+    for (const [id, name, allowance] of [
+      ["standard_tokens", "标准 token 额度", usage?.standard],
+      ["premium_tokens", "高级 token 额度", usage?.premium],
+    ] as const) {
+      if (allowance === undefined || typeof allowance.totalAllowance !== "number") continue;
+      if (allowance.totalAllowance <= 0) continue;
+      const used = allowance.orgTotalTokensUsed ?? 0;
+      const ratio =
+        typeof allowance.usedRatio === "number"
+          ? allowance.usedRatio
+          : used / allowance.totalAllowance;
+      windows.push({
+        id,
+        kind: "monthly",
+        label: `${name}（${formatCompactCount(used)} / ${formatCompactCount(allowance.totalAllowance)}）`,
+        usedPercent: Math.max(0, Math.min(100, ratio * 100)),
+      });
+    }
+    if (windows.length === 0) return windowUnavailable(checkedAt, "Factory 用量接口未返回额度");
+    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+  });
+
+/* ------------------------------------------------------------------ */
 /* Instance wiring + cache                                              */
 /* ------------------------------------------------------------------ */
 
-type ProbeKind = "glm" | "claudeOAuth" | "workbuddy";
+type ProbeKind = "glm" | "claudeOAuth" | "workbuddy" | "kimi" | "factory";
 
 const HOME_ENV_BY_DRIVER: Record<string, string> = {
   claudeAgent: "CLAUDE_CONFIG_DIR",
@@ -444,13 +724,28 @@ const instanceHome = (settings: ServerSettings, instanceKey: string): string | n
 const probeForInstance = (
   settings: ServerSettings,
   instanceKey: string,
-): { readonly kind: ProbeKind; readonly home: string | null } | null => {
+): {
+  readonly kind: ProbeKind;
+  readonly home: string | null;
+  readonly etcdKey?: string;
+} | null => {
   if (instanceKey === "claude_glm")
     return { kind: "glm", home: instanceHome(settings, instanceKey) };
   if (instanceKey === "claude_xjp") {
     return { kind: "claudeOAuth", home: instanceHome(settings, instanceKey) };
   }
   if (instanceKey === "codex_workbuddy") return { kind: "workbuddy", home: null };
+  if (instanceKey === "claude_kimi")
+    return { kind: "kimi", home: instanceHome(settings, instanceKey) };
+  const instance = settings.providerInstances[instanceKey as never];
+  if (instance?.driver === "factory") {
+    const etcdKey = ((instance.config ?? {}) as { apiKeyEtcdKey?: unknown }).apiKeyEtcdKey;
+    return {
+      kind: "factory",
+      home: null,
+      ...(typeof etcdKey === "string" ? { etcdKey } : {}),
+    };
+  }
   return null;
 };
 
@@ -483,12 +778,16 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
           ? claudeOauthProbe(fileSystem, path, probe.home)
           : probe.kind === "workbuddy"
             ? workbuddyProbe(fileSystem, path)
-            : Effect.fail(
-                new UsageQuotaProbeError({
-                  probe: probe.kind,
-                  detail: "instance home could not be resolved",
-                }),
-              );
+            : probe.kind === "kimi" && probe.home !== null
+              ? kimiProbe(client, fileSystem, path, probe.home)
+              : probe.kind === "factory"
+                ? factoryProbe(probe.etcdKey)
+                : Effect.fail(
+                    new UsageQuotaProbeError({
+                      probe: probe.kind,
+                      detail: "instance home could not be resolved",
+                    }),
+                  );
 
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const limits = yield* run.pipe(
