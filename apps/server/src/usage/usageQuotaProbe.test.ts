@@ -25,7 +25,6 @@ const stubClient = (
           authorization: request.headers.authorization,
         });
         return Effect.succeed(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off - fixture body, not a decoded value.
           HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body))),
         );
       }),
