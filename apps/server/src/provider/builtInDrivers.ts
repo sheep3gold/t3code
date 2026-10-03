@@ -28,6 +28,7 @@ import { OpenCodeDriver, type OpenCodeDriverEnv } from "./Drivers/OpenCodeDriver
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { KiroDriver, type KiroDriverEnv } from "./Drivers/KiroDriver.ts";
 import { MiniMaxDriver, type MiniMaxDriverEnv } from "./Drivers/MiniMaxDriver.ts";
+import { FactoryDriver, type FactoryDriverEnv } from "./Drivers/FactoryDriver.ts";
 import type { AnyProviderDriver } from "./ProviderDriver.ts";
 
 /**
@@ -43,7 +44,8 @@ export type BuiltInDriversEnv =
   | OpenCodeDriverEnv
   | AntigravityDriverEnv
   | KiroDriverEnv
-  | MiniMaxDriverEnv;
+  | MiniMaxDriverEnv
+  | FactoryDriverEnv;
 
 /**
  * Ordered list of built-in drivers. Order matters only for tie-breaking in
@@ -59,4 +61,5 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   AntigravityDriver,
   KiroDriver,
   MiniMaxDriver,
+  FactoryDriver,
 ];

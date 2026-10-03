@@ -717,7 +717,22 @@ export const make = (
                 "session/set_config_option",
                 requestPayload,
                 acp.agent.setSessionConfigOption(requestPayload),
-              ).pipe(Effect.tap((response) => updateConfigOptions(response)));
+              ).pipe(
+                Effect.tap((response) =>
+                  // An empty list is an agent that reports the new state only via
+                  // `config_option_update` (see effect-acp rpc.ts): keep what we
+                  // have, with the requested value applied, rather than wiping it.
+                  response.configOptions.length > 0
+                    ? updateConfigOptions(response)
+                    : updateConfigOptions({
+                        configOptions: configOptions.map((option) =>
+                          option.id === configId
+                            ? ({ ...option, currentValue: value } as typeof option)
+                            : option,
+                        ),
+                      }),
+                ),
+              );
             }),
           ),
         ),

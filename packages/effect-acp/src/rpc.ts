@@ -1,5 +1,6 @@
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import * as AcpSchema from "./_generated/schema.gen.ts";
@@ -71,9 +72,22 @@ const SetSessionModelRpc = Rpc.make(AGENT_METHODS.session_set_model, {
   error: AcpSchema.Error,
 });
 
+/**
+ * Factory Droid answers `session/set_config_option` with `{}` and delivers the
+ * new option state through a `config_option_update` notification instead of
+ * the response the spec requires. A missing `configOptions` decodes to an empty
+ * list, which callers must treat as "no snapshot", not "no options".
+ */
+const SetSessionConfigOptionResponseLenient = Schema.Struct({
+  ...AcpSchema.SetSessionConfigOptionResponse.fields,
+  configOptions: AcpSchema.SetSessionConfigOptionResponse.fields.configOptions.pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+
 const SetSessionConfigOptionRpc = Rpc.make(AGENT_METHODS.session_set_config_option, {
   payload: AcpSchema.SetSessionConfigOptionRequest,
-  success: AcpSchema.SetSessionConfigOptionResponse,
+  success: SetSessionConfigOptionResponseLenient,
   error: AcpSchema.Error,
 });
 

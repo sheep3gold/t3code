@@ -150,6 +150,7 @@ const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 const KIRO_DRIVER_KIND = ProviderDriverKind.make("kiro");
 const MINIMAX_DRIVER_KIND = ProviderDriverKind.make("minimax");
+const FACTORY_DRIVER_KIND = ProviderDriverKind.make("factory");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
 
@@ -180,6 +181,8 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   // dashes — do not "normalize" these or kiro-cli rejects the model.
   [KIRO_DRIVER_KIND]: "claude-opus-5",
   [MINIMAX_DRIVER_KIND]: "m:custom_provider%3Aminimax-official-api:MiniMax-M3:v:thinking",
+  // droid's own default model id, passed through verbatim.
+  [FACTORY_DRIVER_KIND]: "gpt-6-sol",
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
 };
 
@@ -196,6 +199,8 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   // the thread default (claude-opus-5 bills 2.20x credits).
   [KIRO_DRIVER_KIND]: "claude-haiku-4.5",
   [MINIMAX_DRIVER_KIND]: "m:custom_provider%3Aminimax-official-api:MiniMax-M3:v:thinking",
+  // Cheapest Factory model (0.04x token rate); titles are one short call.
+  [FACTORY_DRIVER_KIND]: "gpt-6-luna",
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
@@ -234,4 +239,5 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [GROK_DRIVER_KIND]: "Grok",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
   [MINIMAX_DRIVER_KIND]: "MiniMax",
+  [FACTORY_DRIVER_KIND]: "Factory",
 };
