@@ -274,6 +274,17 @@ export const MiniMaxIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+export const FactoryIcon: Icon = ({ className, ...props }) => (
+  <svg {...props} className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M12 3v18M4.2 7.5l15.6 9M19.8 7.5l-15.6 9"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 export const GrokIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}

@@ -839,6 +839,30 @@ export const MiniMaxSettings = makeProviderSettingsSchema(
 );
 export type MiniMaxSettings = typeof MiniMaxSettings.Type;
 
+/** Factory Droid native ACP provider (`droid exec --input-format acp`). */
+export const FactorySettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("droid").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description:
+          "Path to the Factory Droid CLI binary. Authenticates with FACTORY_API_KEY from the server environment.",
+        providerSettingsForm: { placeholder: "droid", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["binaryPath"] },
+);
+export type FactorySettings = typeof FactorySettings.Type;
+
 /**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
  * in the browser. The API key and Agent Platform methods take credentials from
