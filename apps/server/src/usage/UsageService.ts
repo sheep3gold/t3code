@@ -52,6 +52,7 @@ import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { resolveAntigravityProfileDirectory } from "../provider/antigravityAuthSupport.ts";
 import { readAntigravityUsage } from "./antigravityUsage.ts";
+import { readFactoryUsage } from "./factoryUsage.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import {
   createOverrideRateTable,
@@ -864,6 +865,26 @@ export const make = Effect.gen(function* () {
         ProviderInstanceId.make(instanceKey),
       );
       const records = yield* readAntigravityUsage(profileDirectory, sinceDayStartMs).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      if (Option.isNone(records)) continue;
+      const entry = instanceEntry(instanceKey);
+      entry.hasDir = true;
+      for (const record of records.value) {
+        accumulate(entry, { ...record, reportedCostUsd: null });
+      }
+    }
+
+    // Droid keeps running totals in `<session>.settings.json`, not in its
+    // transcripts; every instance shares the host's `~/.factory` home.
+    for (const [instanceKey, instance] of Object.entries(settings.providerInstances)) {
+      if (instance.driver !== "factory" || instance.enabled === false) continue;
+      const home = hostEnvironment.HOME?.trim() || NodeOS.homedir();
+      const records = yield* readFactoryUsage(
+        path.join(home, ".factory", "sessions"),
+        sinceDayStartMs,
+      ).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
