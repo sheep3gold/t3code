@@ -6,6 +6,9 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import { ProviderInstanceId } from "@t3tools/contracts";
+
+import { resolveAntigravityProfileDirectory } from "../provider/antigravityAuthSupport.ts";
 import { clearUsageQuotaProbeCache, readInstanceUsageLimits } from "./usageQuotaProbe.ts";
 
 const layers = Layer.merge(NodeServices.layer, FetchHttpClient.layer);
@@ -269,6 +272,36 @@ describe("usageQuotaProbe", () => {
       const limits = yield* readInstanceUsageLimits(minimaxInstance(dataDir), "minimax");
       assert.strictEqual(limits?.unavailable?.reason, "probeFailed");
       assert.strictEqual(limits?.windows.length, 0);
+    }).pipe(Effect.scoped, Effect.provide(layers)),
+  );
+
+  it.live("antigravity probe reads the instance profile under stateDir", () =>
+    Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stateDir = yield* fileSystem.makeTempDirectoryScoped();
+      const settings = {
+        providerInstances: { antigravity: { driver: "antigravity" } },
+      } as never;
+
+      // Without a state dir the profile cannot be located.
+      const unresolved = yield* readInstanceUsageLimits(settings, "antigravity");
+      assert.strictEqual(unresolved?.unavailable?.reason, "probeFailed");
+
+      clearUsageQuotaProbeCache();
+      const profile = resolveAntigravityProfileDirectory(
+        stateDir,
+        ProviderInstanceId.make("antigravity"),
+      );
+      yield* fileSystem.makeDirectory(path.join(profile, "antigravity-acp"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(profile, "antigravity-acp", "acp_token.json"),
+        '{"client_id":"","refresh_token":""}',
+      );
+      const signedOut = yield* readInstanceUsageLimits(settings, "antigravity", { stateDir });
+      assert.strictEqual(signedOut?.unavailable?.reason, "probeFailed");
+      assert.include(signedOut?.unavailable?.message ?? "", "未登录");
     }).pipe(Effect.scoped, Effect.provide(layers)),
   );
 });
