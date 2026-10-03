@@ -423,6 +423,7 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
     const providers = yield* providerRegistry.getProviders;
     const usageLimitSourceSnapshots = yield* usageLimitSources.current;
     const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
+    const { stateDir } = yield* ServerConfig.ServerConfig;
 
     // Lazy-loading modes for the model-usage page and the mini program:
     // `scope=index` answers with identities only (no scans, no probes) so the
@@ -495,9 +496,10 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
       const limits =
         settings === null
           ? undefined
-          : yield* readInstanceUsageLimits(settings, provider.instanceId, { refresh }).pipe(
-              Effect.orElseSucceed(() => undefined),
-            );
+          : yield* readInstanceUsageLimits(settings, provider.instanceId, {
+              refresh,
+              stateDir,
+            }).pipe(Effect.orElseSucceed(() => undefined));
       return HttpServerResponse.jsonUnsafe({
         provider: {
           ...providerIdentity(provider),
@@ -542,7 +544,7 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
         (provider) =>
           settings === null
             ? Effect.succeed([provider.instanceId, undefined] as const)
-            : readInstanceUsageLimits(settings, provider.instanceId).pipe(
+            : readInstanceUsageLimits(settings, provider.instanceId, { stateDir }).pipe(
                 Effect.map((limits) => [provider.instanceId, limits] as const),
                 Effect.orElseSucceed(() => [provider.instanceId, undefined] as const),
               ),

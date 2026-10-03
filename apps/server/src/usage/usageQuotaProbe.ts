@@ -50,6 +50,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { ProviderInstanceId } from "@t3tools/contracts";
+import { resolveAntigravityProfileDirectory } from "../provider/antigravityAuthSupport.ts";
 import { makeFactoryApiKeyResolver } from "../provider/factoryApiKey.ts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -120,6 +122,7 @@ const getJsonViaXjp = (
   path: string,
   accessToken: string,
   headers: Readonly<Record<string, string>> = {},
+  post?: { readonly contentType: string; readonly body: string },
 ): Effect.Effect<unknown, UsageQuotaProbeError> =>
   Effect.tryPromise({
     try: () =>
@@ -162,14 +165,19 @@ const getJsonViaXjp = (
             });
             tlsSocket.once("secureConnect", () => {
               tlsSocket.write(
-                `GET ${path} HTTP/1.1\r\n` +
+                `${post === undefined ? "GET" : "POST"} ${path} HTTP/1.1\r\n` +
                   `Host: ${hostname}\r\n` +
-                  `Authorization: Bearer ${accessToken}\r\n` +
+                  (accessToken.length > 0 ? `Authorization: Bearer ${accessToken}\r\n` : "") +
                   `Accept: application/json\r\n` +
                   Object.entries(headers)
                     .map(([name, value]) => `${name}: ${value}\r\n`)
                     .join("") +
-                  `Connection: close\r\n\r\n`,
+                  (post === undefined
+                    ? ""
+                    : `Content-Type: ${post.contentType}\r\n` +
+                      `Content-Length: ${Buffer.byteLength(post.body)}\r\n`) +
+                  `Connection: close\r\n\r\n` +
+                  (post?.body ?? ""),
               );
               let raw = "";
               tlsSocket.on("data", (chunk: Buffer) => {
@@ -908,10 +916,139 @@ const minimaxProbe = (
   });
 
 /* ------------------------------------------------------------------ */
+/* Antigravity (Google Code Assist quota summary, agy `/usage`)         */
+/* ------------------------------------------------------------------ */
+
+interface AntigravityQuotaBucket {
+  readonly bucketId?: string;
+  readonly window?: string;
+  readonly resetTime?: string;
+  readonly remainingFraction?: number;
+}
+
+interface AntigravityQuotaGroup {
+  readonly displayName?: string;
+  readonly buckets?: AntigravityQuotaBucket[];
+}
+
+const ANTIGRAVITY_TOKEN_FILE = "antigravity-acp/acp_token.json";
+/** Code Assist rejects quota reads without a client user agent (403 SUBSCRIPTION_REQUIRED). */
+const ANTIGRAVITY_USER_AGENT = "antigravity/1.1.1 linux/amd64";
+
+const antigravityGroupName = (displayName: string | undefined): string =>
+  displayName === undefined
+    ? "模型"
+    : /^gemini/i.test(displayName)
+      ? "Gemini"
+      : /claude|gpt/i.test(displayName)
+        ? "Claude/GPT"
+        : displayName;
+
+/**
+ * Mirrors what the agent's `/usage` shows: `retrieveUserQuotaSummary` groups
+ * (Gemini, Claude+GPT) with a 5-hour and a weekly bucket each. The token is
+ * minted from the profile's stored refresh token and never persisted; both
+ * calls ride the xjp exit the instance itself is configured to use.
+ */
+const antigravityProbe = (
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  profileDirectory: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const tokenText = yield* fileSystem
+      .readFileString(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))
+      .pipe(Effect.mapError(probeError("antigravity")));
+    const stored = yield* decodeJson(tokenText).pipe(Effect.mapError(probeError("antigravity")));
+    const credentials =
+      typeof stored === "object" && stored !== null
+        ? (stored as Record<string, unknown>)
+        : ({} as Record<string, unknown>);
+    const field = (name: string) =>
+      typeof credentials[name] === "string" ? (credentials[name] as string) : "";
+    if (field("refresh_token").length === 0 || field("client_id").length === 0) {
+      return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
+    }
+
+    const refreshed = yield* getJsonViaXjp(
+      "antigravity",
+      "oauth2.googleapis.com",
+      "/token",
+      "",
+      {},
+      {
+        contentType: "application/x-www-form-urlencoded",
+        body: new URLSearchParams({
+          client_id: field("client_id"),
+          client_secret: field("client_secret"),
+          refresh_token: field("refresh_token"),
+          grant_type: "refresh_token",
+        }).toString(),
+      },
+    );
+    const accessToken =
+      typeof refreshed === "object" && refreshed !== null
+        ? (refreshed as { access_token?: unknown }).access_token
+        : undefined;
+    if (typeof accessToken !== "string" || accessToken.length === 0) {
+      return windowUnavailable(checkedAt, "Antigravity 刷新 Google 凭证失败");
+    }
+
+    const projectBody = yield* encodeJsonBody(
+      field("project_id").length > 0 ? { project: field("project_id") } : {},
+    ).pipe(Effect.mapError(probeError("antigravity")));
+    const document = yield* getJsonViaXjp(
+      "antigravity",
+      "cloudcode-pa.googleapis.com",
+      "/v1internal:retrieveUserQuotaSummary",
+      accessToken,
+      { "User-Agent": ANTIGRAVITY_USER_AGENT },
+      { contentType: "application/json", body: projectBody },
+    );
+    const groups =
+      typeof document === "object" && document !== null
+        ? ((document as { groups?: AntigravityQuotaGroup[] }).groups ?? [])
+        : [];
+
+    const windows: ServerProviderUsageWindow[] = [];
+    for (const group of groups) {
+      const name = antigravityGroupName(group.displayName);
+      for (const bucket of group.buckets ?? []) {
+        if (typeof bucket.remainingFraction !== "number") continue;
+        const weekly = bucket.window === "weekly";
+        windows.push({
+          id: bucket.bucketId ?? `${name}_${bucket.window ?? "window"}`,
+          kind: weekly ? "weekly" : "session",
+          label: `${name} ${weekly ? "周" : bucket.window === "5h" ? "5 小时" : (bucket.window ?? "")}额度`,
+          ...(weekly
+            ? { windowDurationMins: 7 * 24 * 60 }
+            : bucket.window === "5h"
+              ? { windowDurationMins: 300 }
+              : {}),
+          usedPercent:
+            Math.round(Math.max(0, Math.min(100, (1 - bucket.remainingFraction) * 100)) * 10) / 10,
+          ...(typeof bucket.resetTime === "string" ? { resetsAt: bucket.resetTime } : {}),
+        });
+      }
+    }
+    if (windows.length === 0) return windowUnavailable(checkedAt, "Antigravity 未返回额度窗口");
+    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+  });
+
+/* ------------------------------------------------------------------ */
 /* Instance wiring + cache                                              */
 /* ------------------------------------------------------------------ */
 
-type ProbeKind = "glm" | "claudeOAuth" | "workbuddy" | "kimi" | "deepseek" | "factory" | "minimax";
+type ProbeKind =
+  | "glm"
+  | "claudeOAuth"
+  | "workbuddy"
+  | "kimi"
+  | "deepseek"
+  | "factory"
+  | "minimax"
+  | "antigravity";
 
 const HOME_ENV_BY_DRIVER: Record<string, string> = {
   claudeAgent: "CLAUDE_CONFIG_DIR",
@@ -939,6 +1076,7 @@ const instanceHome = (settings: ServerSettings, instanceKey: string): string | n
 const probeForInstance = (
   settings: ServerSettings,
   instanceKey: string,
+  stateDir: string | undefined,
 ): {
   readonly kind: ProbeKind;
   readonly home: string | null;
@@ -955,6 +1093,15 @@ const probeForInstance = (
   if (instanceKey === "claude_deepseek")
     return { kind: "deepseek", home: instanceHome(settings, instanceKey) };
   const instance = settings.providerInstances[instanceKey as never];
+  if (instance?.driver === "antigravity") {
+    return {
+      kind: "antigravity",
+      home:
+        stateDir === undefined
+          ? null
+          : resolveAntigravityProfileDirectory(stateDir, ProviderInstanceId.make(instanceKey)),
+    };
+  }
   if (instance?.driver === "minimax") {
     const dataDir = ((instance.config ?? {}) as { dataDir?: unknown }).dataDir;
     return {
@@ -985,9 +1132,13 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
   function* (
     settings: ServerSettings,
     instanceKey: string,
-    options?: { readonly refresh?: boolean },
+    options?: {
+      readonly refresh?: boolean;
+      /** Server state dir; Antigravity profiles live under it. */
+      readonly stateDir?: string;
+    },
   ) {
-    const probe = probeForInstance(settings, instanceKey);
+    const probe = probeForInstance(settings, instanceKey, options?.stateDir);
     if (probe === null) return undefined;
 
     const cached = cache.get(instanceKey);
@@ -1016,12 +1167,14 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
                   ? minimaxProbe(client, fileSystem, path, probe.home)
                   : probe.kind === "factory"
                     ? factoryProbe(probe.etcdKey)
-                    : Effect.fail(
-                        new UsageQuotaProbeError({
-                          probe: probe.kind,
-                          detail: "instance home could not be resolved",
-                        }),
-                      );
+                    : probe.kind === "antigravity" && probe.home !== null
+                      ? antigravityProbe(fileSystem, path, probe.home)
+                      : Effect.fail(
+                          new UsageQuotaProbeError({
+                            probe: probe.kind,
+                            detail: "instance home could not be resolved",
+                          }),
+                        );
 
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const limits = yield* run.pipe(

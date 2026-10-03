@@ -50,6 +50,8 @@ import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import { resolveAntigravityProfileDirectory } from "../provider/antigravityAuthSupport.ts";
+import { readAntigravityUsage } from "./antigravityUsage.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import {
   createOverrideRateTable,
@@ -790,10 +792,7 @@ export const make = Effect.gen(function* () {
       models: Map<string, { totalTokens: number; costUsd: number }>;
     }
     const byInstance = new Map<string, MutableInstance>();
-
-    for (const scannedDir of scannedDirs) {
-      const { instanceKey } = scannedDir;
-      if (instanceKey === undefined) continue;
+    const instanceEntry = (instanceKey: string): MutableInstance => {
       let entry = byInstance.get(instanceKey);
       if (entry === undefined) {
         entry = {
@@ -805,6 +804,35 @@ export const make = Effect.gen(function* () {
         };
         byInstance.set(instanceKey, entry);
       }
+      return entry;
+    };
+    const accumulate = (
+      entry: MutableInstance,
+      record: Pick<UsageRecord, "model" | "totals" | "reportedCostUsd">,
+    ): boolean => {
+      const tokens = totalTokens(record.totals);
+      if (tokens === 0 && record.reportedCostUsd === null) return false;
+      const priced = priceUsage(
+        rates,
+        record.model,
+        record.totals,
+        record.reportedCostUsd,
+        overrides,
+      );
+      entry.totalTokens += tokens;
+      entry.costUsd += priced.costUsd;
+      if (priced.costSource === "unpriced") entry.unpricedRecords += 1;
+      const model = entry.models.get(record.model) ?? { totalTokens: 0, costUsd: 0 };
+      model.totalTokens += tokens;
+      model.costUsd += priced.costUsd;
+      entry.models.set(record.model, model);
+      return true;
+    };
+
+    for (const scannedDir of scannedDirs) {
+      const { instanceKey } = scannedDir;
+      if (instanceKey === undefined) continue;
+      const entry = instanceEntry(instanceKey);
       if (scannedDir.files !== null) entry.hasDir = true;
 
       // Dedupe has to happen per record; UsageAggregator ties its seen-set to
@@ -817,23 +845,7 @@ export const make = Effect.gen(function* () {
             seen.add(record.dedupeKey);
           }
           if (record.timestampMs < windowStartMs + MTIME_SLACK_MS) return false;
-          const tokens = totalTokens(record.totals);
-          if (tokens === 0 && record.reportedCostUsd === null) return false;
-          const priced = priceUsage(
-            rates,
-            record.model,
-            record.totals,
-            record.reportedCostUsd,
-            overrides,
-          );
-          entry.totalTokens += tokens;
-          entry.costUsd += priced.costUsd;
-          if (priced.costSource === "unpriced") entry.unpricedRecords += 1;
-          const model = entry.models.get(record.model) ?? { totalTokens: 0, costUsd: 0 };
-          model.totalTokens += tokens;
-          model.costUsd += priced.costUsd;
-          entry.models.set(record.model, model);
-          return true;
+          return accumulate(entry, record);
         },
       };
       foldScannedDir({
@@ -841,6 +853,26 @@ export const make = Effect.gen(function* () {
         aggregator: collecting,
         retentionCutoffMs,
       });
+    }
+
+    // Antigravity keeps usage in per-conversation SQLite stores rather than
+    // JSONL transcripts, so it is read directly instead of via `collectDirs`.
+    for (const [instanceKey, instance] of Object.entries(settings.providerInstances)) {
+      if (instance.driver !== "antigravity" || instance.enabled === false) continue;
+      const profileDirectory = resolveAntigravityProfileDirectory(
+        config.stateDir,
+        ProviderInstanceId.make(instanceKey),
+      );
+      const records = yield* readAntigravityUsage(profileDirectory, sinceDayStartMs).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      if (Option.isNone(records)) continue;
+      const entry = instanceEntry(instanceKey);
+      entry.hasDir = true;
+      for (const record of records.value) {
+        accumulate(entry, { ...record, reportedCostUsd: null });
+      }
     }
 
     const pruned = pruneScanCache(fileCache, retentionCutoffMs);
