@@ -51,8 +51,10 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ServerSettings from "./serverSettings.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import { readInstanceUsageLimits } from "./usage/usageQuotaProbe.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
@@ -417,8 +419,10 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
     const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
     const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
     const usageService = yield* UsageService.UsageService;
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
     const providers = yield* providerRegistry.getProviders;
     const usageLimitSourceSnapshots = yield* usageLimitSources.current;
+    const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
 
     // Attribution is best-effort: a scan failure must not blank the provider
     // state and usage-limits data the caller can still use.
@@ -441,6 +445,25 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
       return usage === undefined ? [] : [usage];
     });
 
+    // Quota probes run per provider but only for instances the probe module
+    // knows; the rest fall through to their registry-provided windows.
+    const probedLimits = new Map(
+      yield* Effect.forEach(
+        providers,
+        (provider) =>
+          settings === null
+            ? Effect.succeed([provider.instanceId, undefined] as const)
+            : readInstanceUsageLimits(settings, provider.instanceId).pipe(
+                Effect.map((limits) => [provider.instanceId, limits] as const),
+                Effect.orElseSucceed(() => [provider.instanceId, undefined] as const),
+              ),
+        // Anthropic's OAuth usage endpoint rate-limits aggressively; serial
+        // probes plus the probe cache keep bursts of page refreshes from
+        // tripping it.
+        { concurrency: 1 },
+      ),
+    );
+
     return HttpServerResponse.jsonUnsafe({
       providers: [
         ...providers.map((provider) => ({
@@ -450,11 +473,12 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
           modelCount: provider.models.length,
           state: provider.status,
           usage: usageByInstance.get(provider.instanceId) ?? { available: false },
-          usageLimits: provider.usageLimits ?? {
-            checkedAt: readAt,
-            windows: [],
-            unavailable: { reason: "unsupported" },
-          },
+          usageLimits: probedLimits.get(provider.instanceId) ??
+            provider.usageLimits ?? {
+              checkedAt: readAt,
+              windows: [],
+              unavailable: { reason: "unsupported" },
+            },
         })),
         ...usageLimitSourceSnapshots.flatMap((source) =>
           source.accounts.map((account) => ({

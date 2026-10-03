@@ -24,6 +24,14 @@ export const ServerProviderUsageWindow = Schema.Struct({
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
+  /**
+   * Absolute remaining quota in the provider's own unit (points, credits),
+   * for hubs whose allowance is a balance rather than a rolling window.
+   * Percent-driven windows omit it and keep rendering the bar alone.
+   */
+  remaining: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  /** Unit label rendered next to `remaining` (`积分`, `credits`). */
+  remainingUnit: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
 
