@@ -108,4 +108,75 @@ describe("usageQuotaProbe", () => {
       ),
     );
   });
+
+  const minimaxInstance = (dataDir: string) =>
+    ({ providerInstances: { minimax: { driver: "minimax", config: { dataDir } } } }) as never;
+  const minimaxYaml = (key: string) =>
+    `defaultModel: x\nminimax_api:\n  apiKey: ${key}\nminimaxModelSource: minimax_api_key\n`;
+
+  it.live("minimax probe maps the 5-hour percent window and an unlimited weekly window", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dataDir = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(
+        path.join(dataDir, "config.yaml"),
+        minimaxYaml("sk-cp-test"),
+      );
+      const limits = yield* readInstanceUsageLimits(minimaxInstance(dataDir), "minimax");
+      assert.isUndefined(limits?.unavailable);
+      assert.strictEqual(limits?.windows.length, 2);
+      const [fiveHour, weekly] = limits?.windows ?? [];
+      assert.strictEqual(fiveHour?.id, "five_hour");
+      assert.strictEqual(fiveHour?.usedPercent, 1);
+      assert.strictEqual(fiveHour?.resetsAt, "2026-10-03T14:40:00.000Z");
+      assert.strictEqual(weekly?.id, "weekly");
+      assert.strictEqual(weekly?.usedPercent, 0);
+      assert.include(weekly?.label ?? "", "无限制");
+      assert.isUndefined(weekly?.resetsAt);
+      assert.deepStrictEqual(requests, [
+        {
+          url: "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+          authorization: "Bearer sk-cp-test",
+        },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClient(
+          {
+            base_resp: { status_code: 0, status_msg: "success" },
+            model_remains: [
+              {
+                model_name: "general",
+                end_time: 1791038400000,
+                weekly_end_time: 1791129600000,
+                current_interval_status: 1,
+                current_interval_remaining_percent: 99,
+                current_weekly_status: 3,
+                current_weekly_remaining_percent: 100,
+              },
+              { model_name: "video", current_interval_status: 3 },
+            ],
+          },
+          requests,
+        ),
+      ),
+    );
+  });
+
+  it.live("minimax probe degrades to probeFailed when config.yaml holds no key", () =>
+    Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dataDir = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(path.join(dataDir, "config.yaml"), "defaultModel: x\n");
+      const limits = yield* readInstanceUsageLimits(minimaxInstance(dataDir), "minimax");
+      assert.strictEqual(limits?.unavailable?.reason, "probeFailed");
+      assert.strictEqual(limits?.windows.length, 0);
+    }).pipe(Effect.scoped, Effect.provide(layers)),
+  );
 });
