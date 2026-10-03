@@ -2319,6 +2319,94 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves a scan-free index and per-instance cards for lazy clients", () =>
+    Effect.gen(function* () {
+      const makeProvider = (instanceId: string, displayName: string) => ({
+        instanceId: ProviderInstanceId.make(instanceId),
+        driver: ProviderDriverKind.make("codex"),
+        displayName,
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      });
+      let scans = 0;
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: {
+            getProviders: Effect.succeed([
+              makeProvider("codex-a", "Codex A"),
+              makeProvider("codex-b", "Codex B"),
+            ]),
+          },
+          usageService: {
+            readInstances: () =>
+              Effect.sync(() => {
+                scans += 1;
+                return {
+                  readAt: "2026-10-03T08:00:00.000Z",
+                  instances: [
+                    {
+                      instanceId: ProviderInstanceId.make("codex-b"),
+                      usage: {
+                        available: true as const,
+                        totalTokens: 900,
+                        costUsd: 0.1,
+                        unpricedRecords: 0,
+                        models: [],
+                      },
+                    },
+                  ],
+                  pricing: {
+                    status: "cached" as const,
+                    source: "test",
+                    fetchedAt: "2026-10-02T00:00:00.000Z",
+                    knownModels: 1,
+                  },
+                  scanDurationMs: 1,
+                };
+              }),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const index = yield* responseJsonEffect<{
+        providers: Array<Record<string, unknown>>;
+      }>(yield* fetchEffect(`${url}?scope=index`, { headers }));
+      assert.deepEqual(
+        index.providers.map((entry) => [entry.id, entry.displayName, "usage" in entry]),
+        [
+          ["codex-a", "Codex A", false],
+          ["codex-b", "Codex B", false],
+        ],
+      );
+      assert.equal(scans, 0);
+
+      const card = yield* responseJsonEffect<{
+        provider: { id: string; usage: { totalTokens?: number }; usageLimits: unknown };
+      }>(yield* fetchEffect(`${url}?instance=codex-b&refresh=1`, { headers }));
+      assert.equal(card.provider.id, "codex-b");
+      assert.equal(card.provider.usage.totalTokens, 900);
+      assert.isDefined(card.provider.usageLimits);
+
+      const other = yield* responseJsonEffect<{
+        provider: { id: string; usage: { available: boolean } };
+      }>(yield* fetchEffect(`${url}?instance=codex-a`, { headers }));
+      assert.equal(other.provider.id, "codex-a");
+      assert.equal(other.provider.usage.available, false);
+
+      const missing = yield* fetchEffect(`${url}?instance=nope`, { headers });
+      assert.equal(missing.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("keeps provider state usable when the usage scan fails", () =>
     Effect.gen(function* () {
       const provider = {

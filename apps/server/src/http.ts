@@ -424,6 +424,95 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
     const usageLimitSourceSnapshots = yield* usageLimitSources.current;
     const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
 
+    // Lazy-loading modes for the model-usage page and the mini program:
+    // `scope=index` answers with identities only (no scans, no probes) so the
+    // client can paint cards at once; `instance=<id>` computes just that card,
+    // and `refresh=1` additionally skips the quota-probe cache.
+    const requestUrl = HttpServerRequest.toURL(request);
+    const params = Option.isSome(requestUrl)
+      ? requestUrl.value.searchParams
+      : new URLSearchParams();
+    const scope = params.get("scope");
+    const instanceParam = params.get("instance");
+    const refresh = params.get("refresh") === "1";
+    const accountEntries = usageLimitSourceSnapshots.flatMap((source) =>
+      source.accounts.map((account) => ({
+        id: `${source.id}:${account.id}`,
+        driver: account.driver,
+        displayName: account.plan ?? source.label,
+        modelCount: 0,
+        state: "ready" as const,
+        usageLimits: account.usageLimits,
+      })),
+    );
+    const providerIdentity = (provider: (typeof providers)[number]) => ({
+      id: provider.instanceId,
+      driver: provider.driver,
+      displayName: provider.displayName ?? provider.driver,
+      modelCount: provider.models.length,
+      state: provider.status,
+    });
+    if (scope === "index") {
+      return HttpServerResponse.jsonUnsafe({
+        providers: [
+          ...providers.map(providerIdentity),
+          ...accountEntries.map((entry) => ({
+            id: entry.id,
+            driver: entry.driver,
+            displayName: entry.displayName,
+            modelCount: entry.modelCount,
+            state: entry.state,
+          })),
+        ],
+        readAt: DateTime.formatIso(yield* DateTime.now),
+      });
+    }
+    if (instanceParam !== null) {
+      const provider = providers.find((candidate) => candidate.instanceId === instanceParam);
+      const account = accountEntries.find((entry) => entry.id === instanceParam);
+      if (provider === undefined && account === undefined) {
+        return HttpServerResponse.jsonUnsafe({ error: "unknown instance" }, { status: 404 });
+      }
+      const readAtNow = DateTime.formatIso(yield* DateTime.now);
+      if (provider === undefined || account !== undefined) {
+        // A limit-source account carries its windows already and has no
+        // transcript home to attribute usage to.
+        return HttpServerResponse.jsonUnsafe({
+          provider: { ...account, usage: { available: false } },
+          readAt: readAtNow,
+        });
+      }
+      const scanned = yield* usageService.readInstances({ days: PROVIDER_USAGE_SUMMARY_DAYS }).pipe(
+        Effect.catch((error: UsageReadError) =>
+          Effect.logWarning("Provider usage attribution scan failed", {
+            detail: error.detail,
+          }).pipe(Effect.as(null)),
+        ),
+      );
+      const usage = scanned?.instances.find(
+        (instance) => instance.instanceId === provider.instanceId,
+      )?.usage;
+      const limits =
+        settings === null
+          ? undefined
+          : yield* readInstanceUsageLimits(settings, provider.instanceId, { refresh }).pipe(
+              Effect.orElseSucceed(() => undefined),
+            );
+      return HttpServerResponse.jsonUnsafe({
+        provider: {
+          ...providerIdentity(provider),
+          usage: usage ?? { available: false },
+          usageLimits: limits ??
+            provider.usageLimits ?? {
+              checkedAt: scanned?.readAt ?? readAtNow,
+              windows: [],
+              unavailable: { reason: "unsupported" },
+            },
+        },
+        readAt: scanned?.readAt ?? readAtNow,
+      });
+    }
+
     // Attribution is best-effort: a scan failure must not blank the provider
     // state and usage-limits data the caller can still use.
     const instancesSummary = yield* usageService
