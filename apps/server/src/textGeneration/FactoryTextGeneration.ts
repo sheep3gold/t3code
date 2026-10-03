@@ -40,10 +40,9 @@ function stringValue(value: Record<string, unknown>, key: string): string | unde
 }
 export const makeFactoryTextGeneration = Effect.fn("makeFactoryTextGeneration")(function* (
   settings: FactorySettings,
-  baseEnvironment: NodeJS.ProcessEnv = process.env,
+  resolveEnvironment: Effect.Effect<NodeJS.ProcessEnv> = Effect.sync(() => process.env),
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const environment = baseEnvironment;
   const runJson = (
     operation: Operation,
     cwd: string,
@@ -51,6 +50,7 @@ export const makeFactoryTextGeneration = Effect.fn("makeFactoryTextGeneration")(
     prompt: string,
   ): Effect.Effect<Record<string, unknown>, TextGenerationError> =>
     Effect.gen(function* () {
+      const environment = yield* resolveEnvironment;
       const binary = settings.binaryPath?.trim() || "droid";
       // Read-only autonomy (no --auto) keeps a title/commit-message call from
       // touching the workspace; `-o text` prints just the final answer.

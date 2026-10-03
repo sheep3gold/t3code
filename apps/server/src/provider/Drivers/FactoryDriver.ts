@@ -17,6 +17,7 @@ import {
   enrichFactorySnapshot,
 } from "../Layers/FactoryProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
+import { makeFactoryApiKeyResolver } from "../factoryApiKey.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -72,13 +73,20 @@ export const FactoryDriver: ProviderDriver<FactorySettings, FactoryDriverEnv> = 
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
+      // The key is read from etcd at every droid spawn, so rotating it needs no restart.
+      const apiKey = makeFactoryApiKeyResolver({
+        etcdKey: settings.apiKeyEtcdKey,
+        baseEnvironment: processEnv,
+      });
       const adapter = yield* makeFactoryAdapter(settings, {
         environment: processEnv,
+        resolveEnvironment: apiKey.environment,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
       });
-      const textGeneration = yield* makeFactoryTextGeneration(settings, processEnv);
-      const checkProvider = checkFactoryProviderStatus(settings, processEnv, cwd).pipe(
+      const textGeneration = yield* makeFactoryTextGeneration(settings, apiKey.environment);
+      const checkProvider = apiKey.environment.pipe(
+        Effect.flatMap((environment) => checkFactoryProviderStatus(settings, environment, cwd)),
         Effect.map(stamp),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
