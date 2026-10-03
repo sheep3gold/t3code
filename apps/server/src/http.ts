@@ -387,7 +387,33 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
   "GET",
   PROVIDER_USAGE_SUMMARY_PATH,
   Effect.gen(function* () {
-    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+    // The payload is the sanitized summary other zxytech hubs proxy
+    // server-to-server behind an nginx IP allowlist (101 web-hub), so a
+    // request without credentials is allowed through; when credentials are
+    // present they must carry the orchestration read scope. Invalid
+    // credentials still fail rather than silently downgrading to anonymous.
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+      Effect.catchIf(
+        (error): error is EnvironmentAuth.ServerAuthMissingCredentialError =>
+          EnvironmentAuth.isServerAuthCredentialError(error) &&
+          EnvironmentAuth.serverAuthCredentialReason(error) === "missing_credential",
+        () => Effect.succeed(null),
+      ),
+      Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
+        failEnvironmentAuthInvalid(
+          EnvironmentAuth.serverAuthCredentialReason(error),
+          EnvironmentAuth.serverAuthDpopFailureReason(error),
+        ),
+      ),
+      Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+        failEnvironmentInternal("internal_error", error),
+      ),
+    );
+    if (session !== null && !session.scopes.includes(AuthOrchestrationReadScope)) {
+      return yield* failEnvironmentScopeRequired(AuthOrchestrationReadScope);
+    }
     const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
     const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
     const usageService = yield* UsageService.UsageService;
