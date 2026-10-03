@@ -5,6 +5,8 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
   isProviderAvailable,
+  UsageReadError,
+  type UsageInstancesSummary,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -50,11 +52,14 @@ import {
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageService from "./usage/UsageService.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
 const PROVIDER_MODELS_PATH = "/api/provider-models";
+/** Trailing window the usage summary attributes to each configured instance. */
+const PROVIDER_USAGE_SUMMARY_DAYS = 7;
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -385,9 +390,30 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
     yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
     const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-    const readAt = DateTime.formatIso(yield* DateTime.now);
+    const usageService = yield* UsageService.UsageService;
     const providers = yield* providerRegistry.getProviders;
     const usageLimitSourceSnapshots = yield* usageLimitSources.current;
+
+    // Attribution is best-effort: a scan failure must not blank the provider
+    // state and usage-limits data the caller can still use.
+    const instancesSummary = yield* usageService
+      .readInstances({ days: PROVIDER_USAGE_SUMMARY_DAYS })
+      .pipe(
+        Effect.catch((error: UsageReadError) =>
+          Effect.logWarning("Provider usage attribution scan failed", {
+            detail: error.detail,
+          }).pipe(Effect.as(null)),
+        ),
+      );
+    const usageByInstance = new Map<string, UsageInstancesSummary["instances"][number]["usage"]>(
+      (instancesSummary?.instances ?? []).map((instance) => [instance.instanceId, instance.usage]),
+    );
+
+    const readAt = instancesSummary?.readAt ?? DateTime.formatIso(yield* DateTime.now);
+    const presentUsages = providers.flatMap((provider) => {
+      const usage = usageByInstance.get(provider.instanceId);
+      return usage === undefined ? [] : [usage];
+    });
 
     return HttpServerResponse.jsonUnsafe({
       providers: [
@@ -397,7 +423,7 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
           displayName: provider.displayName ?? provider.driver,
           modelCount: provider.models.length,
           state: provider.status,
-          usage: { available: false },
+          usage: usageByInstance.get(provider.instanceId) ?? { available: false },
           usageLimits: provider.usageLimits ?? {
             checkedAt: readAt,
             windows: [],
@@ -417,9 +443,9 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
         ),
       ],
       totals: {
-        totalTokens: 0,
-        costUsd: 0,
-        available: false,
+        totalTokens: presentUsages.reduce((sum, usage) => sum + usage.totalTokens, 0),
+        costUsd: presentUsages.reduce((sum, usage) => sum + usage.costUsd, 0),
+        available: presentUsages.length > 0,
       },
       readAt,
     });
