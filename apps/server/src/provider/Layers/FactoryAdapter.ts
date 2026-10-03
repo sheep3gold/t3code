@@ -51,6 +51,7 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import { factoryApiKeyFingerprint } from "../factoryApiKey.ts";
 import { acpPermissionOutcome } from "../acp/AcpAdapterSupport.ts";
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
@@ -76,6 +77,11 @@ const PROVIDER = ProviderDriverKind.make("factory");
 
 export interface FactoryAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
+  /**
+   * Resolves the environment for each droid spawn (the API key is looked up
+   * live). Takes precedence over `environment`.
+   */
+  readonly resolveEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly nativeEventLogger?: EventNdjsonLogger;
   /**
    * Model selections are honored when `modelSelection.instanceId` matches this
@@ -117,6 +123,8 @@ interface FactorySessionContext {
    * the last remaining prompt settles the turn.
    */
   promptsInFlight: number;
+  /** Fingerprint of the API key this session's droid process was started with. */
+  readonly apiKeyFingerprint: string;
   stopped: boolean;
 }
 
@@ -494,11 +502,15 @@ export function makeFactoryAdapter(
            * Each attempt owns the scope it was given, so a failed attempt can be
            * closed (killing its child) without touching the next one.
            */
+          const spawnEnvironment = options?.resolveEnvironment
+            ? yield* options.resolveEnvironment
+            : options?.environment;
+
           const openRuntime = (resumeSessionId: string | undefined) =>
             Effect.gen(function* () {
               const acp = yield* makeFactoryAcpRuntime({
                 factorySettings: effectiveSettings,
-                ...(options?.environment ? { environment: options.environment } : {}),
+                ...(spawnEnvironment ? { environment: spawnEnvironment } : {}),
                 childProcessSpawner,
                 cwd,
                 ...(resumeSessionId ? { resumeSessionId, resumeMethod: "resume" as const } : {}),
@@ -671,6 +683,7 @@ export function makeFactoryAdapter(
             turns: [],
             activeTurnId: undefined,
             promptsInFlight: 0,
+            apiKeyFingerprint: factoryApiKeyFingerprint(spawnEnvironment ?? process.env),
             stopped: false,
           };
 
@@ -723,6 +736,39 @@ export function makeFactoryAdapter(
      * sure only the last prompt to finish settles it. Treating it as a new turn
      * would split one conversational exchange across two T3 turns.
      */
+    /**
+     * A droid process keeps the API key it was started with. When the key has
+     * been rotated, resume the same droid session in a fresh process (context
+     * is preserved) before the next turn. Never done mid-turn, and never when
+     * no key can be resolved at all.
+     */
+    const refreshSessionIfKeyRotated = (
+      ctx: FactorySessionContext,
+    ): Effect.Effect<
+      FactorySessionContext,
+      | ProviderAdapterSessionNotFoundError
+      | ProviderAdapterProcessError
+      | ProviderAdapterValidationError
+    > =>
+      Effect.gen(function* () {
+        if (!options?.resolveEnvironment || ctx.promptsInFlight > 0) return ctx;
+        const latest = factoryApiKeyFingerprint(yield* options.resolveEnvironment);
+        if (!latest || latest === ctx.apiKeyFingerprint) return ctx;
+        yield* Effect.logInfo("Factory API key changed; restarting the droid session", {
+          threadId: ctx.threadId,
+        });
+        yield* startSession({
+          threadId: ctx.threadId,
+          ...(ctx.session.cwd ? { cwd: ctx.session.cwd } : {}),
+          runtimeMode: ctx.session.runtimeMode,
+          ...(ctx.session.model
+            ? { modelSelection: { instanceId: boundInstanceId, model: ctx.session.model } }
+            : {}),
+          resumeCursor: ctx.session.resumeCursor,
+        });
+        return yield* requireSession(ctx.threadId);
+      });
+
     const sendTurn = (
       input: ProviderSendTurnInput,
     ): Effect.Effect<
@@ -732,7 +778,9 @@ export function makeFactoryAdapter(
       | ProviderAdapterValidationError
     > =>
       Effect.gen(function* () {
-        const ctx = yield* requireSession(input.threadId);
+        const ctx = yield* requireSession(input.threadId).pipe(
+          Effect.flatMap(refreshSessionIfKeyRotated),
+        );
 
         const text = input.input?.trim();
         if (!text) {

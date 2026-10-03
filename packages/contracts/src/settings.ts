@@ -849,9 +849,17 @@ export const FactorySettings = makeProviderSettingsSchema(
     binaryPath: makeBinaryPathSetting("droid").pipe(
       Schema.annotateKey({
         title: "Binary path",
-        description:
-          "Path to the Factory Droid CLI binary. Authenticates with FACTORY_API_KEY from the server environment.",
+        description: "Path to the Factory Droid CLI binary.",
         providerSettingsForm: { placeholder: "droid", clearWhenEmpty: "omit" },
+      }),
+    ),
+    apiKeyEtcdKey: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "API key etcd key",
+        description:
+          "etcd key holding the Factory API key. Read each time Droid starts, so rotating it needs no restart. Empty uses FACTORY_API_KEY from the server environment.",
+        providerSettingsForm: { placeholder: "/droid/appkey", clearWhenEmpty: "omit" },
       }),
     ),
     customModels: Schema.Array(CustomModelSetting).pipe(
@@ -859,7 +867,7 @@ export const FactorySettings = makeProviderSettingsSchema(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
-  { order: ["binaryPath"] },
+  { order: ["binaryPath", "apiKeyEtcdKey"] },
 );
 export type FactorySettings = typeof FactorySettings.Type;
 

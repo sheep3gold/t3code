@@ -9,11 +9,13 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect } from "vite-plus/test";
 import { makeFactoryAcpRuntime } from "./FactoryAcpSupport.ts";
 import { makeFactoryAdapter } from "../Layers/FactoryAdapter.ts";
+import { makeFactoryApiKeyResolver } from "../factoryApiKey.ts";
 
 // Needs a real `droid` and FACTORY_API_KEY in the environment; turns spend credits.
 const settings = {
   enabled: true,
   binaryPath: process.env.T3_FACTORY_BINARY ?? "droid",
+  apiKeyEtcdKey: process.env.T3_FACTORY_ETCD_KEY ?? "",
   customModels: [],
 };
 
@@ -146,6 +148,63 @@ describe.runIf(process.env.T3_FACTORY_ACP_PROBE === "1")("Factory ACP CLI probe"
         expect(stale.status).toBe("ready");
         expect(yield* ask(third, "Reply with only the word: alive")).toContain("alive");
         yield* adapter.stopSession(third);
+        yield* Fiber.interrupt(events);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.skipIf(process.env.T3_FACTORY_LIVE_TURN !== "1")(
+    "reads the API key from etcd at spawn time and follows a rotation",
+    () =>
+      Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("factory");
+        const model = "gpt-6-luna";
+        const { FACTORY_API_KEY: realKey, ...withoutKey } = process.env;
+        expect(realKey).toBeTruthy();
+
+        // 1) No key in the environment: etcd alone must carry a turn.
+        const live = makeFactoryApiKeyResolver({
+          etcdKey: process.env.T3_FACTORY_ETCD_KEY ?? "/droid/appkey",
+          baseEnvironment: withoutKey,
+          ttlMs: 0,
+        });
+        expect((yield* live.environment).FACTORY_API_KEY).toBe(realKey);
+
+        // 2) Rotation: the resolver hands out a dead key first, then the real one.
+        let rotated = false;
+        const adapter = yield* makeFactoryAdapter(settings, {
+          instanceId,
+          environment: withoutKey,
+          resolveEnvironment: Effect.sync(() => ({
+            ...withoutKey,
+            FACTORY_API_KEY: rotated ? realKey : "fk-rotated-out-key",
+          })),
+        });
+        const chunks: string[] = [];
+        let turnDone = yield* Deferred.make<void>();
+        const events = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+          if (event.type === "content.delta") chunks.push(event.payload.delta);
+          return event.type === "turn.completed"
+            ? Deferred.succeed(turnDone, undefined).pipe(Effect.ignore)
+            : Effect.void;
+        }).pipe(Effect.forkChild);
+        const threadId = ThreadId.make("factory-rotation-probe");
+        yield* adapter.startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "approval-required",
+          modelSelection: { instanceId, model },
+        });
+        rotated = true;
+        chunks.length = 0;
+        turnDone = yield* Deferred.make<void>();
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Reply with only the word: rotated",
+          modelSelection: { instanceId, model },
+        });
+        yield* Deferred.await(turnDone).pipe(Effect.timeout("90 seconds"));
+        expect(chunks.join("")).toContain("rotated");
+        yield* adapter.stopSession(threadId);
         yield* Fiber.interrupt(events);
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
