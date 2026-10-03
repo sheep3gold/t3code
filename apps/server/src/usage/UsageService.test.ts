@@ -714,4 +714,115 @@ describe("UsageService", () => {
       );
     }).pipe(Effect.scoped),
   );
+
+  it.live("attributes usage to configured instances by home, not model name", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const xjpHome = NodePath.join(home, "codex-xjp");
+      const workbuddyHome = NodePath.join(home, "codex-workbuddy");
+      const glmHome = NodePath.join(home, "claude-glm");
+
+      const codexRollout = (session: string, outputTokens: number, model: string) =>
+        [
+          { type: "session_meta", payload: { id: session } },
+          { type: "turn_context", payload: { model } },
+          {
+            type: "event_msg",
+            timestamp: new Date().toISOString(),
+            payload: {
+              type: "token_count",
+              info: { last_token_usage: { input_tokens: 10, output_tokens: outputTokens } },
+            },
+          },
+        ]
+          .map((line) => encodeUnknownJsonString(line))
+          .join("\n") + "\n";
+
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(NodePath.join(xjpHome, "sessions"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(xjpHome, "sessions", "rollout.jsonl"),
+          codexRollout("xjp-session", 100, "gpt-5.6-sol"),
+        );
+        await NodeFSP.mkdir(NodePath.join(workbuddyHome, "sessions"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(workbuddyHome, "sessions", "rollout.jsonl"),
+          // Same model slug as xjp: attribution must follow the home.
+          codexRollout("workbuddy-session", 300, "gpt-5.6-sol"),
+        );
+        await NodeFSP.mkdir(NodePath.join(glmHome, "projects", "proj"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(glmHome, "projects", "proj", "session.jsonl"),
+          `${JSON.stringify({
+            type: "assistant",
+            timestamp: new Date().toISOString(),
+            requestId: "req_glm_1",
+            sessionId: "glm-session",
+            message: {
+              id: "msg_glm_1",
+              model: "glm-5.3",
+              usage: { input_tokens: 10, output_tokens: 50 },
+            },
+          })}\n`,
+        );
+      });
+
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-service-instances-test",
+            home,
+            settings: {
+              ...settings,
+              providerInstances: {
+                [ProviderInstanceId.make("codex_xjp")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  environment: [{ name: "CODEX_HOME", value: xjpHome, sensitive: false }],
+                },
+                [ProviderInstanceId.make("codex_workbuddy")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  environment: [{ name: "CODEX_HOME", value: workbuddyHome, sensitive: false }],
+                },
+                [ProviderInstanceId.make("claude_glm")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: glmHome },
+                },
+                // No transcripts on disk and no history: must be omitted.
+                [ProviderInstanceId.make("claude_empty")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: NodePath.join(home, "missing") },
+                },
+              },
+            },
+          }),
+        ),
+      );
+
+      const summary = yield* service.readInstances({ days: 7 });
+      const byId = new Map(summary.instances.map((instance) => [instance.instanceId, instance]));
+
+      assert.strictEqual(byId.size, 3);
+      assert.isFalse(byId.has(ProviderInstanceId.make("claude_empty")));
+
+      const xjp = byId.get(ProviderInstanceId.make("codex_xjp"));
+      const workbuddy = byId.get(ProviderInstanceId.make("codex_workbuddy"));
+      const glm = byId.get(ProviderInstanceId.make("claude_glm"));
+
+      assert.isTrue(xjp?.usage.available);
+      assert.isTrue(workbuddy?.usage.available);
+      assert.isTrue(glm?.usage.available);
+
+      // Overlapping model slugs stay split across the two homes.
+      assert.strictEqual(xjp?.usage.models[0]?.model, "gpt-5.6-sol");
+      assert.strictEqual(xjp?.usage.models[0]?.totalTokens, 110);
+      assert.strictEqual(workbuddy?.usage.models[0]?.model, "gpt-5.6-sol");
+      assert.strictEqual(workbuddy?.usage.models[0]?.totalTokens, 310);
+      assert.strictEqual(glm?.usage.models[0]?.model, "glm-5.3");
+      assert.strictEqual(glm?.usage.models[0]?.totalTokens, 60);
+
+      assert.strictEqual(xjp?.usage.totalTokens, 110);
+      assert.strictEqual(workbuddy?.usage.totalTokens, 310);
+      assert.strictEqual(glm?.usage.totalTokens, 60);
+    }).pipe(Effect.scoped),
+  );
 });

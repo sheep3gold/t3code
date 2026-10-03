@@ -15,6 +15,7 @@
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
  * Bumped whenever the shape of {@link UsageSummary} changes incompatibly. The
@@ -212,3 +213,47 @@ export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageR
     return `Usage read failed (${this.reason}): ${this.detail}`;
   }
 }
+
+/**
+ * Per-instance usage rollup for one configured provider instance.
+ *
+ * Distinct from {@link UsageSummary}: the summary endpoint merges every
+ * transcript directory by physical volume for the interactive usage page,
+ * while this shape attributes usage to the *configured instance* the user
+ * names in settings (e.g. `codex_xjp` vs `codex_workbuddy`, which may serve
+ * overlapping model slugs and must never be merged). Instances whose homes
+ * resolve to the same physical directory are still reported together — the
+ * scan folds them — but only instances that saw activity or own a live
+ * transcript directory appear at all.
+ */
+export const UsageInstanceUsage = Schema.Struct({
+  available: Schema.Boolean,
+  totalTokens: NonNegativeInt,
+  costUsd: Schema.Number,
+  /** Records whose tokens counted toward totals but had no matching rate. */
+  unpricedRecords: NonNegativeInt,
+  /** Per-model rollups, sorted by token total descending. */
+  models: Schema.Array(
+    Schema.Struct({
+      model: TrimmedNonEmptyString,
+      totalTokens: NonNegativeInt,
+      costUsd: Schema.Number,
+    }),
+  ),
+});
+export type UsageInstanceUsage = typeof UsageInstanceUsage.Type;
+
+export const UsageInstance = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  usage: UsageInstanceUsage,
+});
+export type UsageInstance = typeof UsageInstance.Type;
+
+export const UsageInstancesSummary = Schema.Struct({
+  readAt: Schema.String,
+  instances: Schema.Array(UsageInstance),
+  pricing: UsagePricing,
+  /** Wall-clock cost of the scan, surfaced in diagnostics. */
+  scanDurationMs: NonNegativeInt,
+});
+export type UsageInstancesSummary = typeof UsageInstancesSummary.Type;

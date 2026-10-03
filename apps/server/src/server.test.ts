@@ -42,6 +42,7 @@ import {
   ThreadId,
   TurnId,
   UsageLimitSourceId,
+  UsageReadError,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -528,6 +529,7 @@ const buildAppUnderTest = (options?: {
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
     modelManifest?: Partial<ModelManifest.ModelManifest["Service"]>;
     usageLimitSources?: Partial<UsageLimitSources.UsageLimitSources["Service"]>;
+    usageService?: Partial<UsageService.UsageService["Service"]>;
     providerService?: Partial<ProviderService.ProviderService["Service"]>;
     providerAuth?: Partial<ProviderAuthService["Service"]>;
     providerInstanceRegistry?: Partial<ProviderInstanceRegistry["Service"]>;
@@ -1085,7 +1087,11 @@ const buildAppUnderTest = (options?: {
 
     const appLayer = servedRoutesLayer.pipe(
       Layer.provide(Layer.mergeAll(threadRepositoriesLayer, resourceTelemetryLayer)),
-      Layer.provide(UsageService.layerTest),
+      Layer.provide(
+        options?.layers?.usageService === undefined
+          ? UsageService.layerTest
+          : Layer.mock(UsageService.UsageService)(options.layers.usageService),
+      ),
       Layer.provide(
         Layer.mock(AnalyticsService.AnalyticsService)({
           record: () => Effect.void,
@@ -2230,6 +2236,129 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(summary.providers[0]?.displayName, "Codex");
       assert.deepEqual(summary.providers[0]?.usageLimits.windows, [providerUsageWindow]);
       assert.equal(summary.providers[1]?.displayName, "Team");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("attributes scanned usage to the configured provider instances", () =>
+    Effect.gen(function* () {
+      const provider = {
+        instanceId: ProviderInstanceId.make("codex-xjp"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex Plus · XJP",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([provider]) },
+          usageService: {
+            readInstances: () =>
+              Effect.succeed({
+                readAt: "2026-10-03T08:00:00.000Z",
+                instances: [
+                  {
+                    instanceId: ProviderInstanceId.make("codex-xjp"),
+                    usage: {
+                      available: true,
+                      totalTokens: 12500,
+                      costUsd: 0.42,
+                      unpricedRecords: 0,
+                      models: [{ model: "gpt-5.6-sol", totalTokens: 12500, costUsd: 0.42 }],
+                    },
+                  },
+                ],
+                pricing: {
+                  status: "cached",
+                  source: "test",
+                  fetchedAt: "2026-10-02T00:00:00.000Z",
+                  knownModels: 100,
+                },
+                scanDurationMs: 5,
+              }),
+          },
+        },
+      });
+
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-usage-summary"), {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+      const summary = yield* responseJsonEffect<{
+        providers: Array<{
+          id: string;
+          usage:
+            | { available: false }
+            | {
+                available: true;
+                totalTokens: number;
+                costUsd: number;
+                unpricedRecords: number;
+                models: Array<{ model: string; totalTokens: number; costUsd: number }>;
+              };
+        }>;
+        totals: { totalTokens: number; costUsd: number; available: boolean };
+        readAt: string;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(summary.providers[0]?.usage, {
+        available: true,
+        totalTokens: 12500,
+        costUsd: 0.42,
+        unpricedRecords: 0,
+        models: [{ model: "gpt-5.6-sol", totalTokens: 12500, costUsd: 0.42 }],
+      });
+      assert.deepEqual(summary.totals, { totalTokens: 12500, costUsd: 0.42, available: true });
+      assert.equal(summary.readAt, "2026-10-03T08:00:00.000Z");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps provider state usable when the usage scan fails", () =>
+    Effect.gen(function* () {
+      const provider = {
+        instanceId: ProviderInstanceId.make("codex-xjp"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex Plus · XJP",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([provider]) },
+          usageService: {
+            readInstances: () =>
+              Effect.fail(
+                new UsageReadError({ reason: "scanFailed", detail: "transcripts unreadable" }),
+              ),
+          },
+        },
+      });
+
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-usage-summary"), {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+      const summary = yield* responseJsonEffect<{
+        providers: Array<{ id: string; state: string; usage: { available: boolean } }>;
+        totals: { available: boolean };
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(summary.providers[0]?.state, "ready");
+      assert.deepEqual(summary.providers[0]?.usage, { available: false });
+      assert.equal(summary.totals.available, false);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
