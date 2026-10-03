@@ -1,5 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real
 // transcript trees on disk, outside the service's Effect FileSystem.
+// @effect-diagnostics globalDate:off - fixtures stamp records "now" so they
+// land inside the trailing-days instance window.
+// @effect-diagnostics globalDateInEffect:off - same as globalDate: the
+// fixture writes happen inside the Effect program.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -753,7 +757,7 @@ describe("UsageService", () => {
         await NodeFSP.mkdir(NodePath.join(glmHome, "projects", "proj"), { recursive: true });
         await NodeFSP.writeFile(
           NodePath.join(glmHome, "projects", "proj", "session.jsonl"),
-          `${JSON.stringify({
+          `${encodeUnknownJsonString({
             type: "assistant",
             timestamp: new Date().toISOString(),
             requestId: "req_glm_1",
