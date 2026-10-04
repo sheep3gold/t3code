@@ -43,6 +43,7 @@ import {
   TurnId,
   UsageLimitSourceId,
   UsageReadError,
+  type UsageSummary,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -2481,6 +2482,185 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 200);
       assert.equal(summary.providers[0]?.id, "codex-xjp");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  const historyBucket = (
+    day: string,
+    totalTokens: number,
+    costUsd: number,
+  ): UsageSummary["buckets"][number] => ({
+    day: day as UsageSummary["buckets"][number]["day"],
+    provider: "claude",
+    model: "model-x",
+    totals: {
+      uncachedInputTokens: totalTokens,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    },
+    costUsd,
+    cacheSavingsUsd: 0,
+    costSource: "modelPriced",
+    records: 1,
+    unpricedRecords: 0,
+    sessions: 1,
+  });
+
+  it.effect("serves zero-filled daily usage history rows for the chart", () =>
+    Effect.gen(function* () {
+      const windows: Array<{
+        sinceDay: string;
+        untilDay: string;
+        timeZone: string;
+        resolution?: string | undefined;
+      }> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([]) },
+          usageService: {
+            readSummary: (input) =>
+              Effect.sync(() => {
+                windows.push(input);
+                return {
+                  contractVersion: 1,
+                  readAt: "2026-10-03T08:00:00.000Z",
+                  timeZone: input.timeZone,
+                  sinceDay: input.sinceDay,
+                  untilDay: input.untilDay,
+                  buckets: [
+                    historyBucket("2026-10-01", 100, 0.5),
+                    historyBucket("2026-10-01", 24, 0.25),
+                    historyBucket("2026-10-03", 10, 0.1),
+                    historyBucket("2026-10-05", 7, 0), // Outside the window.
+                  ],
+                  sources: [],
+                  pricing: {
+                    status: "cached",
+                    source: "test",
+                    fetchedAt: null,
+                    knownModels: 0,
+                  },
+                  scanDurationMs: 1,
+                } satisfies UsageSummary;
+              }),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const history = yield* responseJsonEffect<{
+        timeZone: string;
+        sinceDay: string;
+        untilDay: string;
+        days: Array<{ day: string; totalTokens: number; costUsd: number }>;
+        available: boolean;
+        readAt: string;
+      }>(yield* fetchEffect(`${url}?scope=history&days=3&untilDay=2026-10-03`, { headers }));
+
+      assert.deepEqual(history, {
+        timeZone: "Asia/Shanghai",
+        sinceDay: "2026-10-01",
+        untilDay: "2026-10-03",
+        days: [
+          { day: "2026-10-01", totalTokens: 124, costUsd: 0.75 },
+          { day: "2026-10-02", totalTokens: 0, costUsd: 0 },
+          { day: "2026-10-03", totalTokens: 10, costUsd: 0.1 },
+        ],
+        available: true,
+        readAt: "2026-10-03T08:00:00.000Z",
+      });
+      // The window is derived server-side so every client shares one chart.
+      assert.deepEqual(windows, [
+        {
+          sinceDay: "2026-10-01",
+          untilDay: "2026-10-03",
+          timeZone: "Asia/Shanghai",
+          resolution: "day",
+        },
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("degrades history to zero rows when the scan fails", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([]) },
+          usageService: {
+            readSummary: () =>
+              Effect.fail(
+                new UsageReadError({ reason: "scanFailed", detail: "transcripts unreadable" }),
+              ),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const response = yield* fetchEffect(`${url}?scope=history&days=2&untilDay=2026-10-02`, {
+        headers,
+      });
+      const history = yield* responseJsonEffect<{
+        days: Array<{ day: string; totalTokens: number; costUsd: number }>;
+        available: boolean;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(history.available, false);
+      assert.deepEqual(history.days, [
+        { day: "2026-10-01", totalTokens: 0, costUsd: 0 },
+        { day: "2026-10-02", totalTokens: 0, costUsd: 0 },
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("validates history window params", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([]) },
+          usageService: {
+            readSummary: (input) =>
+              Effect.succeed({
+                contractVersion: 1,
+                readAt: "2026-10-03T08:00:00.000Z",
+                timeZone: input.timeZone,
+                sinceDay: input.sinceDay,
+                untilDay: input.untilDay,
+                buckets: [],
+                sources: [],
+                pricing: {
+                  status: "cached",
+                  source: "test",
+                  fetchedAt: null,
+                  knownModels: 0,
+                },
+                scanDurationMs: 0,
+              } satisfies UsageSummary),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const badDay = yield* fetchEffect(`${url}?scope=history&untilDay=10/04/2026`, { headers });
+      assert.equal(badDay.status, 400);
+
+      // `days` is clamped to the 90-day cache retention, counting back from today.
+      const clamped = yield* responseJsonEffect<{
+        sinceDay: string;
+        untilDay: string;
+        days: Array<{ day: string }>;
+      }>(yield* fetchEffect(`${url}?scope=history&days=999`, { headers }));
+      assert.equal(clamped.days.length, 90);
+      assert.equal(clamped.untilDay, clamped.days[clamped.days.length - 1]?.day);
+      assert.equal(
+        Date.parse(`${clamped.sinceDay}T00:00:00Z`),
+        Date.parse(`${clamped.untilDay}T00:00:00Z`) - 89 * 24 * 60 * 60 * 1000,
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
