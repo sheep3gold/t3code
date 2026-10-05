@@ -9967,10 +9967,6 @@ export default function ChatView(props: ChatViewProps) {
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
-            translationEnabled={threadTranslation.enabled}
-            translationAvailable={threadTranslation.available}
-            translationPending={threadTranslation.pending}
-            onToggleTranslation={threadTranslation.toggle}
           />
         </WorkspacePageHeader>
 
@@ -10103,8 +10099,10 @@ export default function ChatView(props: ChatViewProps) {
                   { context: { terminalFocus: false } },
                 )}
                 onRemoveQueuedMessage={onRemoveQueuedMessage}
-                translationEnabled={threadTranslation.enabled}
+                translationAvailable={threadTranslation.available}
                 translationForMessage={threadTranslation.translationFor}
+                translationPendingFor={threadTranslation.pendingFor}
+                onTranslateMessage={threadTranslation.translateMessage}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
