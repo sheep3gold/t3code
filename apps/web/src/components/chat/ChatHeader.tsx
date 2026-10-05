@@ -11,7 +11,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon, EllipsisIcon } from "lucide-react";
+import { ChevronDownIcon, EllipsisIcon, LanguagesIcon } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -51,7 +51,7 @@ import {
 import { cn } from "~/lib/utils";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { Button } from "../ui/button";
-import { Menu, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -78,6 +78,12 @@ interface ChatHeaderProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  /** Thread translation into Chinese, proxied through the server. */
+  translationEnabled: boolean;
+  /** False when the server has no translation upstream configured. */
+  translationAvailable: boolean;
+  translationPending: boolean;
+  onToggleTranslation: () => void;
 }
 
 /**
@@ -144,6 +150,10 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
+  translationEnabled,
+  translationAvailable,
+  translationPending,
+  onToggleTranslation,
 }: ChatHeaderProps) {
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
@@ -351,10 +361,43 @@ export const ChatHeader = memo(function ChatHeader({
     },
     [commitRename],
   );
+  const translationTooltip = !translationAvailable
+    ? "Translation is not configured on this server"
+    : translationEnabled
+      ? "Hide Chinese translation"
+      : "Translate conversation into Chinese";
+  const translationControl = actionsCollapsed ? (
+    <MenuItem density="touch" disabled={!translationAvailable} onClick={onToggleTranslation}>
+      <LanguagesIcon className={cn("size-4", translationEnabled ? "text-primary" : undefined)} />
+      <MenuItemLabel>{translationEnabled ? "关闭翻译" : "翻译为中文"}</MenuItemLabel>
+    </MenuItem>
+  ) : (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-sm"
+            variant={translationEnabled ? "secondary" : "ghost"}
+            aria-label={translationTooltip}
+            aria-pressed={translationEnabled}
+            disabled={!translationAvailable}
+            onClick={onToggleTranslation}
+          />
+        }
+      >
+        <LanguagesIcon
+          className={cn("size-4", translationPending ? "animate-pulse text-primary" : undefined)}
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{translationTooltip}</TooltipPopup>
+    </Tooltip>
+  );
   const headerActions = (
     <>
+      {translationControl}
       {activeProjectScripts && (
         <>
+          {actionsCollapsed && <MenuSeparator />}
           <ProjectScriptsControl
             onRequestMenuClose={() => setActionsOpen(false)}
             presentation={actionsCollapsed ? "menu" : "toolbar"}
@@ -500,12 +543,7 @@ export const ChatHeader = memo(function ChatHeader({
       >
         <Menu open={actionsCollapsed && actionsOpen} onOpenChange={setActionsOpen}>
           <MenuTrigger
-            className={
-              actionsCollapsed &&
-              (activeProjectScripts || showOpenInPicker || (activeProjectName && gitCwd))
-                ? undefined
-                : "hidden"
-            }
+            className={actionsCollapsed ? undefined : "hidden"}
             render={<Button size="icon-sm" variant="ghost" aria-label="More header actions" />}
           >
             <EllipsisIcon className="size-4" />

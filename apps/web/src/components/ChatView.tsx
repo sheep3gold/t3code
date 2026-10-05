@@ -275,6 +275,7 @@ import {
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useThreadTranslation } from "../hooks/useThreadTranslation";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -3653,6 +3654,10 @@ export default function ChatView(props: ChatViewProps) {
     rememberedForActive: peekRememberedThreadTimeline<typeof timelineEntries>(activeThreadKey),
   });
   const displayedTimelineKey = displayedTimeline.displayThreadKey ?? routeThreadKey;
+  const threadTranslation = useThreadTranslation({
+    threadKey: displayedTimelineKey,
+    messages: timelineMessages,
+  });
   const paintOnlyDisplayedTimeline = isPaintOnlyThreadTimeline(
     displayedTimeline.displayThreadKey,
     activeThreadKey,
@@ -9962,6 +9967,10 @@ export default function ChatView(props: ChatViewProps) {
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
+            translationEnabled={threadTranslation.enabled}
+            translationAvailable={threadTranslation.available}
+            translationPending={threadTranslation.pending}
+            onToggleTranslation={threadTranslation.toggle}
           />
         </WorkspacePageHeader>
 
@@ -10094,6 +10103,8 @@ export default function ChatView(props: ChatViewProps) {
                   { context: { terminalFocus: false } },
                 )}
                 onRemoveQueuedMessage={onRemoveQueuedMessage}
+                translationEnabled={threadTranslation.enabled}
+                translationForMessage={threadTranslation.translationFor}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}

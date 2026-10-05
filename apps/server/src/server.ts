@@ -32,6 +32,7 @@ import {
   browserApiCorsLayer,
   httpCompressionLayer,
 } from "./http.ts";
+import { translateRouteLayer } from "./translate/http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
@@ -625,6 +626,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     providerModelsRouteLayer,
     assetRouteLayer,
     attachmentUploadRouteLayer,
+    translateRouteLayer,
     threadWebhookRouteLayer,
     deviceHubProxyRouteLayer,
     staticAndDevRouteLayer,
