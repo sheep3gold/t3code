@@ -3657,6 +3657,7 @@ export default function ChatView(props: ChatViewProps) {
   const threadTranslation = useThreadTranslation({
     threadKey: displayedTimelineKey,
     messages: timelineMessages,
+    environmentId: activeThread?.environmentId ?? null,
   });
   const paintOnlyDisplayedTimeline = isPaintOnlyThreadTimeline(
     displayedTimeline.displayThreadKey,
