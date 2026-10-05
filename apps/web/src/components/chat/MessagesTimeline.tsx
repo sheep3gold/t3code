@@ -48,6 +48,8 @@ import {
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_TRANSLATION_FOR_MESSAGE = (_messageId: string) => undefined;
+const NOOP_TRANSLATION_PENDING_FOR = (_messageId: string) => false;
+const NOOP_TRANSLATE_MESSAGE = (_messageId: string) => {};
 const NOOP_OPEN_AGENTS = () => {};
 const EMPTY_QUEUED_MESSAGES: ReadonlyArray<QueuedComposerMessage> = [];
 const NOOP_QUEUED_MESSAGE_ACTION = (_id: string) => {};
@@ -121,6 +123,7 @@ import {
   EyeIcon,
   GlobeIcon,
   HammerIcon,
+  LanguagesIcon,
   MessageCircleIcon,
   Minimize2Icon,
   MousePointerClickIcon,
@@ -300,8 +303,10 @@ interface TimelineRowSharedState {
   onSteerQueuedMessage: (id: string) => void;
   steerQueuedMessageShortcutLabel: string | null;
   onRemoveQueuedMessage: (id: string) => void;
-  translationEnabled: boolean;
+  translationAvailable: boolean;
   translationForMessage: (messageId: string) => string | undefined;
+  translationPendingFor: (messageId: string) => boolean;
+  onTranslateMessage: (messageId: string) => void;
 }
 
 interface TimelineRowActivityState {
@@ -467,9 +472,11 @@ interface MessagesTimelineProps {
   onSteerQueuedMessage?: (id: string) => void;
   steerQueuedMessageShortcutLabel?: string | null;
   onRemoveQueuedMessage?: (id: string) => void;
-  /** Thread translation into Chinese; rows render the translation below the source text. */
-  translationEnabled?: boolean;
+  /** Per-message translation into Chinese; each row renders its own translate button. */
+  translationAvailable?: boolean;
   translationForMessage?: (messageId: string) => string | undefined;
+  translationPendingFor?: (messageId: string) => boolean;
+  onTranslateMessage?: (messageId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -527,8 +534,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
   steerQueuedMessageShortcutLabel = null,
   onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
-  translationEnabled = false,
+  translationAvailable = true,
   translationForMessage,
+  translationPendingFor,
+  onTranslateMessage,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -1168,8 +1177,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
-      translationEnabled,
+      translationAvailable,
       translationForMessage: translationForMessage ?? NOOP_TRANSLATION_FOR_MESSAGE,
+      translationPendingFor: translationPendingFor ?? NOOP_TRANSLATION_PENDING_FOR,
+      onTranslateMessage: onTranslateMessage ?? NOOP_TRANSLATE_MESSAGE,
     }),
     [
       readyCitationRequest,
@@ -1205,8 +1216,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
-      translationEnabled,
+      translationAvailable,
       translationForMessage,
+      translationPendingFor,
+      onTranslateMessage,
     ],
   );
   const backgroundWorktreeSetup =
@@ -1935,10 +1948,9 @@ function MessageAuthorHeading({ children }: { children: string }) {
   return <h3 className="sr-only select-none">{children}</h3>;
 }
 
-// Translation into Chinese, rendered under the source message when the header
-// toggle is on. While the batch is still in flight this stays invisible
-// (pending rows simply have no translation yet); failures leave the row
-// without a translation rather than showing an error per message.
+// Translation into Chinese, requested per message via the 译 button in the
+// row's action area. The translation renders under the source text; failures
+// leave the row without a translation rather than showing an error.
 function MessageTranslationBlock({
   messageId,
   align,
@@ -1947,7 +1959,7 @@ function MessageTranslationBlock({
   align: "start" | "end";
 }) {
   const ctx = use(TimelineRowCtx);
-  const translation = ctx.translationEnabled ? ctx.translationForMessage(messageId) : undefined;
+  const translation = ctx.translationForMessage(messageId);
   if (!translation) return null;
   return (
     <div
@@ -1969,6 +1981,39 @@ function MessageTranslationBlock({
         onImageExpand={ctx.onImageExpand}
       />
     </div>
+  );
+}
+
+// Per-message translate trigger. Hidden once the translation landed or while
+// the server has no translation upstream; spins while its request is in
+// flight. Rendered in the same hover-revealed action row as copy/revert.
+function MessageTranslateButton({ messageId }: { messageId: string }) {
+  const ctx = use(TimelineRowCtx);
+  if (!ctx.translationAvailable) return null;
+  if (ctx.translationForMessage(messageId) !== undefined) return null;
+  const pending = ctx.translationPendingFor(messageId);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => ctx.onTranslateMessage(messageId)}
+            aria-label="翻译为中文"
+          />
+        }
+      >
+        {pending ? (
+          <Spinner className="size-3" aria-hidden />
+        ) : (
+          <LanguagesIcon className="size-3" aria-hidden />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">翻译为中文</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -2258,6 +2303,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             {typeof revertTurnCount === "number" && (
               <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
             )}
+            {resolvedContext.text && !row.message.streaming && (
+              <MessageTranslateButton messageId={row.message.id} />
+            )}
             {resolvedContext.text && (
               <MessageCopyButton
                 // Structured paste needs the canonical links to retain their positions.
@@ -2499,6 +2547,9 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
+      {!message.streaming && message.text.trim().length > 0 && (
+        <MessageTranslateButton messageId={message.id} />
+      )}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>

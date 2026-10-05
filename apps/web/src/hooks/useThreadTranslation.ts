@@ -3,25 +3,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "~/types";
 
 /**
- * Per-thread chat translation into Simplified Chinese.
+ * On-demand per-message translation into Simplified Chinese.
  *
- * The toggle lives in ChatView so both ChatHeader (button) and
- * MessagesTimeline (rendered translations) read the same state. Translations
- * are cached per message and re-requested when a message's text changes
- * (streaming settles), never more than once per text.
+ * Each user/assistant row renders its own translate button; clicking it
+ * translates exactly that message. Results are cached per message id and
+ * re-requested when the message text changes (streaming settles). The cache
+ * survives thread switches since message ids are globally unique.
  */
 
 const TRANSLATE_PATH = "/api/translate";
-const BATCH_SIZE = 12;
 const RETRY_DELAY_MS = 15_000;
 
 export interface ThreadTranslationState {
-  readonly enabled: boolean;
-  readonly toggle: () => void;
+  /** False when the server has no translation upstream configured (503). */
   readonly available: boolean;
-  /** translation for a message, undefined while pending or on failure */
+  /** Kick off a translation for one message; no-op while pending or cached. */
+  readonly translateMessage: (messageId: string) => void;
+  /** Translation for a message, undefined until its own request lands. */
   readonly translationFor: (messageId: string) => string | undefined;
-  readonly pending: boolean;
+  /** Whether this message has a translation request in flight. */
+  readonly pendingFor: (messageId: string) => boolean;
 }
 
 interface CacheEntry {
@@ -43,135 +44,134 @@ export function useThreadTranslation(input: {
   readonly messages: ReadonlyArray<ChatMessage>;
 }): ThreadTranslationState {
   const { threadKey, messages } = input;
-  const [enabledByThread, setEnabledByThread] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
   const [cache, setCache] = useState<ReadonlyMap<string, CacheEntry>>(new Map());
-  const [pending, setPending] = useState(false);
-  // A render-phase reset keeps the toggle per thread without an effect.
-  const [lastThreadKey, setLastThreadKey] = useState(threadKey);
-  if (lastThreadKey !== threadKey) {
-    setLastThreadKey(threadKey);
-    setEnabledByThread(null);
-    setPending(false);
-  }
-  const enabled = enabledByThread === threadKey;
+  const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(new Set());
   const cacheRef = useRef(cache);
   const inFlightRef = useRef(new Set<string>());
-  const retryTimerRef = useRef<number | null>(null);
+  const retryTimersRef = useRef(new Map<string, number>());
   const generationRef = useRef(0);
 
-  // Switching threads invalidates in-flight bookkeeping; the cache is keyed by
-  // globally unique message ids, so it survives across threads.
   useEffect(() => {
     cacheRef.current = cache;
   }, [cache]);
+
+  // Switching threads abandons in-flight bookkeeping; timers are cancelled so
+  // a retry from the previous thread cannot write state after the switch.
+  const [lastThreadKey, setLastThreadKey] = useState(threadKey);
+  if (lastThreadKey !== threadKey) {
+    setLastThreadKey(threadKey);
+    setPendingIds(new Set());
+  }
   useEffect(() => {
     generationRef.current += 1;
     inFlightRef.current.clear();
-    const timer = retryTimerRef.current;
-    if (timer !== null) {
+    for (const timer of retryTimersRef.current.values()) {
       window.clearTimeout(timer);
-      retryTimerRef.current = null;
     }
+    retryTimersRef.current.clear();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- refs are stable; the reset must run only on thread change
   }, [threadKey]);
 
-  const runPass = useCallback(async () => {
-    const generation = generationRef.current;
-    const batch: Array<{ id: string; text: string }> = [];
-    for (const message of messages) {
-      if (batch.length >= BATCH_SIZE) break;
-      if (!isTranslatable(message)) continue;
-      const cached = cacheRef.current.get(message.id);
-      if (cached && cached.source === message.text) continue;
-      if (inFlightRef.current.has(message.id)) continue;
-      batch.push({ id: message.id, text: message.text });
-    }
-    if (batch.length === 0) {
-      setPending(false);
-      return;
-    }
-    for (const item of batch) inFlightRef.current.add(item.id);
-    setPending(true);
-    try {
-      const response = await fetch(TRANSLATE_PATH, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texts: batch.map((item) => item.text) }),
-      });
-      if (response.status === 503) {
-        // Not configured on this server; stop hammering and turn the toggle off.
-        setAvailable(false);
-        setEnabledByThread(null);
-        return;
-      }
-      if (!response.ok) throw new Error(`translate failed: ${response.status}`);
-      const payload = (await response.json()) as { translations?: unknown };
-      const translations = payload.translations;
-      if (!Array.isArray(translations) || translations.length !== batch.length) {
-        throw new Error("translate returned a malformed payload");
-      }
-      if (generation !== generationRef.current) return;
-      setCache((previous) => {
-        const next = new Map(previous);
-        for (let index = 0; index < batch.length; index += 1) {
-          const translation = translations[index];
-          if (typeof translation === "string" && translation.length > 0) {
-            next.set(batch[index]!.id, { source: batch[index]!.text, translation });
-          }
-        }
-        return next;
-      });
-    } catch {
-      // Leave the entries uncached; a retry pass is scheduled by the caller.
-      if (generation === generationRef.current && retryTimerRef.current === null) {
-        const scheduleRetry = retryScheduleRef.current;
-        retryTimerRef.current = window.setTimeout(() => {
-          retryTimerRef.current = null;
-          scheduleRetry();
-        }, RETRY_DELAY_MS);
-      }
-    } finally {
-      for (const item of batch) inFlightRef.current.delete(item.id);
-      if (generation === generationRef.current) {
-        // More messages may have arrived while this batch was in flight.
-        const remaining = messages.some(
-          (message) =>
-            isTranslatable(message) &&
-            cacheRef.current.get(message.id)?.source !== message.text &&
-            !inFlightRef.current.has(message.id),
-        );
-        setPending(remaining);
-      }
-    }
+  const messagesByIdRef = useRef(new Map<string, ChatMessage>());
+  useEffect(() => {
+    const next = new Map<string, ChatMessage>();
+    for (const message of messages) next.set(message.id, message);
+    messagesByIdRef.current = next;
   }, [messages]);
 
-  const retryScheduleRef = useRef(() => {});
-  useEffect(() => {
-    const schedule = () => void runPass();
-    // oxlint-disable-next-line react/immutability -- publishing the latest pass to the retry timer is the point of the ref
-    retryScheduleRef.current = schedule;
-    if (enabled) schedule();
-  }, [enabled, runPass]);
+  const translateMessageRef = useRef<(messageId: string) => void>(() => {});
+  const translateMessage = useCallback((messageId: string) => {
+    const message = messagesByIdRef.current.get(messageId);
+    if (!message || !isTranslatable(message)) return;
+    const cached = cacheRef.current.get(messageId);
+    if (cached && cached.source === message.text) return;
+    if (inFlightRef.current.has(messageId)) return;
 
-  const toggle = useCallback(
-    () => setEnabledByThread((current) => (current === threadKey ? null : threadKey)),
-    [threadKey],
-  );
+    const generation = generationRef.current;
+    const source = message.text;
+    inFlightRef.current.add(messageId);
+    setPendingIds((previous) => {
+      const next = new Set(previous);
+      next.add(messageId);
+      return next;
+    });
+
+    const finish = () => {
+      inFlightRef.current.delete(messageId);
+      if (generation !== generationRef.current) return;
+      setPendingIds((previous) => {
+        if (!previous.has(messageId)) return previous;
+        const next = new Set(previous);
+        next.delete(messageId);
+        return next;
+      });
+    };
+
+    void fetch(TRANSLATE_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts: [source] }),
+    })
+      .then(async (response) => {
+        if (response.status === 503) {
+          // Not configured on this server; surface the state on the buttons.
+          setAvailable(false);
+          return;
+        }
+        if (!response.ok) throw new Error(`translate failed: ${response.status}`);
+        const payload = (await response.json()) as { translations?: unknown };
+        const translations = payload.translations;
+        if (!Array.isArray(translations) || translations.length !== 1) {
+          throw new Error("translate returned a malformed payload");
+        }
+        const translation = translations[0];
+        if (typeof translation !== "string" || translation.length === 0) {
+          throw new Error("translate returned an empty translation");
+        }
+        if (generation !== generationRef.current) return;
+        setCache((previous) => {
+          const next = new Map(previous);
+          next.set(messageId, { source, translation });
+          return next;
+        });
+      })
+      .catch(() => {
+        // Retry this message once after a delay, only if nothing newer started.
+        if (generation !== generationRef.current) return;
+        if (retryTimersRef.current.has(messageId)) return;
+        const timer = window.setTimeout(() => {
+          retryTimersRef.current.delete(messageId);
+          if (generation === generationRef.current) {
+            inFlightRef.current.delete(messageId);
+            translateMessageRef.current(messageId);
+          }
+        }, RETRY_DELAY_MS);
+        retryTimersRef.current.set(messageId, timer);
+      })
+      .finally(finish);
+  }, []);
+  useEffect(() => {
+    translateMessageRef.current = translateMessage;
+  }, [translateMessage]);
 
   const translationFor = useCallback(
     (messageId: string): string | undefined => {
-      if (!enabled) return undefined;
-      const message = messages.find((candidate) => candidate.id === messageId);
+      const message = messagesByIdRef.current.get(messageId);
       if (!message) return undefined;
       const entry = cache.get(messageId);
       return entry && entry.source === message.text ? entry.translation : undefined;
     },
-    [cache, enabled, messages],
+    [cache],
+  );
+
+  const pendingFor = useCallback(
+    (messageId: string): boolean => pendingIds.has(messageId),
+    [pendingIds],
   );
 
   return useMemo(
-    () => ({ enabled, toggle, available, translationFor, pending }),
-    [enabled, toggle, available, translationFor, pending],
+    () => ({ available, translateMessage, translationFor, pendingFor }),
+    [available, translateMessage, translationFor, pendingFor],
   );
 }
