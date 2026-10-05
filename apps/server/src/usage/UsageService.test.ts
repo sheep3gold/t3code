@@ -829,4 +829,157 @@ describe("UsageService", () => {
       assert.strictEqual(glm?.usage.totalTokens, 60);
     }).pipe(Effect.scoped),
   );
+
+  it.live("splits a gateway-routed instance's auto row into per-upstream rows", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const autoHome = NodePath.join(home, "claude-auto");
+      const glmHome = NodePath.join(home, "claude-glm2");
+      const logsDir = NodePath.join(home, "gateway-logs");
+
+      const claudeTranscript = (session: string, outputTokens: number) =>
+        `${encodeUnknownJsonString({
+          type: "assistant",
+          timestamp: new Date().toISOString(),
+          requestId: `req_${session}`,
+          sessionId: session,
+          message: {
+            id: `msg_${session}`,
+            model: "auto",
+            usage: { input_tokens: 100, output_tokens: outputTokens },
+          },
+        })}\n`;
+
+      const l1Line = (session: string, deployment: string, prompt: number, completion: number) =>
+        encodeUnknownJsonString({
+          event: "request",
+          status: "success",
+          session_id: session,
+          deployment,
+          model: `openai/${deployment.split(".").at(-1)}`,
+          prompt_tokens: prompt,
+          completion_tokens: completion,
+          ts: new Date().toISOString(),
+        });
+
+      yield* Effect.promise(async () => {
+        // Two sessions route through the gateway; one predates the window and
+        // must be ignored.
+        await NodeFSP.mkdir(NodePath.join(autoHome, "projects", "proj"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(autoHome, "projects", "proj", "s1.jsonl"),
+          claudeTranscript("auto-s1", 500),
+        );
+        await NodeFSP.writeFile(
+          NodePath.join(autoHome, "projects", "proj", "s2.jsonl"),
+          claudeTranscript("auto-s2", 300),
+        );
+        await NodeFSP.writeFile(
+          NodePath.join(autoHome, "settings.json"),
+          encodeUnknownJsonString({
+            env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:4000" },
+          }),
+        );
+        // The direct-glm instance must keep its own transcript row untouched.
+        await NodeFSP.mkdir(NodePath.join(glmHome, "projects", "proj"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(glmHome, "projects", "proj", "g1.jsonl"),
+          claudeTranscript("glm-s1", 60),
+        );
+        await NodeFSP.writeFile(
+          NodePath.join(glmHome, "settings.json"),
+          encodeUnknownJsonString({
+            env: { ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic" },
+          }),
+        );
+
+        await NodeFSP.mkdir(logsDir, { recursive: true });
+        const lines = [
+          l1Line("auto-s1", "complex.workbuddy.kimi-k3-1", 4000, 1000),
+          l1Line("auto-s1", "complex.workbuddy.kimi-k3-1", 2000, 500),
+          l1Line("auto-s2", "simple.glm.glm-5.3-flash", 900, 300),
+          // A failed attempt bills nothing and must be dropped.
+          encodeUnknownJsonString({
+            event: "request",
+            status: "failure",
+            session_id: "auto-s1",
+            deployment: "complex.workbuddy.kimi-k3-1",
+            prompt_tokens: 9000,
+            completion_tokens: 9000,
+            ts: new Date().toISOString(),
+          }),
+          // A session this instance never saw must not leak in.
+          l1Line("someone-else", "complex.workbuddy.kimi-k3-1", 7000, 7000),
+          // A request before the window must be dropped.
+          encodeUnknownJsonString({
+            event: "request",
+            status: "success",
+            session_id: "auto-s1",
+            deployment: "complex.workbuddy.kimi-k3-1",
+            prompt_tokens: 5000,
+            completion_tokens: 5000,
+            ts: "2020-01-01T00:00:00.000Z",
+          }),
+        ];
+        await NodeFSP.writeFile(
+          NodePath.join(logsDir, "l1-2026-08-01.jsonl"),
+          lines.join("\n") + "\n",
+        );
+        // The shipped archive contributes too.
+        await NodeFSP.mkdir(NodePath.join(logsDir, "shipped"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(logsDir, "shipped", "l1-2026-07-31.jsonl"),
+          l1Line("auto-s2", "simple.glm.glm-5.3-flash", 100, 100) + "\n",
+        );
+      });
+
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-service-gateway-test",
+            home,
+            settings: {
+              ...settings,
+              providerInstances: {
+                [ProviderInstanceId.make("claude_auto")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: autoHome },
+                },
+                [ProviderInstanceId.make("claude_glm")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: glmHome },
+                },
+              },
+            },
+            environment: { T3_GATEWAY_LOGS_DIR: logsDir },
+          }),
+        ),
+      );
+
+      const summary = yield* service.readInstances({ days: 7 });
+      const byId = new Map(summary.instances.map((instance) => [instance.instanceId, instance]));
+      const auto = byId.get(ProviderInstanceId.make("claude_auto"));
+      const glm = byId.get(ProviderInstanceId.make("claude_glm"));
+
+      // Header totals still come from the transcripts: 2×100 input + 500/300
+      // output for auto, 100 + 60 for glm. Nothing double counts.
+      assert.strictEqual(auto?.usage.totalTokens, 1000);
+      assert.strictEqual(glm?.usage.totalTokens, 160);
+
+      // The single `auto` row is replaced by the upstream split. L1 saw
+      // (4000+1000)+(2000+500)=7500 workbuddy and (900+300)+(100+100)=1400 glm
+      // tokens, scaled by 1000/8900 to the transcript total.
+      const models = auto?.usage.models.map((row) => [row.model, row.totalTokens] as const);
+      assert.deepStrictEqual(models, [
+        ["workbuddy · kimi-k3-1", 843],
+        ["glm · glm-5.3-flash", 157],
+      ]);
+      // Scaled rows sum to the header total.
+      const rowSum = (auto?.usage.models ?? []).reduce((sum, row) => sum + row.totalTokens, 0);
+      assert.strictEqual(rowSum, 1000);
+
+      // The direct instance is untouched by the split.
+      assert.strictEqual(glm?.usage.models[0]?.model, "auto");
+    }).pipe(Effect.scoped),
+  );
 });

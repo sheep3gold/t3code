@@ -49,10 +49,16 @@ import { ServerConfig } from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { resolveAntigravityProfileDirectory } from "../provider/antigravityAuthSupport.ts";
 import { readAntigravityUsage } from "./antigravityUsage.ts";
 import { readFactoryUsage } from "./factoryUsage.ts";
+import {
+  readGatewayUpstreamTokens,
+  resolveGatewayLogsDir,
+  splitGatewayUsage,
+} from "./gatewayUsage.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import {
   createOverrideRateTable,
@@ -793,6 +799,8 @@ export const make = Effect.gen(function* () {
       models: Map<string, { totalTokens: number; costUsd: number }>;
     }
     const byInstance = new Map<string, MutableInstance>();
+    /** Sessions that contributed in-window usage, per instance; the gateway split keys off these. */
+    const instanceSessionIds = new Map<string, ReadonlySet<string>>();
     const instanceEntry = (instanceKey: string): MutableInstance => {
       let entry = byInstance.get(instanceKey);
       if (entry === undefined) {
@@ -849,11 +857,12 @@ export const make = Effect.gen(function* () {
           return accumulate(entry, record);
         },
       };
-      foldScannedDir({
+      const { sessionIds } = foldScannedDir({
         scannedDir,
         aggregator: collecting,
         retentionCutoffMs,
       });
+      instanceSessionIds.set(instanceKey, sessionIds);
     }
 
     // Antigravity keeps usage in per-conversation SQLite stores rather than
@@ -894,6 +903,56 @@ export const make = Effect.gen(function* () {
       for (const record of records.value) {
         accumulate(entry, { ...record, reportedCostUsd: null });
       }
+    }
+
+    // A Claude instance whose home points its base URL at a local model
+    // gateway routes everything through the `auto` slug; the gateway's L1
+    // logs hold the real upstream per session. Replace the single `auto` row
+    // with the per-upstream split so the spend shows under the providers that
+    // served it. The header total is unchanged — rows are scaled to it — so
+    // no token is counted twice across the page. See usage/gatewayUsage.ts.
+    for (const [instanceKey, instance] of Object.entries(settings.providerInstances)) {
+      if (instance.driver !== "claudeAgent" || instance.enabled === false) continue;
+      const entry = byInstance.get(instanceKey);
+      if (entry === undefined || entry.totalTokens === 0) continue;
+      const sessionIds = instanceSessionIds.get(instanceKey);
+      if (sessionIds === undefined || sessionIds.size === 0) continue;
+      const decoded = decodeClaudeSettings(instance.config ?? {});
+      if (Option.isNone(decoded)) continue;
+      const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
+      const home = yield* resolveClaudeHomePath(decoded.value, environment).pipe(
+        Effect.provideService(Path.Path, path),
+      );
+      const logsDir = yield* resolveGatewayLogsDir(home, environment).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      if (Option.isNone(logsDir)) continue;
+      const upstreamTokens = yield* readGatewayUpstreamTokens({
+        logsDir: logsDir.value,
+        sessionIds,
+        sinceMs: sinceDayStartMs,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      const split = splitGatewayUsage({
+        transcriptTotalTokens: entry.totalTokens,
+        upstreamTokens,
+        rates,
+        overrides,
+      });
+      if (split === null) continue;
+      entry.models = new Map(
+        split.models.map((row) => [
+          row.model,
+          { totalTokens: row.totalTokens, costUsd: row.costUsd },
+        ]),
+      );
+      // The `auto` slug is unpriced, so the accumulated cost was 0 with every
+      // record unpriced; the split prices the same tokens under real models.
+      entry.costUsd = split.costUsd;
+      entry.unpricedRecords = 0;
     }
 
     const pruned = pruneScanCache(fileCache, retentionCutoffMs);
