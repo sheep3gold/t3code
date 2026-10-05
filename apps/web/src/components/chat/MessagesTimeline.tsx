@@ -47,6 +47,7 @@ import {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
+const NOOP_TRANSLATION_FOR_MESSAGE = (_messageId: string) => undefined;
 const NOOP_OPEN_AGENTS = () => {};
 const EMPTY_QUEUED_MESSAGES: ReadonlyArray<QueuedComposerMessage> = [];
 const NOOP_QUEUED_MESSAGE_ACTION = (_id: string) => {};
@@ -299,6 +300,8 @@ interface TimelineRowSharedState {
   onSteerQueuedMessage: (id: string) => void;
   steerQueuedMessageShortcutLabel: string | null;
   onRemoveQueuedMessage: (id: string) => void;
+  translationEnabled: boolean;
+  translationForMessage: (messageId: string) => string | undefined;
 }
 
 interface TimelineRowActivityState {
@@ -464,6 +467,9 @@ interface MessagesTimelineProps {
   onSteerQueuedMessage?: (id: string) => void;
   steerQueuedMessageShortcutLabel?: string | null;
   onRemoveQueuedMessage?: (id: string) => void;
+  /** Thread translation into Chinese; rows render the translation below the source text. */
+  translationEnabled?: boolean;
+  translationForMessage?: (messageId: string) => string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +527,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
   steerQueuedMessageShortcutLabel = null,
   onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
+  translationEnabled = false,
+  translationForMessage,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -1160,6 +1168,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
+      translationEnabled,
+      translationForMessage: translationForMessage ?? NOOP_TRANSLATION_FOR_MESSAGE,
     }),
     [
       readyCitationRequest,
@@ -1195,6 +1205,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
+      translationEnabled,
+      translationForMessage,
     ],
   );
   const backgroundWorktreeSetup =
@@ -1923,6 +1935,43 @@ function MessageAuthorHeading({ children }: { children: string }) {
   return <h3 className="sr-only select-none">{children}</h3>;
 }
 
+// Translation into Chinese, rendered under the source message when the header
+// toggle is on. While the batch is still in flight this stays invisible
+// (pending rows simply have no translation yet); failures leave the row
+// without a translation rather than showing an error per message.
+function MessageTranslationBlock({
+  messageId,
+  align,
+}: {
+  messageId: string;
+  align: "start" | "end";
+}) {
+  const ctx = use(TimelineRowCtx);
+  const translation = ctx.translationEnabled ? ctx.translationForMessage(messageId) : undefined;
+  if (!translation) return null;
+  return (
+    <div
+      className={cn(
+        "mt-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1.5 text-sm text-muted-foreground",
+        align === "end" ? "w-full max-w-[80%] self-end text-start" : undefined,
+      )}
+      data-message-translation={messageId}
+    >
+      <ChatMarkdown
+        text={translation}
+        cwd={ctx.markdownCwd}
+        threadRef={ctx.threadRef ?? undefined}
+        isStreaming={false}
+        lineBreaks={false}
+        skills={ctx.skills}
+        headingLevelOffset={MESSAGE_HEADING_LEVEL}
+        onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+        onImageExpand={ctx.onImageExpand}
+      />
+    </div>
+  );
+}
+
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const { onImageExpand, onFileOpen } = ctx;
@@ -2193,6 +2242,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             markdownCwd={ctx.markdownCwd}
           />
         </div>
+        <MessageTranslationBlock messageId={row.message.id} align="end" />
       </div>
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
@@ -2381,6 +2431,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             onImageExpand={ctx.onImageExpand}
           />
         </AssistantCitationSource>
+        <MessageTranslationBlock messageId={row.message.id} align="start" />
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}
