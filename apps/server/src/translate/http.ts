@@ -33,9 +33,15 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 export const TRANSLATE_ROUTE_PATH = "/api/translate";
 
 const DEFAULT_BASE_URL = "https://llm.zxytech.cn/v1";
-const DEFAULT_MODEL = "deepseek-v4.1-flash";
+// The owner's model-gateway routes by tier; appKeys only allow "auto" and the
+// SIMPLE tier keeps translation cheap (its flash models think, so a real
+// max_tokens budget is mandatory — too small and the reply is all reasoning
+// with an empty content).
+const DEFAULT_MODEL = "auto";
+const GATEWAY_TIER = "SIMPLE";
 const MAX_TEXTS_PER_REQUEST = 24;
 const MAX_TEXT_LENGTH = 16_000;
+const UPSTREAM_MAX_TOKENS = 4096;
 
 const SYSTEM_PROMPT = [
   "You are a translation engine. The user sends JSON: an array of strings.",
@@ -141,9 +147,11 @@ export const translateRouteLayer = HttpRouter.add(
       .execute(
         HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
           HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+          HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
           HttpClientRequest.bodyJsonUnsafe({
             model,
             temperature: 0,
+            max_tokens: UPSTREAM_MAX_TOKENS,
             messages: [
               { role: "system", content: SYSTEM_PROMPT },
               { role: "user", content: textsJson },
@@ -168,6 +176,14 @@ export const translateRouteLayer = HttpRouter.add(
       ),
     );
     const content = completion.choices[0]?.message.content ?? "";
+    if (content.length === 0) {
+      // Reasoning flash models can spend the whole budget on thinking; the
+      // client falls back to untranslated text on 502 and retries later.
+      yield* Effect.logWarning("Translation upstream returned empty content");
+      return yield* Effect.fail(
+        HttpServerResponse.text("Translation upstream returned empty content.", { status: 502 }),
+      );
+    }
     const translations = yield* parseTranslationsJson(content);
     if (translations === null || translations.length !== texts.length) {
       yield* Effect.logWarning("Translation response could not be parsed", {
