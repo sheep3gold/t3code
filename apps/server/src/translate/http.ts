@@ -41,7 +41,17 @@ const DEFAULT_MODEL = "auto";
 const GATEWAY_TIER = "SIMPLE";
 const MAX_TEXTS_PER_REQUEST = 24;
 const MAX_TEXT_LENGTH = 16_000;
+const UPSTREAM_TIMEOUT_SECONDS = 60;
 const UPSTREAM_MAX_TOKENS = 4096;
+// Long messages exceed the upstream token budget in one shot (a reasoning
+// flash model burns the budget on thinking, or the JSON array is truncated),
+// which used to turn into a 502 after a 60s timeout — the client then showed
+// an endless spinner. Split long texts at paragraph boundaries and translate
+// the chunks in batches sized to the output budget.
+const CHUNK_TARGET_LENGTH = 2_000;
+// Combined source length per upstream call, keeping the reply well under
+// UPSTREAM_MAX_TOKENS even with reasoning overhead on top of the translation.
+const UPSTREAM_BATCH_LENGTH = 6_000;
 
 const SYSTEM_PROMPT = [
   "You are a translation engine. The user sends JSON: an array of strings.",
@@ -77,6 +87,65 @@ export const parseTranslationsJson = (content: string) => {
     : trimmed;
   return decodeTranslationsJson(withoutFence).pipe(Effect.orElseSucceed(() => null));
 };
+
+export interface TextChunks {
+  readonly chunks: Array<string>;
+  /** separators[i] joins chunks[i] and chunks[i+1] ("\n\n" or "\n"). */
+  readonly separators: Array<string>;
+}
+
+/**
+ * Split a long text at paragraph boundaries into chunks of roughly
+ * `targetLength`, never splitting inside a line. A text that already fits is
+ * returned as a single chunk. Joining the translated chunks back with
+ * `separators` preserves the original line/paragraph structure exactly.
+ */
+export const chunkText = (text: string, targetLength = CHUNK_TARGET_LENGTH): TextChunks => {
+  if (text.length <= targetLength) return { chunks: [text], separators: [] };
+  const paragraphs = text.split("\n\n");
+  const chunks: Array<string> = [];
+  // boundaries[i] is the separator following chunks[i]; the last entry is a
+  // placeholder sliced off at the end.
+  const boundaries: Array<string> = [];
+  const flush = (chunk: string, after: string) => {
+    chunks.push(chunk);
+    boundaries.push(after);
+  };
+  let current = "";
+  for (const paragraph of paragraphs) {
+    const candidate = current.length === 0 ? paragraph : `${current}\n\n${paragraph}`;
+    if (candidate.length <= targetLength) {
+      current = candidate;
+      continue;
+    }
+    if (current.length > 0) flush(current, "\n\n");
+    if (paragraph.length <= targetLength) {
+      current = paragraph;
+      continue;
+    }
+    // A single oversized paragraph falls back to splitting on newlines.
+    let lineChunk = "";
+    for (const line of paragraph.split("\n")) {
+      const candidateLine = lineChunk.length === 0 ? line : `${lineChunk}\n${line}`;
+      if (candidateLine.length <= targetLength) {
+        lineChunk = candidateLine;
+        continue;
+      }
+      if (lineChunk.length > 0) flush(lineChunk, "\n");
+      lineChunk = line;
+    }
+    current = lineChunk;
+  }
+  if (current.length > 0) flush(current, "");
+  return { chunks, separators: boundaries.slice(0, -1) };
+};
+
+/** Join translated chunks back into one text with the recorded separators. */
+export const joinChunks = (chunks: ReadonlyArray<string>, separators: ReadonlyArray<string>) =>
+  chunks.reduce(
+    (acc, chunk, index) => (index === 0 ? chunk : `${acc}${separators[index - 1]}${chunk}`),
+    "",
+  );
 
 export const translateRouteLayer = HttpRouter.add(
   "POST",
@@ -144,59 +213,107 @@ export const translateRouteLayer = HttpRouter.add(
       return HttpServerResponse.jsonUnsafe({ translations: [] });
     }
 
-    const httpClient = yield* HttpClient.HttpClient;
-    const textsJson = yield* encodeTextsJson(texts).pipe(
-      Effect.mapError(() => HttpServerResponse.text("Could not encode texts.", { status: 500 })),
-    );
-    const upstreamJson = yield* httpClient
-      .execute(
-        HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
-          HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-          HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
-          HttpClientRequest.bodyJsonUnsafe({
-            model,
-            temperature: 0,
-            max_tokens: UPSTREAM_MAX_TOKENS,
-            messages: [
-              { role: "system", content: SYSTEM_PROMPT },
-              { role: "user", content: textsJson },
-            ],
-          }),
-        ),
-      )
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap((response) => response.json),
-        Effect.timeout("60 seconds"),
-        Effect.tapError((cause) =>
-          Effect.logWarning("Translation upstream request failed", { cause }),
-        ),
-        Effect.mapError(() =>
-          HttpServerResponse.text("Translation upstream failed.", { status: 502 }),
-        ),
-      );
-    const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
-      Effect.mapError(() =>
-        HttpServerResponse.text("Unexpected upstream response.", { status: 502 }),
-      ),
-    );
-    const content = completion.choices[0]?.message.content ?? "";
-    if (content.length === 0) {
-      // Reasoning flash models can spend the whole budget on thinking; the
-      // client falls back to untranslated text on 502 and retries later.
-      yield* Effect.logWarning("Translation upstream returned empty content");
-      return yield* Effect.fail(
-        HttpServerResponse.text("Translation upstream returned empty content.", { status: 502 }),
-      );
+    // Expand each input text into budget-sized chunks and remember how many
+    // chunks each text produced and which separators join them, so the
+    // translated chunks can be joined back into one translation per input.
+    const chunkCounts: Array<number> = [];
+    const chunkSeparators: Array<ReadonlyArray<string>> = [];
+    const chunks: Array<string> = [];
+    for (const text of texts) {
+      const textChunks = chunkText(text);
+      chunkCounts.push(textChunks.chunks.length);
+      chunkSeparators.push(textChunks.separators);
+      chunks.push(...textChunks.chunks);
     }
-    const translations = yield* parseTranslationsJson(content);
-    if (translations === null || translations.length !== texts.length) {
-      yield* Effect.logWarning("Translation response could not be parsed", {
-        expected: texts.length,
-      });
-      return yield* Effect.fail(
-        HttpServerResponse.text("Translation response malformed.", { status: 502 }),
+
+    const httpClient = yield* HttpClient.HttpClient;
+
+    // max_tokens caps the TOTAL completion output of one upstream call, so a
+    // long text cannot go through as one big JSON array — the reply is
+    // truncated mid-array and used to surface as a 502 after the 60s timeout.
+    // Send the chunks in batches whose combined source length fits the output
+    // budget; every batch gets its own full budget.
+    const chunkBatches: Array<Array<string>> = [];
+    let currentBatch: Array<string> = [];
+    let currentBatchLength = 0;
+    for (const chunk of chunks) {
+      if (currentBatch.length > 0 && currentBatchLength + chunk.length > UPSTREAM_BATCH_LENGTH) {
+        chunkBatches.push(currentBatch);
+        currentBatch = [];
+        currentBatchLength = 0;
+      }
+      currentBatch.push(chunk);
+      currentBatchLength += chunk.length;
+    }
+    if (currentBatch.length > 0) chunkBatches.push(currentBatch);
+
+    const translatedChunks: Array<string> = [];
+    for (const [batchIndex, batch] of chunkBatches.entries()) {
+      const textsJson = yield* encodeTextsJson(batch).pipe(
+        Effect.mapError(() => HttpServerResponse.text("Could not encode texts.", { status: 500 })),
       );
+      const upstreamJson = yield* httpClient
+        .execute(
+          HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
+            HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+            HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
+            HttpClientRequest.bodyJsonUnsafe({
+              model,
+              temperature: 0,
+              max_tokens: UPSTREAM_MAX_TOKENS,
+              messages: [
+                { role: "system", content: SYSTEM_PROMPT },
+                { role: "user", content: textsJson },
+              ],
+            }),
+          ),
+        )
+        .pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.flatMap((response) => response.json),
+          Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+          Effect.tapError((cause) =>
+            Effect.logWarning("Translation upstream request failed", { cause, batchIndex }),
+          ),
+          Effect.mapError(() =>
+            HttpServerResponse.text("Translation upstream failed.", { status: 502 }),
+          ),
+        );
+      const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
+        Effect.mapError(() =>
+          HttpServerResponse.text("Unexpected upstream response.", { status: 502 }),
+        ),
+      );
+      const content = completion.choices[0]?.message.content ?? "";
+      if (content.length === 0) {
+        // Reasoning flash models can spend the whole budget on thinking; the
+        // client falls back to untranslated text on 502 and retries later.
+        yield* Effect.logWarning("Translation upstream returned empty content", { batchIndex });
+        return yield* Effect.fail(
+          HttpServerResponse.text("Translation upstream returned empty content.", { status: 502 }),
+        );
+      }
+      const batchTranslations = yield* parseTranslationsJson(content);
+      if (batchTranslations === null || batchTranslations.length !== batch.length) {
+        yield* Effect.logWarning("Translation response could not be parsed", {
+          batchIndex,
+          expected: batch.length,
+        });
+        return yield* Effect.fail(
+          HttpServerResponse.text("Translation response malformed.", { status: 502 }),
+        );
+      }
+      translatedChunks.push(...batchTranslations);
+    }
+
+    // Join each input text's translated chunks back into one translation.
+    const translations: Array<string> = [];
+    let offset = 0;
+    for (const [textIndex, count] of chunkCounts.entries()) {
+      translations.push(
+        joinChunks(translatedChunks.slice(offset, offset + count), chunkSeparators[textIndex]!),
+      );
+      offset += count;
     }
     return HttpServerResponse.jsonUnsafe({ translations });
   }).pipe(
