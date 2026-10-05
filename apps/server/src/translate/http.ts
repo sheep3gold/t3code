@@ -84,7 +84,12 @@ export const translateRouteLayer = HttpRouter.add(
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+    // The desktop shell's page origin is the t3code:// asset protocol and
+    // cannot send Authorization headers cross-origin without a CORS preflight
+    // the custom scheme cannot express, so bearer/DPoP clients authenticate
+    // with a short-lived `wsTicket` query parameter — the same fallback the
+    // /ws upgrade and the device-hub proxy use.
+    const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
       Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
         failEnvironmentAuthInvalid(
           EnvironmentAuth.serverAuthCredentialReason(error),
