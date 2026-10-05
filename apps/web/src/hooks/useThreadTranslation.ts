@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { ChatMessage } from "~/types";
+import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
+import { resolvePrimaryEnvironmentHttpUrl } from "../environments/primary/target";
+import type { ChatMessage } from "../types";
 
 /**
  * On-demand per-message translation into Simplified Chinese.
@@ -9,9 +11,14 @@ import type { ChatMessage } from "~/types";
  * translates exactly that message. Results are cached per message id and
  * re-requested when the message text changes (streaming settles). The cache
  * survives thread switches since message ids are globally unique.
+ *
+ * The request must target the primary environment's real HTTP origin: inside
+ * the desktop shell the page origin is the t3code:// asset protocol, whose
+ * handler only serves static files (a relative fetch there gets a 405 and the
+ * click appears to do nothing). Same-origin browser sessions authenticate via
+ * cookie; the desktop shell attaches the local environment bearer token.
  */
 
-const TRANSLATE_PATH = "/api/translate";
 const RETRY_DELAY_MS = 15_000;
 
 export interface ThreadTranslationState {
@@ -37,6 +44,21 @@ function isTranslatable(message: ChatMessage): boolean {
     !message.streaming &&
     message.text.trim().length > 0
   );
+}
+
+async function postTranslateRequest(source: string): Promise<Response> {
+  const url = resolvePrimaryEnvironmentHttpUrl("/api/translate");
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const bearerToken = await readDesktopPrimaryBearerToken();
+  if (bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`;
+  }
+  return fetch(url, {
+    method: "POST",
+    headers,
+    credentials: bearerToken ? "omit" : "include",
+    body: JSON.stringify({ texts: [source] }),
+  });
 }
 
 export function useThreadTranslation(input: {
@@ -108,11 +130,7 @@ export function useThreadTranslation(input: {
       });
     };
 
-    void fetch(TRANSLATE_PATH, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts: [source] }),
-    })
+    void postTranslateRequest(source)
       .then(async (response) => {
         if (response.status === 503) {
           // Not configured on this server; surface the state on the buttons.
