@@ -4,12 +4,14 @@ import {
   type ServerProviderSkill,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useMemo } from "react";
+import { ChevronRightIcon } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { Switch } from "../ui/switch";
-import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 interface SkillRow {
   /** Display name; identity for the disabled set is its lowercase form. */
@@ -56,6 +58,10 @@ function collectSkillRows(providers: ReadonlyArray<ServerProvider>): ReadonlyArr
  * `disabledSkills`. Turning a skill off removes it from every provider
  * snapshot the server publishes: the `$` menu stops offering it and a
  * hand-typed `$name` mention is sent as literal text instead of dispatching.
+ *
+ * The collapsed row shows only the name plus the switch; the long description
+ * and the list of discovering providers sit in a per-row expand panel so a
+ * 20-skill environment fits on one screen without scrolling.
  */
 export function SkillsSettingsPanel({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const settings = useEnvironmentSettings(environmentId);
@@ -82,6 +88,8 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
     [disabledSkills, skillRows],
   );
 
+  const [openName, setOpenName] = useState<string | null>(null);
+
   const setSkillDisabled = (name: string, disabled: boolean) => {
     const key = name.trim().toLowerCase();
     const next = disabled
@@ -92,49 +100,75 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
 
   const renderRow = (row: SkillRow) => {
     const disabled = disabledSkillNames.has(row.name.trim().toLowerCase());
+    const rowKey = row.name.trim().toLowerCase();
+    const open = openName === rowKey;
+    const detailText = [
+      row.description,
+      row.providerLabels.length > 0
+        ? `From ${row.providerLabels.join(", ")}`
+        : "Not discovered by any provider right now",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     return (
-      <SettingsRow
-        key={row.name.trim().toLowerCase()}
-        title={row.name}
-        description={
-          [
-            row.description,
-            row.providerLabels.length > 0 ? `From ${row.providerLabels.join(", ")}` : undefined,
-            row.providerLabels.length === 0
-              ? "Not discovered by any provider right now"
-              : undefined,
-          ]
-            .filter(Boolean)
-            .join(" · ") || undefined
-        }
-        control={
-          <Switch
-            checked={!disabled}
-            onCheckedChange={(checked) => setSkillDisabled(row.name, !checked)}
-            aria-label={`Enable skill ${row.name}`}
-          />
-        }
-      />
+      <Collapsible
+        key={rowKey}
+        open={open}
+        onOpenChange={(next) => setOpenName(next ? rowKey : null)}
+      >
+        <article>
+          <div className="flex min-h-10 items-center hover:bg-muted/35 sm:min-h-9">
+            <CollapsibleTrigger
+              aria-label={`Show details for skill ${row.name}`}
+              className="group flex min-h-10 min-w-0 flex-1 items-center gap-2.5 px-3 text-left sm:min-h-9 sm:px-4"
+            >
+              <ChevronRightIcon
+                aria-hidden
+                className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-90"
+              />
+              <span className="truncate font-medium text-foreground">{row.name}</span>
+            </CollapsibleTrigger>
+            <div className="me-3 shrink-0 sm:me-4">
+              <Switch
+                checked={!disabled}
+                onCheckedChange={(checked) => setSkillDisabled(row.name, !checked)}
+                aria-label={`Enable skill ${row.name}`}
+              />
+            </div>
+          </div>
+          <CollapsiblePanel>
+            {open ? (
+              <div className="px-9 pt-1 pb-4 sm:px-10">
+                <p className="max-w-[72ch] whitespace-pre-wrap text-[13px] leading-[1.5] text-muted-foreground">
+                  {detailText}
+                </p>
+              </div>
+            ) : null}
+          </CollapsiblePanel>
+        </article>
+      </Collapsible>
     );
   };
 
   return (
-    <SettingsSection title="Skills">
-      <p className="px-3 pb-1 text-xs text-muted-foreground sm:px-4">
-        Skills providers discovered on this environment. Turning one off hides it from the `$` menu
-        and blocks `$name` mentions from dispatching it, across every provider.
-      </p>
-      {skillRows.length === 0 && undiscoveredDisabled.length === 0 ? (
-        <p className="px-3 py-6 text-sm text-muted-foreground sm:px-4">
-          No skills discovered yet. Skills appear here once a provider reports them — open a
-          project's composer and type `$` to trigger a workspace scan.
+    <SettingsPageContainer>
+      <SettingsSection title="Skills">
+        <p className="px-3 pb-1 text-xs text-muted-foreground sm:px-4">
+          Skills providers discovered on this environment. Turning one off hides it from the `$`
+          menu and blocks `$name` mentions from dispatching it, across every provider.
         </p>
-      ) : (
-        <>
-          {skillRows.map(renderRow)}
-          {undiscoveredDisabled.map(renderRow)}
-        </>
-      )}
-    </SettingsSection>
+        {skillRows.length === 0 && undiscoveredDisabled.length === 0 ? (
+          <p className="px-3 py-6 text-sm text-muted-foreground sm:px-4">
+            No skills discovered yet. Skills appear here once a provider reports them — open a
+            project's composer and type `$` to trigger a workspace scan.
+          </p>
+        ) : (
+          <div className="text-base sm:text-sm">
+            {skillRows.map(renderRow)}
+            {undiscoveredDisabled.map(renderRow)}
+          </div>
+        )}
+      </SettingsSection>
+    </SettingsPageContainer>
   );
 }
