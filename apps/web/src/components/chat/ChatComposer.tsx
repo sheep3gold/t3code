@@ -2245,6 +2245,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Derived: composer trigger / menu
   // ------------------------------------------------------------------
   const composerTriggerKind = composerTrigger?.kind ?? null;
+  const skillMenuRefreshKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (composerTriggerKind !== "skill") {
+      skillMenuRefreshKeyRef.current = null;
+      return;
+    }
+    if (!gitCwd || !selectedProviderEntry) return;
+    const key = `${environmentId}:${selectedProviderEntry.instanceId}:${gitCwd}`;
+    if (skillMenuRefreshKeyRef.current === key) return;
+    if (!selectedProviderStatus?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === gitCwd)) {
+      return;
+    }
+    // An installed skill can be newer than a cached workspace snapshot.
+    skillMenuRefreshKeyRef.current = key;
+    void refreshProviders({
+      environmentId,
+      input: { instanceId: selectedProviderEntry.instanceId, cwd: gitCwd, forceSkills: true },
+    });
+  }, [
+    composerTriggerKind,
+    environmentId,
+    gitCwd,
+    refreshProviders,
+    selectedProviderEntry,
+    selectedProviderStatus,
+  ]);
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const pullRequestTriggerQuery =
     composerTrigger?.kind === "pull-request" ? composerTrigger.query : "";
