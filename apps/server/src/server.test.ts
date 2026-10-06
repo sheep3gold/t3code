@@ -4886,6 +4886,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(body.translations, ["你好，世界"]);
       assert.equal(upstreamBodies.length, 2);
       assert.isTrue(upstreamBodies.every((upstreamBody) => upstreamBody.includes("hello")));
+      // Thinking dominated latency; every upstream call must switch it off.
+      assert.isTrue(
+        upstreamBodies.every((upstreamBody) =>
+          upstreamBody.includes('"thinking":{"type":"disabled"}'),
+        ),
+      );
     }).pipe(
       Effect.provide(NodeHttpServer.layerTest),
       Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),

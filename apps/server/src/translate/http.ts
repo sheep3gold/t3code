@@ -41,20 +41,19 @@ export const TRANSLATE_ROUTE_PATH = "/api/translate";
 
 const DEFAULT_BASE_URL = "https://llm.zxytech.cn/v1";
 // The owner's model-gateway routes by tier; appKeys only allow "auto" and the
-// SIMPLE tier keeps translation cheap (its flash models think, so a real
-// max_tokens budget is mandatory — too small and the reply is all reasoning
-// with an empty content).
+// SIMPLE tier keeps translation cheap. Its flash models think by default, which
+// dominated latency (2.7k chars: ~4.8k reasoning tokens, 19s vs 3.7s without),
+// so requests disable thinking; max_tokens keeps headroom for a model that
+// ignores the switch, since a small budget leaves an all-reasoning empty reply.
 const DEFAULT_MODEL = "auto";
 const GATEWAY_TIER = "SIMPLE";
 const MAX_TEXTS_PER_REQUEST = 24;
 const MAX_TEXT_LENGTH = 16_000;
-// The SIMPLE-tier models are reasoning models whose thinking scales with input
-// length/complexity: measured production batches of ~6000 source chars needed
-// ~10k completion tokens (≈9k reasoning) and ~144s to finish. max_tokens caps
-// reasoning + translation together, so a small budget truncates the reply into
-// a malformed JSON array (502 "Unexpected upstream response"), and a short
-// client timeout aborts a slow-but-valid batch (502 "Translation upstream
-// failed"). Both budgets are sized with generous headroom over those numbers.
+// With thinking on, ~6000-char batches needed ~10k completion tokens (≈9k
+// reasoning) and ~144s. max_tokens caps reasoning + translation together, so a
+// small budget truncates the reply into a malformed JSON array, and a short
+// timeout aborts a slow-but-valid batch. Both keep that headroom in case an
+// upstream model does not honor the thinking switch.
 const UPSTREAM_TIMEOUT_SECONDS = 300;
 const UPSTREAM_MAX_TOKENS = 32768;
 // Long messages exceed the upstream token budget in one shot (a reasoning
@@ -62,9 +61,10 @@ const UPSTREAM_MAX_TOKENS = 32768;
 // Split long texts at paragraph boundaries and translate the chunks in batches
 // sized to the output budget.
 const CHUNK_TARGET_LENGTH = 2_000;
-// Combined source length per upstream call, keeping the reply well under
-// UPSTREAM_MAX_TOKENS even with reasoning overhead on top of the translation.
-const UPSTREAM_BATCH_LENGTH = 6_000;
+// Combined source length per upstream call. Batches run concurrently, so
+// smaller batches finish a long message sooner than a few large serial ones.
+const UPSTREAM_BATCH_LENGTH = 2_000;
+const UPSTREAM_BATCH_CONCURRENCY = 4;
 
 const SYSTEM_PROMPT = [
   "You are a translation engine. The user sends JSON: an array of strings.",
@@ -264,87 +264,91 @@ export const translateHttpApiLayer = HttpApiBuilder.group(
 
         const upstreamError = (message: string) =>
           new EnvironmentTranslateUpstreamError({ message });
-        const translatedChunks: Array<string> = [];
-        for (const [batchIndex, batch] of chunkBatches.entries()) {
-          const textsJson = yield* encodeTextsJson(batch).pipe(
-            Effect.mapError(() => upstreamError("Could not encode texts.")),
-          );
-          const requestBatchTranslations = Effect.gen(function* () {
-            const upstreamJson = yield* httpClient
-              .execute(
-                HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
-                  HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-                  HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
-                  HttpClientRequest.bodyJsonUnsafe({
-                    model,
-                    temperature: 0,
-                    max_tokens: UPSTREAM_MAX_TOKENS,
-                    messages: [
-                      { role: "system", content: SYSTEM_PROMPT },
-                      { role: "user", content: textsJson },
-                    ],
-                  }),
-                ),
-              )
-              .pipe(
-                Effect.flatMap(HttpClientResponse.filterStatusOk),
-                Effect.flatMap((response) => response.json),
-                Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
-                Effect.tapError((cause) =>
-                  Effect.logWarning("Translation upstream request failed", { cause, batchIndex }),
-                ),
-                Effect.mapError(() => upstreamError("Translation upstream failed.")),
-              );
-            const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
-              Effect.mapError(() => upstreamError("Unexpected upstream response.")),
+        const translateBatch = (batch: ReadonlyArray<string>, batchIndex: number) =>
+          Effect.gen(function* () {
+            const textsJson = yield* encodeTextsJson(batch).pipe(
+              Effect.mapError(() => upstreamError("Could not encode texts.")),
             );
-            const content = completion.choices[0]?.message.content ?? "";
-            if (content.length === 0) {
-              // Reasoning flash models can spend the whole budget on thinking; the
-              // client falls back to untranslated text on 502 and retries later.
-              yield* Effect.logWarning("Translation upstream returned empty content", {
-                batchIndex,
-              });
-              return yield* upstreamError("Translation upstream returned empty content.");
-            }
-            const batchTranslations = yield* parseTranslationsJson(content);
-            if (batchTranslations === null || batchTranslations.length !== batch.length) {
-              return yield* upstreamError("Translation response malformed.");
-            }
-            return batchTranslations;
-          });
-
-          const isMalformedUpstream = (
-            error: EnvironmentTranslateUpstreamError,
-          ): error is EnvironmentTranslateUpstreamError =>
-            error.message === "Translation response malformed.";
-          const batchTranslations = yield* requestBatchTranslations.pipe(
-            Effect.catchIf(isMalformedUpstream, () =>
-              Effect.gen(function* () {
-                // Long reasoning outputs occasionally leave one JSON escape
-                // malformed; asking the model again usually returns a usable
-                // array, so absorb that transient upstream defect instead of
-                // surfacing an immediate 502 to the client.
-                yield* Effect.logWarning("Translation response could not be parsed; retrying", {
-                  batchIndex,
-                  expected: batch.length,
-                });
-                return yield* requestBatchTranslations.pipe(
-                  Effect.catchIf(isMalformedUpstream, (retryError) =>
-                    Effect.gen(function* () {
-                      yield* Effect.logWarning("Translation response could not be parsed", {
-                        batchIndex,
-                        expected: batch.length,
-                      });
-                      return yield* retryError;
+            const requestBatchTranslations = Effect.gen(function* () {
+              const upstreamJson = yield* httpClient
+                .execute(
+                  HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
+                    HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+                    HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
+                    HttpClientRequest.bodyJsonUnsafe({
+                      model,
+                      temperature: 0,
+                      max_tokens: UPSTREAM_MAX_TOKENS,
+                      thinking: { type: "disabled" },
+                      messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        { role: "user", content: textsJson },
+                      ],
                     }),
                   ),
+                )
+                .pipe(
+                  Effect.flatMap(HttpClientResponse.filterStatusOk),
+                  Effect.flatMap((response) => response.json),
+                  Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+                  Effect.tapError((cause) =>
+                    Effect.logWarning("Translation upstream request failed", { cause, batchIndex }),
+                  ),
+                  Effect.mapError(() => upstreamError("Translation upstream failed.")),
                 );
-              }),
-            ),
-          );
-          translatedChunks.push(...batchTranslations);
-        }
+              const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
+                Effect.mapError(() => upstreamError("Unexpected upstream response.")),
+              );
+              const content = completion.choices[0]?.message.content ?? "";
+              if (content.length === 0) {
+                // Reasoning flash models can spend the whole budget on thinking; the
+                // client falls back to untranslated text on 502 and retries later.
+                yield* Effect.logWarning("Translation upstream returned empty content", {
+                  batchIndex,
+                });
+                return yield* upstreamError("Translation upstream returned empty content.");
+              }
+              const batchTranslations = yield* parseTranslationsJson(content);
+              if (batchTranslations === null || batchTranslations.length !== batch.length) {
+                return yield* upstreamError("Translation response malformed.");
+              }
+              return batchTranslations;
+            });
+
+            const isMalformedUpstream = (
+              error: EnvironmentTranslateUpstreamError,
+            ): error is EnvironmentTranslateUpstreamError =>
+              error.message === "Translation response malformed.";
+            const batchTranslations = yield* requestBatchTranslations.pipe(
+              Effect.catchIf(isMalformedUpstream, () =>
+                Effect.gen(function* () {
+                  // Long reasoning outputs occasionally leave one JSON escape
+                  // malformed; asking the model again usually returns a usable
+                  // array, so absorb that transient upstream defect instead of
+                  // surfacing an immediate 502 to the client.
+                  yield* Effect.logWarning("Translation response could not be parsed; retrying", {
+                    batchIndex,
+                    expected: batch.length,
+                  });
+                  return yield* requestBatchTranslations.pipe(
+                    Effect.catchIf(isMalformedUpstream, (retryError) =>
+                      Effect.gen(function* () {
+                        yield* Effect.logWarning("Translation response could not be parsed", {
+                          batchIndex,
+                          expected: batch.length,
+                        });
+                        return yield* retryError;
+                      }),
+                    ),
+                  );
+                }),
+              ),
+            );
+            return batchTranslations;
+          });
+        const translatedChunks = (yield* Effect.forEach(chunkBatches, translateBatch, {
+          concurrency: UPSTREAM_BATCH_CONCURRENCY,
+        })).flat();
 
         // Join each input text's translated chunks back into one translation.
         const translations: Array<string> = [];
