@@ -1,5 +1,6 @@
 import * as NodePath from "@effect/platform-node/NodePath";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -93,6 +94,7 @@ const logThrough = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =>
       Effect.provide(
         ServerLoggerLive.pipe(
           Layer.provide(configLayer(overrides)),
+          Layer.provide(NodeFileSystem.layer),
           Layer.provide(collectorLayer(requests)),
         ),
       ),
@@ -124,6 +126,7 @@ const logInSpanThrough = (overrides: Partial<ServerConfig.ServerConfig["Service"
         Layer.mergeAll(
           ServerLoggerLive.pipe(
             Layer.provide(configLayer(overrides)),
+            Layer.provide(NodeFileSystem.layer),
             Layer.provide(collectorLayer(requests)),
           ),
           tracerLayer,
