@@ -172,6 +172,7 @@ function makeHarness(config?: {
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
   readonly getSessionMessages?: ClaudeAdapterLiveOptions["getSessionMessages"];
   readonly forkSession?: ClaudeAdapterLiveOptions["forkSession"];
+  readonly disabledSkillNames?: ClaudeAdapterLiveOptions["disabledSkillNames"];
 }) {
   const query = new FakeClaudeQuery();
   const queries = [query];
@@ -189,6 +190,7 @@ function makeHarness(config?: {
     modelCatalog: Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
     ...(config?.getSessionMessages ? { getSessionMessages: config.getSessionMessages } : {}),
     ...(config?.forkSession ? { forkSession: config.forkSession } : {}),
+    ...(config?.disabledSkillNames ? { disabledSkillNames: config.disabledSkillNames } : {}),
     createQuery: (input) => {
       if (createInput && config?.getSessionMessages) queries.push(new FakeClaudeQuery());
       createInput = input;
@@ -1224,6 +1226,45 @@ describe("ClaudeAdapterLive", () => {
         readFirstPromptText(harness.getLastCreateQueryInput()),
       );
       assert.equal(promptText, "run $deploy and echo $HOME");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("leaves a $ mention of a Settings-disabled skill as prose", () => {
+    // The Skills settings page disables by name at send time, on top of the
+    // scan-level `skillOverrides`: `$review` must not be rewritten either.
+    const homeDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-skills-settings-"));
+    NodeFS.mkdirSync(NodePath.join(homeDir, "skills", "review"), { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(homeDir, "skills", "review", "SKILL.md"),
+      "---\ndescription: Review.\n---\n# Body\n",
+    );
+    const harness = makeHarness({
+      claudeConfig: { homePath: homeDir },
+      disabledSkillNames: Effect.succeed(new Set(["review"])),
+    });
+    return Effect.gen(function* () {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(homeDir, { recursive: true, force: true })),
+      );
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "please $review this",
+        attachments: [],
+      });
+
+      const promptText = yield* Effect.promise(() =>
+        readFirstPromptText(harness.getLastCreateQueryInput()),
+      );
+      assert.equal(promptText, "please $review this");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

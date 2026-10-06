@@ -87,6 +87,7 @@ import {
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("cursor");
+const EMPTY_NAME_SET: ReadonlySet<string> = new Set();
 const CURSOR_RESUME_VERSION = 1 as const;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
@@ -118,6 +119,13 @@ export interface CursorAdapterLiveOptions {
    * the latest snapshot so the closure isn't stale.
    */
   readonly resolveSettings?: Effect.Effect<CursorSettings>;
+  /**
+   * Lowercased names of skills the user disabled in Settings. Read when a
+   * session's skill names are scanned so a toggle takes effect without
+   * rebuilding the adapter. A disabled skill's `$name` mention stays literal
+   * prose instead of being rewritten.
+   */
+  readonly disabledSkillNames?: Effect.Effect<ReadonlySet<string>>;
   readonly onAvailableCommands?: (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
     cwd: string,
@@ -1030,9 +1038,19 @@ export function makeCursorAdapter(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
               );
+              // The Settings-level disable joins the scan-level filters: the
+              // mention survives as literal text and the rewrite skips it.
+              const disabledSkillNames = yield* (
+                options?.disabledSkillNames ?? Effect.succeed(EMPTY_NAME_SET)
+              );
               cursorSkillNames = new Set(
                 skills
-                  .filter((skill) => skill.enabled && skill.userInvocable !== false)
+                  .filter(
+                    (skill) =>
+                      skill.enabled &&
+                      skill.userInvocable !== false &&
+                      !disabledSkillNames.has(skill.name.trim().toLowerCase()),
+                  )
                   .map((skill) => skill.name),
               );
               ctx.cursorSkillNames = cursorSkillNames;

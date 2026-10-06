@@ -1407,6 +1407,15 @@ export const ServerSettings = Schema.Struct({
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * Skills the user has turned off. Matching is by skill name (case-insensitive)
+   * and global across every provider instance: a disabled skill is filtered out
+   * of provider snapshots, hidden from the composer's `$` menu, and never
+   * dispatched — a hand-typed `$name` mention stays literal text.
+   */
+  disabledSkills: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1680,6 +1689,8 @@ export const ServerSettingsPatch = Schema.Struct({
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
   ),
+  /** Whole-list replacement: the web UI sends the full disabled set each edit. */
+  disabledSkills: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

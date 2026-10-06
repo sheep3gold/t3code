@@ -56,10 +56,15 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 import { discoverCursorSkills, probeCursorSkills } from "./CursorSkills.ts";
-import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
+import {
+  disabledSkillNameSet,
+  discoverSharedProviderSkills,
+  mergeProviderSkills,
+} from "../sharedSkills.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("cursor");
+const EMPTY_NAME_SET: ReadonlySet<string> = new Set();
 // cursor-agent updates itself, so the resolved executable is its own updater.
 // No executable means nothing to update, not "whatever is on PATH".
 const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
@@ -202,6 +207,10 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
+        disabledSkillNames: serverSettings.getSettings.pipe(
+          Effect.map((settings) => disabledSkillNameSet(settings.disabledSkills)),
+          Effect.catchAll(() => Effect.succeed(EMPTY_NAME_SET)),
+        ),
         onAvailableCommands: (commands, cwd) =>
           discoverCursorSkills(cwd, processEnv).pipe(
             Effect.provideService(FileSystem.FileSystem, fileSystem),

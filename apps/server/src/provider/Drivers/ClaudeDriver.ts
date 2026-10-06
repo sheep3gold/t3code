@@ -61,10 +61,15 @@ import {
 } from "../providerUpdateSettings.ts";
 import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
 import { discoverClaudeSkills } from "./ClaudeSkills.ts";
-import { discoverSharedProviderSkills, mergeProviderSkills } from "../sharedSkills.ts";
+import {
+  disabledSkillNameSet,
+  discoverSharedProviderSkills,
+  mergeProviderSkills,
+} from "../sharedSkills.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
+const EMPTY_NAME_SET: ReadonlySet<string> = new Set();
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
 
 function isClaudeNativeCommandPath(commandPath: string): boolean {
@@ -156,6 +161,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         environment: processEnv,
         modelCatalog,
         scopedLimitNames,
+        disabledSkillNames: serverSettings.getSettings.pipe(
+          Effect.map((settings) => disabledSkillNameSet(settings.disabledSkills)),
+          Effect.catchAll(() => Effect.succeed(EMPTY_NAME_SET)),
+        ),
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       };
       const adapter = yield* makeClaudeAdapter(effectiveConfig, adapterOptions);

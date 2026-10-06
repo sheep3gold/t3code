@@ -148,7 +148,16 @@ const cursorAdapterTestLayer = it.layer(
     Effect.gen(function* () {
       const cursorConfig = decodeCursorSettings({});
       const resolveSettings = yield* makeResolveCursorSettings;
-      return yield* makeCursorAdapter(cursorConfig, { resolveSettings });
+      const serverSettings = yield* ServerSettingsService;
+      // Same live read the production driver wires: a Skills-page toggle must
+      // reach the adapter without a rebuild.
+      const disabledSkillNames = serverSettings.getSettings.pipe(
+        Effect.map(
+          (snapshot) => new Set(snapshot.disabledSkills.map((name) => name.toLowerCase())),
+        ),
+        Effect.catchAll(() => Effect.succeed(new Set<string>())),
+      );
+      return yield* makeCursorAdapter(cursorConfig, { resolveSettings, disabledSkillNames });
     }),
   ).pipe(
     Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -359,6 +368,62 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         [
           [
             { type: "text", text: "please /review this" },
+            { type: "text", text: buildRuntimeInstructions({ harness: "Cursor" }) },
+          ],
+          [{ type: "text", text: "/copy-request-id" }],
+        ],
+      );
+    }),
+  );
+
+  it.effect("leaves a $ mention of a Settings-disabled skill as prose", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-skill-disabled");
+      const workspace = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-skill-disabled-")),
+      );
+      const requestLogPath = NodePath.join(workspace, "requests.ndjson");
+      const argvLogPath = NodePath.join(workspace, "argv.txt");
+      const skillDirectory = NodePath.join(workspace, ".cursor", "skills", "review");
+      yield* Effect.promise(() => NodeFSP.mkdir(skillDirectory, { recursive: true }));
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(skillDirectory, "SKILL.md"), "# Review\n", "utf8"),
+      );
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, argvLogPath),
+      );
+      yield* settings.updateSettings({
+        providers: { cursor: { binaryPath: wrapperPath } },
+        disabledSkills: ["review"],
+      });
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: workspace,
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "please $review this",
+        attachments: [],
+      });
+      yield* adapter.sendTurn({ threadId, input: "/copy-request-id" });
+      yield* adapter.stopSession(threadId);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const promptRequests = requests.filter((entry) => entry.method === "session/prompt");
+      assert.deepStrictEqual(
+        promptRequests.map(
+          (request) => (request.params as Record<string, unknown> | undefined)?.prompt,
+        ),
+        [
+          [
+            { type: "text", text: "please $review this" },
             { type: "text", text: buildRuntimeInstructions({ harness: "Cursor" }) },
           ],
           [{ type: "text", text: "/copy-request-id" }],
