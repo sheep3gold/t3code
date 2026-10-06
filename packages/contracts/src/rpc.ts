@@ -227,6 +227,7 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
+  ServerSkillFileError,
   ServerSelfUpdateError,
   ServerSelfUpdateInput,
   ServerSelfUpdateProgressEvent,
@@ -372,6 +373,9 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverSkillRead: "server.skillRead",
+  serverSkillUpsert: "server.skillUpsert",
+  serverSkillDelete: "server.skillDelete",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -593,6 +597,53 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const ServerSkillReadInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  name: TrimmedNonEmptyString,
+});
+
+const ServerSkillDocument = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  /** Markdown body below the frontmatter. */
+  body: Schema.String,
+  /** Absolute SKILL.md path on the server's filesystem. */
+  path: TrimmedNonEmptyString,
+});
+
+const ServerSkillUpsertInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  /** Directory name under <configDir>/skills; lowercase slug. */
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  body: Schema.String,
+  /** Set when renaming: the previous directory to remove after writing. */
+  previousName: Schema.optional(TrimmedNonEmptyString),
+});
+
+const ServerSkillDeleteInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  name: TrimmedNonEmptyString,
+});
+
+const WsServerSkillReadRpc = Rpc.make(WS_METHODS.serverSkillRead, {
+  payload: ServerSkillReadInput,
+  success: ServerSkillDocument,
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSkillUpsertRpc = Rpc.make(WS_METHODS.serverSkillUpsert, {
+  payload: ServerSkillUpsertInput,
+  success: ServerSkillDocument,
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSkillDeleteRpc = Rpc.make(WS_METHODS.serverSkillDelete, {
+  payload: ServerSkillDeleteInput,
+  success: Schema.Struct({ deleted: Schema.Boolean }),
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1415,6 +1466,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerSkillReadRpc,
+  WsServerSkillUpsertRpc,
+  WsServerSkillDeleteRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
