@@ -116,8 +116,14 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
     "OOMPolicy=continue",
     "Restart=always",
     "RestartSec=5",
-    `StandardOutput=append:${escapeSystemdSpecifiers(plan.logPath)}`,
-    `StandardError=append:${escapeSystemdSpecifiers(plan.logPath)}`,
+    // stdout/stderr go to the journal only: repeated StandardOutput= lines do
+    // NOT tee, the last one silently wins (verified on systemd 255). The
+    // server mirrors its logs to plan.logPath itself (T3CODE_PRETTY_LOG_FILE),
+    // so the CLI's `Logs:` hint and self-update diagnostics keep working
+    // without journal access.
+    `Environment=T3CODE_PRETTY_LOG_FILE=${quoteSystemdValue(plan.logPath)}`,
+    "StandardOutput=journal",
+    "StandardError=journal",
     "",
     "[Install]",
     "WantedBy=default.target",
