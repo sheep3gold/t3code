@@ -1,29 +1,36 @@
 /**
- * Chat translation proxy. The web client sends natural-language message text
- * here; the server forwards it to an OpenAI-compatible chat-completions
- * endpoint (the owner's model-gateway by default) and returns the Chinese
- * translation. Keeping the appKey server-side means browser clients never
- * see it.
+ * Chat translation proxy. Clients send natural-language message text here; the
+ * server forwards it to an OpenAI-compatible chat-completions endpoint (the
+ * owner's model-gateway by default) and returns the Chinese translation.
+ * Keeping the appKey server-side means clients never see it.
  *
  * Config is environment-only:
  * - T3CODE_TRANSLATE_API_KEY   required; when unset the route answers 503.
  * - T3CODE_TRANSLATE_BASE_URL  defaults to the model-gateway public entry.
  * - T3CODE_TRANSLATE_MODEL     defaults to a SIMPLE-tier flash model.
+ *
+ * Auth runs inside the handler (not the shared auth middleware): the desktop
+ * shell's page origin is the t3code:// asset protocol and cannot send
+ * Authorization headers cross-origin without a CORS preflight the custom
+ * scheme cannot express, so bearer/DPoP clients there authenticate with a
+ * short-lived `wsTicket` query parameter — the same fallback the /ws upgrade
+ * and the device-hub proxy use. `authenticateWebSocketUpgrade` accepts the
+ * ticket first and falls back to the standard bearer/DPoP/cookie credentials,
+ * so mobile and relay clients keep working unchanged.
  */
+import {
+  AuthOrchestrationOperateScope,
+  EnvironmentHttpApi,
+  EnvironmentTranslateUnavailableError,
+  EnvironmentTranslateUpstreamError,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import {
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-  HttpServerRespondable,
-} from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
-import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import {
+  annotateEnvironmentRequest,
   failEnvironmentAuthInvalid,
   failEnvironmentInternal,
   failEnvironmentScopeRequired,
@@ -147,187 +154,174 @@ export const joinChunks = (chunks: ReadonlyArray<string>, separators: ReadonlyAr
     "",
   );
 
-export const translateRouteLayer = HttpRouter.add(
-  "POST",
-  TRANSLATE_ROUTE_PATH,
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
+export const translateHttpApiLayer = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "translate",
+  Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    // The desktop shell's page origin is the t3code:// asset protocol and
-    // cannot send Authorization headers cross-origin without a CORS preflight
-    // the custom scheme cannot express, so bearer/DPoP clients authenticate
-    // with a short-lived `wsTicket` query parameter — the same fallback the
-    // /ws upgrade and the device-hub proxy use.
-    const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
-      Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-        failEnvironmentAuthInvalid(
-          EnvironmentAuth.serverAuthCredentialReason(error),
-          EnvironmentAuth.serverAuthDpopFailureReason(error),
-        ),
-      ),
-      Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
-        failEnvironmentInternal("internal_error", error),
-      ),
-    );
-    if (!session.scopes.includes(AuthOrchestrationOperateScope)) {
-      return yield* failEnvironmentScopeRequired(AuthOrchestrationOperateScope);
-    }
 
-    const apiKey = process.env.T3CODE_TRANSLATE_API_KEY?.trim();
-    if (!apiKey) {
-      return HttpServerResponse.jsonUnsafe(
-        { error: "translation_not_configured" },
-        { status: 503 },
-      );
-    }
-    const baseUrl = (process.env.T3CODE_TRANSLATE_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(
-      /\/+$/,
-      "",
-    );
-    const model = process.env.T3CODE_TRANSLATE_MODEL?.trim() || DEFAULT_MODEL;
-
-    const bodyJson = yield* request.json.pipe(
-      Effect.mapError(() => HttpServerResponse.text("Invalid JSON body.", { status: 400 })),
-    );
-    const decoded = yield* decodeTranslateRequestBody(bodyJson).pipe(
-      Effect.mapError(() =>
-        HttpServerResponse.text("Expected { texts: string[] }.", { status: 400 }),
-      ),
-    );
-    const texts = decoded.texts;
-    if (texts.length > MAX_TEXTS_PER_REQUEST) {
-      return yield* Effect.fail(
-        HttpServerResponse.text(`At most ${MAX_TEXTS_PER_REQUEST} texts per request.`, {
-          status: 413,
-        }),
-      );
-    }
-    if (texts.some((text) => text.length > MAX_TEXT_LENGTH)) {
-      return yield* Effect.fail(
-        HttpServerResponse.text(`Texts must be at most ${MAX_TEXT_LENGTH} characters.`, {
-          status: 413,
-        }),
-      );
-    }
-    if (texts.length === 0) {
-      return HttpServerResponse.jsonUnsafe({ translations: [] });
-    }
-
-    // Expand each input text into budget-sized chunks and remember how many
-    // chunks each text produced and which separators join them, so the
-    // translated chunks can be joined back into one translation per input.
-    const chunkCounts: Array<number> = [];
-    const chunkSeparators: Array<ReadonlyArray<string>> = [];
-    const chunks: Array<string> = [];
-    for (const text of texts) {
-      const textChunks = chunkText(text);
-      chunkCounts.push(textChunks.chunks.length);
-      chunkSeparators.push(textChunks.separators);
-      chunks.push(...textChunks.chunks);
-    }
-
-    const httpClient = yield* HttpClient.HttpClient;
-
-    // max_tokens caps the TOTAL completion output of one upstream call, so a
-    // long text cannot go through as one big JSON array — the reply is
-    // truncated mid-array and used to surface as a 502 after the 60s timeout.
-    // Send the chunks in batches whose combined source length fits the output
-    // budget; every batch gets its own full budget.
-    const chunkBatches: Array<Array<string>> = [];
-    let currentBatch: Array<string> = [];
-    let currentBatchLength = 0;
-    for (const chunk of chunks) {
-      if (currentBatch.length > 0 && currentBatchLength + chunk.length > UPSTREAM_BATCH_LENGTH) {
-        chunkBatches.push(currentBatch);
-        currentBatch = [];
-        currentBatchLength = 0;
-      }
-      currentBatch.push(chunk);
-      currentBatchLength += chunk.length;
-    }
-    if (currentBatch.length > 0) chunkBatches.push(currentBatch);
-
-    const translatedChunks: Array<string> = [];
-    for (const [batchIndex, batch] of chunkBatches.entries()) {
-      const textsJson = yield* encodeTextsJson(batch).pipe(
-        Effect.mapError(() => HttpServerResponse.text("Could not encode texts.", { status: 500 })),
-      );
-      const upstreamJson = yield* httpClient
-        .execute(
-          HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
-            HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-            HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
-            HttpClientRequest.bodyJsonUnsafe({
-              model,
-              temperature: 0,
-              max_tokens: UPSTREAM_MAX_TOKENS,
-              messages: [
-                { role: "system", content: SYSTEM_PROMPT },
-                { role: "user", content: textsJson },
-              ],
-            }),
+    return handlers.handleRaw(
+      "translate",
+      Effect.fn("environment.translate.translate")(function* ({ request }) {
+        yield* annotateEnvironmentRequest("translate");
+        const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+          Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
+            failEnvironmentAuthInvalid(
+              EnvironmentAuth.serverAuthCredentialReason(error),
+              EnvironmentAuth.serverAuthDpopFailureReason(error),
+            ),
           ),
-        )
-        .pipe(
-          Effect.flatMap(HttpClientResponse.filterStatusOk),
-          Effect.flatMap((response) => response.json),
-          Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
-          Effect.tapError((cause) =>
-            Effect.logWarning("Translation upstream request failed", { cause, batchIndex }),
-          ),
-          Effect.mapError(() =>
-            HttpServerResponse.text("Translation upstream failed.", { status: 502 }),
+          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+            failEnvironmentInternal("internal_error", error),
           ),
         );
-      const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
-        Effect.mapError(() =>
-          HttpServerResponse.text("Unexpected upstream response.", { status: 502 }),
-        ),
-      );
-      const content = completion.choices[0]?.message.content ?? "";
-      if (content.length === 0) {
-        // Reasoning flash models can spend the whole budget on thinking; the
-        // client falls back to untranslated text on 502 and retries later.
-        yield* Effect.logWarning("Translation upstream returned empty content", { batchIndex });
-        return yield* Effect.fail(
-          HttpServerResponse.text("Translation upstream returned empty content.", { status: 502 }),
-        );
-      }
-      const batchTranslations = yield* parseTranslationsJson(content);
-      if (batchTranslations === null || batchTranslations.length !== batch.length) {
-        yield* Effect.logWarning("Translation response could not be parsed", {
-          batchIndex,
-          expected: batch.length,
-        });
-        return yield* Effect.fail(
-          HttpServerResponse.text("Translation response malformed.", { status: 502 }),
-        );
-      }
-      translatedChunks.push(...batchTranslations);
-    }
+        if (!session.scopes.includes(AuthOrchestrationOperateScope)) {
+          return yield* failEnvironmentScopeRequired(AuthOrchestrationOperateScope);
+        }
 
-    // Join each input text's translated chunks back into one translation.
-    const translations: Array<string> = [];
-    let offset = 0;
-    for (const [textIndex, count] of chunkCounts.entries()) {
-      translations.push(
-        joinChunks(translatedChunks.slice(offset, offset + count), chunkSeparators[textIndex]!),
-      );
-      offset += count;
-    }
-    return HttpServerResponse.jsonUnsafe({ translations });
-  }).pipe(
-    Effect.catchTags({
-      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-      EnvironmentInternalError: HttpServerRespondable.toResponse,
-      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
-    }),
-    // Validation/upstream failures above fail with a ready-made response;
-    // those must come back as answers, not defects.
-    Effect.catch((failure: unknown) =>
-      HttpServerRespondable.isRespondable(failure)
-        ? HttpServerRespondable.toResponse(failure)
-        : Effect.fail(failure as never),
-    ),
-  ),
+        const apiKey = process.env.T3CODE_TRANSLATE_API_KEY?.trim();
+        if (!apiKey) {
+          return yield* new EnvironmentTranslateUnavailableError({
+            message: "Translation is not configured on this server.",
+          });
+        }
+        const baseUrl = (process.env.T3CODE_TRANSLATE_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(
+          /\/+$/,
+          "",
+        );
+        const model = process.env.T3CODE_TRANSLATE_MODEL?.trim() || DEFAULT_MODEL;
+
+        // handleRaw opts out of automatic payload decoding so the auth above
+        // can run before the body is consumed; limits are enforced here.
+        const bodyJson = yield* request.json.pipe(
+          Effect.mapError(
+            () => new EnvironmentTranslateUpstreamError({ message: "Invalid JSON body." }),
+          ),
+        );
+        const decoded = yield* decodeTranslateRequestBody(bodyJson).pipe(
+          Effect.mapError(
+            () =>
+              new EnvironmentTranslateUpstreamError({ message: "Expected { texts: string[] }." }),
+          ),
+        );
+        const texts = decoded.texts;
+        if (texts.length > MAX_TEXTS_PER_REQUEST) {
+          return yield* new EnvironmentTranslateUpstreamError({
+            message: `At most ${MAX_TEXTS_PER_REQUEST} texts per request.`,
+          });
+        }
+        if (texts.some((text) => text.length > MAX_TEXT_LENGTH)) {
+          return yield* new EnvironmentTranslateUpstreamError({
+            message: `Texts must be at most ${MAX_TEXT_LENGTH} characters.`,
+          });
+        }
+        if (texts.length === 0) {
+          return { translations: [] };
+        }
+
+        // Expand each input text into budget-sized chunks and remember how many
+        // chunks each text produced and which separators join them, so the
+        // translated chunks can be joined back into one translation per input.
+        const chunkCounts: Array<number> = [];
+        const chunkSeparators: Array<ReadonlyArray<string>> = [];
+        const chunks: Array<string> = [];
+        for (const text of texts) {
+          const textChunks = chunkText(text);
+          chunkCounts.push(textChunks.chunks.length);
+          chunkSeparators.push(textChunks.separators);
+          chunks.push(...textChunks.chunks);
+        }
+
+        const httpClient = yield* HttpClient.HttpClient;
+
+        // max_tokens caps the TOTAL completion output of one upstream call, so a
+        // long text cannot go through as one big JSON array — the reply is
+        // truncated mid-array and used to surface as a 502 after the 60s timeout.
+        // Send the chunks in batches whose combined source length fits the output
+        // budget; every batch gets its own full budget.
+        const chunkBatches: Array<Array<string>> = [];
+        let currentBatch: Array<string> = [];
+        let currentBatchLength = 0;
+        for (const chunk of chunks) {
+          if (
+            currentBatch.length > 0 &&
+            currentBatchLength + chunk.length > UPSTREAM_BATCH_LENGTH
+          ) {
+            chunkBatches.push(currentBatch);
+            currentBatch = [];
+            currentBatchLength = 0;
+          }
+          currentBatch.push(chunk);
+          currentBatchLength += chunk.length;
+        }
+        if (currentBatch.length > 0) chunkBatches.push(currentBatch);
+
+        const upstreamError = (message: string) =>
+          new EnvironmentTranslateUpstreamError({ message });
+        const translatedChunks: Array<string> = [];
+        for (const [batchIndex, batch] of chunkBatches.entries()) {
+          const textsJson = yield* encodeTextsJson(batch).pipe(
+            Effect.mapError(() => upstreamError("Could not encode texts.")),
+          );
+          const upstreamJson = yield* httpClient
+            .execute(
+              HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
+                HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+                HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
+                HttpClientRequest.bodyJsonUnsafe({
+                  model,
+                  temperature: 0,
+                  max_tokens: UPSTREAM_MAX_TOKENS,
+                  messages: [
+                    { role: "system", content: SYSTEM_PROMPT },
+                    { role: "user", content: textsJson },
+                  ],
+                }),
+              ),
+            )
+            .pipe(
+              Effect.flatMap(HttpClientResponse.filterStatusOk),
+              Effect.flatMap((response) => response.json),
+              Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+              Effect.tapError((cause) =>
+                Effect.logWarning("Translation upstream request failed", { cause, batchIndex }),
+              ),
+              Effect.mapError(() => upstreamError("Translation upstream failed.")),
+            );
+          const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
+            Effect.mapError(() => upstreamError("Unexpected upstream response.")),
+          );
+          const content = completion.choices[0]?.message.content ?? "";
+          if (content.length === 0) {
+            // Reasoning flash models can spend the whole budget on thinking; the
+            // client falls back to untranslated text on 502 and retries later.
+            yield* Effect.logWarning("Translation upstream returned empty content", {
+              batchIndex,
+            });
+            return yield* upstreamError("Translation upstream returned empty content.");
+          }
+          const batchTranslations = yield* parseTranslationsJson(content);
+          if (batchTranslations === null || batchTranslations.length !== batch.length) {
+            yield* Effect.logWarning("Translation response could not be parsed", {
+              batchIndex,
+              expected: batch.length,
+            });
+            return yield* upstreamError("Translation response malformed.");
+          }
+          translatedChunks.push(...batchTranslations);
+        }
+
+        // Join each input text's translated chunks back into one translation.
+        const translations: Array<string> = [];
+        let offset = 0;
+        for (const [textIndex, count] of chunkCounts.entries()) {
+          translations.push(
+            joinChunks(translatedChunks.slice(offset, offset + count), chunkSeparators[textIndex]!),
+          );
+          offset += count;
+        }
+        return { translations };
+      }),
+    );
+  }),
 );

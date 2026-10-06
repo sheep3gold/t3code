@@ -4734,6 +4734,82 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("answers 503 from /api/translate when the upstream key is not configured", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "");
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          "content-type": "application/json",
+        },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+      const body = yield* responseJsonEffect<{ readonly _tag: string }>(response);
+
+      assert.equal(response.status, 503);
+      assert.equal(body._tag, "EnvironmentTranslateUnavailableError");
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  it.effect("rejects unauthenticated /api/translate requests", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      yield* buildAppUnderTest();
+
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+
+      assert.equal(response.status, 401);
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  it.effect("authenticates /api/translate via the wsTicket query parameter", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "");
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const wsTicketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const wsTicketResponse = yield* fetchEffect(wsTicketUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}` },
+      });
+      const wsTicketBody = yield* responseJsonEffect<{ readonly ticket: string }>(wsTicketResponse);
+      assert.equal(wsTicketResponse.status, 200);
+
+      // 503 (not 401) proves the ticket authenticated; the upstream key is
+      // deliberately unset so the request stops before any network call.
+      const translateUrl = yield* getHttpServerUrl(
+        `/api/translate?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`,
+      );
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+
+      assert.equal(response.status, 503);
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
   it.effect("does not allow management-only access tokens to operate the environment", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
