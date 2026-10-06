@@ -77,6 +77,7 @@ it("mirrors pretty logs to T3CODE_PRETTY_LOG_FILE without colors", async () => {
       yield* Effect.logWarning("mirror-warn-line").pipe(
         Effect.annotateLogs("environment.endpoint", "translate"),
       );
+      yield* Effect.logInfo("mirror-structured-line", { upserted: 48, removed: 0 });
     }).pipe(
       Effect.provide(
         ServerLoggerLive.pipe(
@@ -94,6 +95,9 @@ it("mirrors pretty logs to T3CODE_PRETTY_LOG_FILE without colors", async () => {
     expect(text).toContain("WARN");
     expect(text).toContain("mirror-warn-line");
     expect(text).toContain("environment.endpoint: translate");
+    // Structured messages render as JSON, not "[object Object]".
+    expect(text).toContain('"upserted": 48');
+    expect(text).not.toContain("[object Object]");
     expect(text.includes(String.fromCharCode(27))).toBe(false);
   } finally {
     vi.unstubAllEnvs();

@@ -2,9 +2,9 @@ import { otlpSerializationLayer } from "@t3tools/shared/observability";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import { toStringUnknown } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
-import * as Redactable from "effect/Redactable";
 import * as References from "effect/References";
 import * as OtlpExporter from "effect/unstable/observability/OtlpExporter";
 import * as OtlpLogger from "effect/unstable/observability/OtlpLogger";
@@ -40,10 +40,12 @@ const formatPrettyPlain = (
   lines.push(firstLine);
   if (cause.reasons.length > 0) lines.push(Cause.pretty(cause));
   for (; messageIndex < message.length; messageIndex++) {
-    lines.push(String(Redactable.redact(message[messageIndex])));
+    // toStringUnknown redacts and renders objects as JSON — String() would
+    // print "[object Object]" for the structured messages the server logs.
+    lines.push(toStringUnknown(message[messageIndex]));
   }
   for (const [key, value] of Object.entries(annotations)) {
-    lines.push(`${key}: ${String(Redactable.redact(value))}`);
+    lines.push(`${key}: ${toStringUnknown(value)}`);
   }
   return lines.join("\n");
 };
@@ -61,10 +63,7 @@ const prettyFileLogger = Effect.fn("serverLogger.prettyFileLogger")(function* (p
       .getRef(References.CurrentLogSpans)
       .map(([label, timestamp]) => `${label}=${now - timestamp}ms`);
     const annotations = Object.fromEntries(
-      Object.entries(fiber.getRef(References.CurrentLogAnnotations)).map(([key, value]) => [
-        key,
-        Redactable.redact(value),
-      ]),
+      Object.entries(fiber.getRef(References.CurrentLogAnnotations)),
     );
     return formatPrettyPlain(
       date,
