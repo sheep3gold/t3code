@@ -163,7 +163,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         scopedLimitNames,
         disabledSkillNames: serverSettings.getSettings.pipe(
           Effect.map((settings) => disabledSkillNameSet(settings.disabledSkills)),
-          Effect.catchAll(() => Effect.succeed(EMPTY_NAME_SET)),
+          Effect.orElseSucceed(() => EMPTY_NAME_SET),
         ),
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       };

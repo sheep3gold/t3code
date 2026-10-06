@@ -82,7 +82,7 @@ describe("filterProviderDisabledSkills", () => {
       ],
     });
 
-    const filtered = filterProviderDisabledSkills(provider, new Set(["REVIEW"]));
+    const filtered = filterProviderDisabledSkills(provider, disabledSkillNameSet(["REVIEW"]));
 
     expect(filtered.skills.map((skill) => skill.name)).toEqual(["release"]);
     expect(filtered.workspaceSnapshots?.[0]?.skills.map((skill) => skill.name)).toEqual(["docs"]);

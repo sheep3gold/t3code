@@ -155,7 +155,7 @@ const cursorAdapterTestLayer = it.layer(
         Effect.map(
           (snapshot) => new Set(snapshot.disabledSkills.map((name) => name.toLowerCase())),
         ),
-        Effect.catchAll(() => Effect.succeed(new Set<string>())),
+        Effect.orElseSucceed(() => new Set<string>()),
       );
       return yield* makeCursorAdapter(cursorConfig, { resolveSettings, disabledSkillNames });
     }),

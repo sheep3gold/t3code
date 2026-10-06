@@ -209,7 +209,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         instanceId,
         disabledSkillNames: serverSettings.getSettings.pipe(
           Effect.map((settings) => disabledSkillNameSet(settings.disabledSkills)),
-          Effect.catchAll(() => Effect.succeed(EMPTY_NAME_SET)),
+          Effect.orElseSucceed(() => EMPTY_NAME_SET),
         ),
         onAvailableCommands: (commands, cwd) =>
           discoverCursorSkills(cwd, processEnv).pipe(

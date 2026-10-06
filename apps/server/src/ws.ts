@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  DEFAULT_SERVER_SETTINGS,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
@@ -2448,9 +2449,13 @@ const makeWsRpcLayer = (
                 }
               }
               return {
+                // A settings-read failure must not fail the refresh: the
+                // caller then just sees the unfiltered list.
                 providers: withDisabledSkillsFiltered(
                   providers,
-                  (yield* serverSettings.getSettings).disabledSkills,
+                  (yield* serverSettings.getSettings.pipe(
+                    Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+                  )).disabledSkills,
                 ),
               };
             }),
