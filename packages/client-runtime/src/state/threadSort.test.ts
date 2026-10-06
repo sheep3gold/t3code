@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
+  hasUnseenThreadCompletion,
   pinOrderKeyBetween,
   planPinnedMove,
   planPinnedReorder,
@@ -357,6 +358,141 @@ describe("sortActiveThreadsByOrderKey", () => {
         expect(sortActiveThreadsByOrderKey(updated).map((thread) => thread.id)).toEqual(desired);
       }
     }
+  });
+
+  it("lifts working threads above both groups, keeping relative order", () => {
+    const sorted = sortActiveThreadsByOrderKey([
+      {
+        id: "idle-new",
+        createdAt: "2026-03-09T12:00:00.000Z",
+        session: { status: "stopped" },
+      },
+      {
+        id: "working-old",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        session: { status: "running" },
+      },
+      {
+        id: "working-newer",
+        createdAt: "2026-03-09T11:00:00.000Z",
+        backgroundLiveness: "working",
+      },
+      {
+        id: "arranged-idle",
+        createdAt: "2026-03-09T09:00:00.000Z",
+        activeOrderKey: "f",
+        session: { status: "stopped" },
+      },
+      {
+        id: "arranged-working",
+        createdAt: "2026-03-09T07:00:00.000Z",
+        activeOrderKey: "t",
+        session: { status: "starting" },
+      },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "working-newer",
+      "working-old",
+      "arranged-working",
+      "idle-new",
+      "arranged-idle",
+    ]);
+  });
+
+  it("does not lift monitoring or failed sessions", () => {
+    const sorted = sortActiveThreadsByOrderKey([
+      { id: "monitoring", createdAt: "2026-03-09T09:00:00.000Z", backgroundLiveness: "monitoring" },
+      { id: "failed", createdAt: "2026-03-09T08:00:00.000Z", session: { status: "error" } },
+      { id: "stopped", createdAt: "2026-03-09T07:00:00.000Z", session: { status: "stopped" } },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual(["monitoring", "failed", "stopped"]);
+  });
+
+  it("lifts unseen completions above the rest while preserving their relative order", () => {
+    const threads = [
+      {
+        id: "seen-new",
+        createdAt: "2026-03-09T12:00:00.000Z",
+        latestTurn: { completedAt: "2026-03-09T12:30:00.000Z" },
+      },
+      {
+        id: "unseen-old",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        latestTurn: { completedAt: "2026-03-09T08:30:00.000Z" },
+      },
+      {
+        id: "unseen-newer",
+        createdAt: "2026-03-09T11:00:00.000Z",
+        latestTurn: { completedAt: "2026-03-09T11:30:00.000Z" },
+      },
+      {
+        id: "working",
+        createdAt: "2026-03-09T07:00:00.000Z",
+        session: { status: "running" },
+        latestTurn: { completedAt: "2026-03-09T13:00:00.000Z" },
+      },
+    ];
+    const lastVisitedAtById = new Map([
+      ["seen-new", "2026-03-09T13:00:00.000Z"],
+      ["unseen-old", "2026-03-09T08:00:00.000Z"],
+      ["unseen-newer", "2026-03-09T11:00:00.000Z"],
+      ["working", "2026-03-09T06:00:00.000Z"],
+    ]);
+    const sorted = sortActiveThreadsByOrderKey(threads, {
+      isUnreadCompleted: (thread) =>
+        hasUnseenThreadCompletion(thread.latestTurn, lastVisitedAtById.get(thread.id) ?? null),
+    });
+    // Running work outranks an unseen completion on the same thread.
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "unseen-newer",
+      "unseen-old",
+      "working",
+      "seen-new",
+    ]);
+  });
+
+  it("orders the rest by last activity instead of creation time", () => {
+    const sorted = sortActiveThreadsByOrderKey([
+      {
+        id: "created-new-idle",
+        createdAt: "2026-03-09T12:00:00.000Z",
+      },
+      {
+        id: "created-old-active",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T13:00:00.000Z",
+      },
+      {
+        id: "created-mid-turn",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        latestTurn: { completedAt: "2026-03-09T12:30:00.000Z" },
+      },
+      {
+        id: "arranged-idle",
+        createdAt: "2026-03-09T09:00:00.000Z",
+        activeOrderKey: "f",
+        latestUserMessageAt: "2026-03-09T14:00:00.000Z",
+      },
+    ]);
+    // Arranged keys keep their run at the bottom even with newer activity.
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "created-old-active",
+      "created-mid-turn",
+      "created-new-idle",
+      "arranged-idle",
+    ]);
+  });
+
+  it("treats a missing visit as read and a malformed one as unseen", () => {
+    const latestTurn = { completedAt: "2026-03-09T12:00:00.000Z" };
+    expect(hasUnseenThreadCompletion(latestTurn, null)).toBe(false);
+    expect(hasUnseenThreadCompletion(latestTurn, "garbage")).toBe(true);
+    expect(hasUnseenThreadCompletion(null, "2026-03-09T11:00:00.000Z")).toBe(false);
+    expect(hasUnseenThreadCompletion({ completedAt: "garbage" }, "2026-03-09T11:00:00.000Z")).toBe(
+      false,
+    );
+    expect(hasUnseenThreadCompletion(latestTurn, "2026-03-09T12:00:00.000Z")).toBe(false);
+    expect(hasUnseenThreadCompletion(latestTurn, "2026-03-09T11:59:59.999Z")).toBe(true);
   });
 
   it("moves a keyless thread into the arranged run with one write", () => {

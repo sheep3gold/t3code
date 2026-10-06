@@ -43,6 +43,34 @@ export interface Preferences {
   /** Fresh keys reset both shelves to collapsed when users update. */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
+  /** Device-local read state (`environmentId:threadId` → visit stamp), the
+      counterpart of web's uiStateStore. The stamp is the completed turn's
+      own time, so a completion that lands later still reads as unseen. */
+  readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
+}
+
+/** The transform half of a "read thread" stamp. Visits only move forward —
+    an older completion must not erase a newer one the user already saw —
+    and a malformed stamp is a no-op rather than a reset to unread. */
+export function markThreadVisitedPreferences(
+  current: Preferences,
+  input: { readonly threadKey: string; readonly visitedAt: string },
+): Partial<Preferences> {
+  const visitedAtMs = Date.parse(input.visitedAt);
+  if (!Number.isFinite(visitedAtMs) || input.threadKey.length === 0) {
+    return {};
+  }
+  const previous = current.threadLastVisitedAtById?.[input.threadKey];
+  const previousMs = previous ? Date.parse(previous) : Number.NaN;
+  if (Number.isFinite(previousMs) && previousMs >= visitedAtMs) {
+    return {};
+  }
+  return {
+    threadLastVisitedAtById: {
+      ...current.threadLastVisitedAtById,
+      [input.threadKey]: input.visitedAt,
+    },
+  };
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -103,6 +131,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
+    threadLastVisitedAtById?: Readonly<Record<string, string>>;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -186,6 +215,21 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListSnoozedShelfExpanded === "boolean") {
     preferences.threadListSnoozedShelfExpanded = parsed.threadListSnoozedShelfExpanded;
+  }
+  if (
+    typeof parsed.threadLastVisitedAtById === "object" &&
+    parsed.threadLastVisitedAtById !== null &&
+    !Array.isArray(parsed.threadLastVisitedAtById)
+  ) {
+    // Malformed stamps are kept, not dropped: hasUnseenThreadCompletion
+    // treats them as unseen, so corrupt local data cannot eat the signal.
+    const stamps: Record<string, string> = {};
+    for (const [key, stamp] of Object.entries(parsed.threadLastVisitedAtById)) {
+      if (key.length > 0 && typeof stamp === "string") {
+        stamps[key] = stamp;
+      }
+    }
+    preferences.threadLastVisitedAtById = stamps;
   }
   return preferences;
 }
