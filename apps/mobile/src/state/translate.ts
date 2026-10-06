@@ -7,7 +7,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { useAtomCommand } from "./use-atom-command";
@@ -106,5 +106,10 @@ export function useThreadTranslation(environmentId: EnvironmentId): MessageTrans
     [pendingIds],
   );
 
-  return { available, translateMessage, translationFor, pendingFor };
+  // Stable identity until translation state changes: ThreadFeed feeds this into
+  // LegendList's extraData, which is the only way visible rows re-render.
+  return useMemo(
+    () => ({ available, translateMessage, translationFor, pendingFor }),
+    [available, translateMessage, translationFor, pendingFor],
+  );
 }
