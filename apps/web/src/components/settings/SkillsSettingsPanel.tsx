@@ -91,7 +91,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
   );
 
   const claudeInstances = useMemo(
-    () => providers.filter((provider) => provider.driver === "claude" && provider.enabled),
+    () => providers.filter((provider) => provider.driver === "claudeAgent" && provider.enabled),
     [providers],
   );
   const newSkillInstanceId =
