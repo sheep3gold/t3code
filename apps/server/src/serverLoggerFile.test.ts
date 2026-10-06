@@ -78,10 +78,11 @@ it("mirrors pretty logs to T3CODE_PRETTY_LOG_FILE without colors", async () => {
         Effect.annotateLogs("environment.endpoint", "translate"),
       );
     }).pipe(
-      Effect.provide(ServerLoggerLive),
-      Effect.provide(configLayer),
-      Effect.provide(httpClientLayer),
-      Effect.provide(NodeFileSystem.layer),
+      Effect.provide(
+        ServerLoggerLive.pipe(
+          Layer.provide(Layer.mergeAll(configLayer, httpClientLayer, NodeFileSystem.layer)),
+        ),
+      ),
       Effect.provideService(Scope.Scope, scope),
       Effect.runPromise,
     );
