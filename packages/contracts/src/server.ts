@@ -878,6 +878,26 @@ export const ServerSelfUpdateProgressEvent = Schema.Union([
 ]);
 export type ServerSelfUpdateProgressEvent = typeof ServerSelfUpdateProgressEvent.Type;
 
+/**
+ * One skill file operation (read / upsert / delete) failed. `operation`
+ * names the verb so the client can label the toast; `reason` is safe to
+ * show the user.
+ */
+export class ServerSkillFileError extends Schema.TaggedError<ServerSkillFileError>()(
+  "ServerSkillFileError",
+  {
+    operation: Schema.Literals(["read", "upsert", "delete"]),
+    instanceId: ProviderInstanceId,
+    skillName: Schema.String,
+    reason: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Skill ${this.operation} failed for ${this.skillName}: ${this.reason}`;
+  }
+}
+
 export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateError>()(
   "ServerSelfUpdateError",
   {

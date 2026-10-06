@@ -1103,6 +1103,24 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    skillRead: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:skill-read",
+      tag: WS_METHODS.serverSkillRead,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    skillUpsert: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:skill-upsert",
+      tag: WS_METHODS.serverSkillUpsert,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    skillDelete: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:skill-delete",
+      tag: WS_METHODS.serverSkillDelete,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,

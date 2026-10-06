@@ -61,6 +61,7 @@ import {
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   ServerSelfUpdateError,
+  ServerSkillFileError,
   type ServerSelfUpdateProgressEvent,
   type ServerLifecycleStreamEvent,
   type ServerProvider,
@@ -119,7 +120,10 @@ import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
+import { deriveProviderInstanceConfigMap } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { disabledSkillNameSet, filterProviderDisabledSkills } from "./provider/sharedSkills.ts";
+import { deleteSkill, readSkill, upsertSkill } from "./provider/skillFiles.ts";
+import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -581,6 +585,83 @@ const makeWsRpcLayer = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+
+      /**
+       * Resolve the Claude home path from the same effective config map used
+       * to build provider instances (including synthesized legacy defaults).
+       * Non-Claude drivers have no supported writable skill directory.
+       */
+      const claudeHomePathForInstance = Effect.fn("claudeHomePathForInstance")(function* (
+        instanceId: string,
+        operation: "read" | "upsert" | "delete",
+        skillName: string,
+      ) {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSkillFileError({
+                operation,
+                instanceId: instanceId as ServerSkillFileError["instanceId"],
+                skillName,
+                reason: "Could not load server settings.",
+                cause,
+              }),
+          ),
+        );
+        const entries = deriveProviderInstanceConfigMap(settings);
+        const entry = entries[instanceId as keyof typeof entries];
+        if (!entry) {
+          return yield* new ServerSkillFileError({
+            operation,
+            instanceId: instanceId as ServerSkillFileError["instanceId"],
+            skillName,
+            reason: "Provider instance not found.",
+          });
+        }
+        if (entry.driver !== "claudeAgent") {
+          return yield* new ServerSkillFileError({
+            operation,
+            instanceId: instanceId as ServerSkillFileError["instanceId"],
+            skillName,
+            reason: `Skill file editing is only supported for Claude instances (this instance uses the "${entry.driver}" driver).`,
+          });
+        }
+        const config = (entry.config ?? {}) as { readonly homePath?: unknown };
+        return {
+          homePath: typeof config.homePath === "string" ? config.homePath : "",
+          environment: mergeProviderInstanceEnvironment(entry.environment),
+        };
+      });
+      const refreshSkillSnapshots = Effect.fn("refreshSkillSnapshots")(function* (
+        instanceId: ServerSkillFileError["instanceId"],
+        operation: "upsert" | "delete",
+        skillName: string,
+      ) {
+        const refreshError = (cause: unknown) =>
+          new ServerSkillFileError({
+            operation,
+            instanceId,
+            skillName,
+            reason: "The skill changed on disk, but its provider snapshot could not refresh.",
+            cause,
+          });
+        const providers = yield* providerRegistry
+          .refreshInstance(instanceId)
+          .pipe(Effect.mapError(refreshError));
+        // Composer prefers cached cwd snapshots over the instance-wide list.
+        const cwds =
+          providers
+            .find((provider) => provider.instanceId === instanceId)
+            ?.workspaceSnapshots?.map((snapshot) => snapshot.cwd) ?? [];
+        yield* Effect.forEach(
+          cwds,
+          (cwd) =>
+            providerRegistry
+              .refreshWorkspaceSnapshot({ instanceId, cwd, force: true })
+              .pipe(Effect.mapError(refreshError)),
+          { concurrency: 2, discard: true },
+        );
+      });
       const canReplayPersistedRange = Effect.fnUntraced(function* (
         afterSequence: number,
         headSequence: number,
@@ -2657,6 +2738,69 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverSkillRead]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillRead,
+            Effect.gen(function* () {
+              const { homePath, environment } = yield* claudeHomePathForInstance(
+                input.instanceId,
+                "read",
+                input.name,
+              );
+              return yield* readSkill({
+                instanceId: input.instanceId,
+                homePath,
+                environment,
+                name: input.name,
+              });
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSkillUpsert]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillUpsert,
+            Effect.gen(function* () {
+              const { homePath, environment } = yield* claudeHomePathForInstance(
+                input.instanceId,
+                "upsert",
+                input.name,
+              );
+              const document = yield* upsertSkill({
+                instanceId: input.instanceId,
+                homePath,
+                environment,
+                name: input.name,
+                description: input.description,
+                body: input.body,
+                ...(input.previousName !== undefined ? { previousName: input.previousName } : {}),
+              });
+              yield* refreshSkillSnapshots(input.instanceId, "upsert", input.name);
+              return document;
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSkillDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillDelete,
+            Effect.gen(function* () {
+              const { homePath, environment } = yield* claudeHomePathForInstance(
+                input.instanceId,
+                "delete",
+                input.name,
+              );
+              const result = yield* deleteSkill({
+                instanceId: input.instanceId,
+                homePath,
+                environment,
+                name: input.name,
+              });
+              if (result.deleted) {
+                yield* refreshSkillSnapshots(input.instanceId, "delete", input.name);
+              }
+              return result;
+            }),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(

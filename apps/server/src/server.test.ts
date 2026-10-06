@@ -37,6 +37,7 @@ import {
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
+  type ServerProvider,
   type ServerProviderUsageWindow,
   type ServerLifecycleStreamEvent,
   ThreadId,
@@ -92,6 +93,8 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as NetAddress from "effect/unstable/net/NetAddress";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
+
+import { discoverClaudeSkills } from "./provider/Drivers/ClaudeSkills.ts";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const SUCCESSFUL_GIT_EXECUTION = {
@@ -7144,6 +7147,225 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+
+  for (const instanceMode of ["legacy-default", "custom-environment"] as const) {
+    it.effect(
+      `skill RPCs persist Claude files, refresh discovery and enforce scopes (${instanceMode})`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "t3-skill-rpc-" });
+          const instanceId = ProviderInstanceId.make(
+            instanceMode === "legacy-default" ? "claudeAgent" : "claude-custom",
+          );
+          const cwd = path.join(homePath, "workspace");
+          const refreshes: string[] = [];
+          let providers: ServerProvider[] = [
+            {
+              instanceId,
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+              status: "ready",
+              installed: true,
+              auth: { status: "authenticated" },
+              checkedAt: "2026-10-07T00:00:00.000Z",
+              version: "1.0.0",
+              models: [],
+              slashCommands: [],
+              skills: [],
+              workspaceSnapshots: [
+                { cwd, checkedAt: "2026-10-07T00:00:00.000Z", slashCommands: [], skills: [] },
+              ],
+            },
+          ];
+          yield* buildAppUnderTest({
+            layers: {
+              serverSettings: {
+                getSettings: Effect.succeed({
+                  ...DEFAULT_SERVER_SETTINGS,
+                  ...(instanceMode === "legacy-default"
+                    ? {
+                        providers: {
+                          ...DEFAULT_SERVER_SETTINGS.providers,
+                          claudeAgent: {
+                            ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+                            homePath,
+                          },
+                        },
+                      }
+                    : {
+                        providerInstances: {
+                          [instanceId]: {
+                            driver: ProviderDriverKind.make("claudeAgent"),
+                            config: { homePath: "" },
+                            environment: [
+                              { name: "CLAUDE_CONFIG_DIR", value: homePath, sensitive: false },
+                            ],
+                          },
+                        },
+                      }),
+                }),
+              },
+              providerRegistry: {
+                getProviders: Effect.sync(() => providers),
+                refreshInstance: (id) =>
+                  Effect.gen(function* () {
+                    assert.equal(id, instanceId);
+                    refreshes.push("instance");
+                    const skills = yield* discoverClaudeSkills({ homePath }).pipe(
+                      Effect.provide(NodeServices.layer),
+                      Effect.orDie,
+                    );
+                    providers = providers.map((provider) => ({ ...provider, skills }));
+                    return providers;
+                  }),
+                refreshWorkspaceSnapshot: (input) =>
+                  Effect.gen(function* () {
+                    assert.deepEqual(input, { instanceId, cwd, force: true });
+                    refreshes.push("workspace");
+                    const skills = yield* discoverClaudeSkills({ homePath }, cwd).pipe(
+                      Effect.provide(NodeServices.layer),
+                      Effect.orDie,
+                    );
+                    providers = providers.map((provider) => ({
+                      ...provider,
+                      workspaceSnapshots: [
+                        { cwd, checkedAt: provider.checkedAt, slashCommands: [], skills },
+                      ],
+                    }));
+                    return providers;
+                  }),
+              },
+            },
+          });
+          const wsUrl = yield* getWsServerUrl("/ws");
+          yield* Effect.scoped(
+            withWsRpcClient(wsUrl, (client) =>
+              Effect.gen(function* () {
+                const created = yield* client[WS_METHODS.serverSkillUpsert]({
+                  instanceId,
+                  name: "draft",
+                  description: "Review: carefully",
+                  body: "Original instructions.\n",
+                });
+                assert.equal(created.path, path.join(homePath, "skills", "draft", "SKILL.md"));
+                assert.include(yield* fs.readFileString(created.path), "Original instructions.");
+                const read = yield* client[WS_METHODS.serverSkillRead]({
+                  instanceId,
+                  name: "draft",
+                });
+                assert.equal(read.description, "Review: carefully");
+                assert.equal(read.body, "Original instructions.\n");
+                assert.equal(
+                  (yield* client[WS_METHODS.serverGetConfig]({})).providers[0]?.skills[0]?.name,
+                  "draft",
+                );
+
+                const reader = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+                  scope: "orchestration:read",
+                });
+                assert.equal(reader.response.status, 200);
+                const ticketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+                  headers: { authorization: `Bearer ${reader.body.access_token ?? ""}` },
+                });
+                assert.equal(ticketResponse.status, 200);
+                const { ticket } = (yield* ticketResponse.json) as { ticket: string };
+                const readerUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+                yield* withWsRpcClient(readerUrl, (readOnly) =>
+                  Effect.gen(function* () {
+                    assert.equal(
+                      (yield* readOnly[WS_METHODS.serverSkillRead]({ instanceId, name: "draft" }))
+                        .body,
+                      read.body,
+                    );
+                    const writeError = yield* Effect.flip(
+                      readOnly[WS_METHODS.serverSkillUpsert]({
+                        instanceId,
+                        name: "draft",
+                        previousName: "draft",
+                        body: "Unauthorized change",
+                      }),
+                    );
+                    assert.equal(writeError._tag, "EnvironmentAuthorizationError");
+                    const deleteError = yield* Effect.flip(
+                      readOnly[WS_METHODS.serverSkillDelete]({ instanceId, name: "draft" }),
+                    );
+                    assert.equal(deleteError._tag, "EnvironmentAuthorizationError");
+                  }),
+                );
+                assert.include(yield* fs.readFileString(created.path), "Original instructions.");
+
+                const unsupported = yield* Effect.flip(
+                  client[WS_METHODS.serverSkillRead]({
+                    instanceId: ProviderInstanceId.make("codex"),
+                    name: "draft",
+                  }),
+                );
+                assert.equal(unsupported._tag, "ServerSkillFileError");
+                const collision = yield* Effect.flip(
+                  client[WS_METHODS.serverSkillUpsert]({
+                    instanceId,
+                    name: "draft",
+                    body: "Should not overwrite",
+                  }),
+                );
+                assert.equal(collision._tag, "ServerSkillFileError");
+                yield* client[WS_METHODS.serverSkillUpsert]({
+                  instanceId,
+                  name: "published",
+                  previousName: "draft",
+                  description: "Updated",
+                  body: "New instructions.\n",
+                });
+                assert.isFalse(yield* fs.exists(path.dirname(created.path)));
+                assert.equal(
+                  (yield* client[WS_METHODS.serverSkillRead]({ instanceId, name: "published" }))
+                    .body,
+                  "New instructions.\n",
+                );
+                const renamed = (yield* client[WS_METHODS.serverGetConfig]({})).providers[0];
+                assert.deepEqual(
+                  renamed?.skills.map((skill) => skill.name),
+                  ["published"],
+                );
+                assert.deepEqual(
+                  renamed?.workspaceSnapshots?.[0]?.skills.map((skill) => skill.name),
+                  ["published"],
+                );
+                assert.deepEqual(
+                  yield* client[WS_METHODS.serverSkillDelete]({ instanceId, name: "published" }),
+                  { deleted: true },
+                );
+                assert.deepEqual(
+                  (yield* client[WS_METHODS.serverGetConfig]({})).providers[0]?.skills,
+                  [],
+                );
+                assert.deepEqual(
+                  yield* discoverClaudeSkills({ homePath }).pipe(
+                    Effect.provide(NodeServices.layer),
+                    Effect.orDie,
+                  ),
+                  [],
+                );
+                assert.deepEqual(refreshes, [
+                  "instance",
+                  "workspace",
+                  "instance",
+                  "workspace",
+                  "instance",
+                  "workspace",
+                ]);
+                assert.equal(
+                  (yield* fs.readDirectory(path.join(homePath, ".t3-skill-backups"))).length,
+                  2,
+                );
+              }),
+            ),
+          );
+        }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+  }
 
   for (const mode of ["all", "targeted", "background"] as const) {
     it.effect(`provider refresh invalidates T3 caches before probing (${mode})`, () => {
