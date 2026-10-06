@@ -75,6 +75,9 @@ test -s "$SRC/apps/server/dist/bin.mjs"
 test -d "$LIVE/apps/web/dist"
 test -d "$LIVE/apps/server/dist"
 
+# Keep user-scope skill links in sync before touching the running installation.
+python3 "$SRC/deploy/host/install-parent-skills.py"
+
 tar czf "$BACKUP" -C "$LIVE" apps/web/dist apps/server/dist
 
 rollback() {
