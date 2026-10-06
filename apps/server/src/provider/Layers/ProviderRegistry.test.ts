@@ -562,7 +562,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
 
           yield* Effect.yieldNow;
-          yield* TestClock.adjust("11 seconds");
+          yield* TestClock.adjust("21 seconds");
           yield* Effect.yieldNow;
 
           const status = yield* Fiber.join(statusFiber);
@@ -573,6 +573,29 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
           assert.strictEqual(yield* Ref.get(killCalls), 1);
         }),
+      );
+
+      it.effect(
+        "keeps account and models but marks quota probeFailed when the rateLimits read fails",
+        () =>
+          Effect.gen(function* () {
+            const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+              Effect.succeed(
+                makeCodexProbeSnapshot({
+                  rateLimits: { failure: "Codex did not answer the usage request." },
+                }),
+              ),
+            );
+
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.auth.status, "authenticated");
+            assert.strictEqual(status.models.length, 1);
+            assert.strictEqual(status.usageLimits?.unavailable?.reason, "probeFailed");
+            assert.strictEqual(
+              status.usageLimits?.unavailable?.message,
+              "Codex did not answer the usage request.",
+            );
+          }),
       );
     });
 
