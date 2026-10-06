@@ -18,8 +18,9 @@ import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAut
 import { createEnvironmentCommand } from "./runtime.ts";
 
 // Translation streams a long upstream chat completion; the server can spend up
-// to 60s per chunk batch, so the client budget must exceed one full batch.
-const DEFAULT_TRANSLATE_TIMEOUT_MS = 120_000;
+// to 300s on one chunk batch (reasoning models are slow on large inputs), so
+// the client budget must exceed one full batch with headroom.
+const DEFAULT_TRANSLATE_TIMEOUT_MS = 360_000;
 
 type TranslateRequestContext = {
   readonly prepared: PreparedConnection;

@@ -48,13 +48,19 @@ const DEFAULT_MODEL = "auto";
 const GATEWAY_TIER = "SIMPLE";
 const MAX_TEXTS_PER_REQUEST = 24;
 const MAX_TEXT_LENGTH = 16_000;
-const UPSTREAM_TIMEOUT_SECONDS = 60;
-const UPSTREAM_MAX_TOKENS = 4096;
+// The SIMPLE-tier models are reasoning models whose thinking scales with input
+// length/complexity: measured production batches of ~6000 source chars needed
+// ~10k completion tokens (≈9k reasoning) and ~144s to finish. max_tokens caps
+// reasoning + translation together, so a small budget truncates the reply into
+// a malformed JSON array (502 "Unexpected upstream response"), and a short
+// client timeout aborts a slow-but-valid batch (502 "Translation upstream
+// failed"). Both budgets are sized with generous headroom over those numbers.
+const UPSTREAM_TIMEOUT_SECONDS = 300;
+const UPSTREAM_MAX_TOKENS = 32768;
 // Long messages exceed the upstream token budget in one shot (a reasoning
-// flash model burns the budget on thinking, or the JSON array is truncated),
-// which used to turn into a 502 after a 60s timeout — the client then showed
-// an endless spinner. Split long texts at paragraph boundaries and translate
-// the chunks in batches sized to the output budget.
+// flash model burns the budget on thinking, or the JSON array is truncated).
+// Split long texts at paragraph boundaries and translate the chunks in batches
+// sized to the output budget.
 const CHUNK_TARGET_LENGTH = 2_000;
 // Combined source length per upstream call, keeping the reply well under
 // UPSTREAM_MAX_TOKENS even with reasoning overhead on top of the translation.
