@@ -35,7 +35,6 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
-  AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   type ServerProviderDraft,
@@ -51,7 +50,25 @@ import {
 } from "./codexUsageLimits.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
-const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
+
+// The app-server answers `account/rateLimits/read` through the XJP proxy and
+// can take several seconds under load. The previous 3s budget turned a slow
+// answer into "Codex did not answer the usage request" (and thus empty quota
+// rows) even though the account was fine. 8s still degrades inside the overall
+// probe budget instead of reporting a phantom quota outage.
+const RATE_LIMITS_PROBE_TIMEOUT_MS = 8_000;
+
+// `model/list` is paginated and can be the slowest call in the probe. Bound it
+// so a slow model list degrades to custom models only, instead of blowing the
+// whole probe budget and losing the account and quota results too.
+const MODELS_PROBE_TIMEOUT_MS = 8_000;
+
+// Total budget for the whole Codex probe: spawn + initialize handshake +
+// account/read + the concurrent skills/models/rateLimits group. account/read
+// alone spawns a fresh app-server through the proxy and takes ~4.5s, so the
+// shared 10s auth budget is too tight for Codex. This stays under web-hub's
+// 30s proxy read timeout.
+const CODEX_PROBE_TIMEOUT_MS = 20_000;
 
 type CodexRateLimitsProbe =
   | {
@@ -462,7 +479,10 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         : client.request("skills/list", { cwds: [input.cwd] }),
       isUnauthenticated
         ? Effect.succeed(appendCustomCodexModels([], input.customModels ?? []))
-        : requestAllCodexModels(client),
+        : requestAllCodexModels(client).pipe(
+            Effect.timeoutOption(Duration.millis(MODELS_PROBE_TIMEOUT_MS)),
+            Effect.map(Option.getOrElse((): ReadonlyArray<ServerProviderModel> => [])),
+          ),
       // Usage is an enrichment: a failure or a slow answer degrades to "no
       // usage this probe" rather than costing the account and models.
       client.request("account/rateLimits/read", undefined).pipe(
@@ -679,7 +699,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     environment: resolvedEnvironment,
   }).pipe(
     Effect.scoped,
-    Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS)),
+    Effect.timeoutOption(Duration.millis(CODEX_PROBE_TIMEOUT_MS)),
     Effect.result,
   );
 
