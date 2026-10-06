@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  DEFAULT_SERVER_SETTINGS,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
@@ -62,6 +63,7 @@ import {
   ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
   type ServerLifecycleStreamEvent,
+  type ServerProvider,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -117,6 +119,7 @@ import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
+import { disabledSkillNameSet, filterProviderDisabledSkills } from "./provider/sharedSkills.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -1806,18 +1809,33 @@ const makeWsRpcLayer = (
           );
       };
 
+      // Skills the user disabled never leave the server: snapshots and update
+      // streams alike pass through this filter so every client surface — the
+      // `$` menu, settings, third-party consumers — sees the same list.
+      const withDisabledSkillsFiltered = (
+        providers: ReadonlyArray<ServerProvider>,
+        disabledSkills: ReadonlyArray<string>,
+      ): ReadonlyArray<ServerProvider> => {
+        const disabled = disabledSkillNameSet(disabledSkills);
+        if (disabled.size === 0) return providers;
+        return providers.map((provider) => filterProviderDisabledSkills(provider, disabled));
+      };
+
       // Only clients that answer /usage-limits themselves see it in the catalogs;
       // an older client would send the injected command to the provider.
       const loadServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
         Effect.gen(function* () {
           const keybindingsConfig = yield* keybindings.loadConfigState;
-          const currentProviders = yield* providerRegistry.getProviders;
-          const providers = options.usageLimitsCommand
-            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
-            : currentProviders;
           const settings = ServerSettings.redactServerSettingsForClient(
             yield* serverSettings.getSettings,
           );
+          const currentProviders = withDisabledSkillsFiltered(
+            yield* providerRegistry.getProviders,
+            settings.disabledSkills,
+          );
+          const providers = options.usageLimitsCommand
+            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
+            : currentProviders;
           const environment = yield* serverEnvironment.getDescriptor;
           const auth = yield* serverAuth.getDescriptor();
           const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
@@ -2430,7 +2448,16 @@ const makeWsRpcLayer = (
                   providers = yield* providerRegistry.refreshInstance(instance.instanceId);
                 }
               }
-              return { providers };
+              return {
+                // A settings-read failure must not fail the refresh: the
+                // caller then just sees the unfiltered list.
+                providers: withDisabledSkillsFiltered(
+                  providers,
+                  (yield* serverSettings.getSettings.pipe(
+                    Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+                  )).disabledSkills,
+                ),
+              };
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -3623,10 +3650,22 @@ const makeWsRpcLayer = (
               const providerStatuses = Stream.zipLatestWith(
                 // The registry stream carries changes only. Seed it with the current
                 // providers so a source refresh that lands before any provider change
-                // still pairs up and reaches the client.
-                Stream.concat(
-                  Stream.fromEffect(providerRegistry.getProviders),
-                  providerRegistry.streamChanges,
+                // still pairs up and reaches the client. Zipping with the settings
+                // stream means a `disabledSkills` toggle republishes the filtered
+                // list even though the registry itself never saw a probe change.
+                Stream.zipLatest(
+                  Stream.concat(
+                    Stream.fromEffect(providerRegistry.getProviders),
+                    providerRegistry.streamChanges,
+                  ),
+                  serverSettings.streamChanges,
+                ).pipe(
+                  Stream.map(([providers, settings]) =>
+                    withDisabledSkillsFiltered(providers, settings.disabledSkills),
+                  ),
+                  Stream.changesWith(
+                    (previous, next) => JSON.stringify(previous) === JSON.stringify(next),
+                  ),
                 ),
                 usageLimitSources.streamChanges.pipe(
                   // Quota updates already have their own stream. Republish the model
