@@ -2433,6 +2433,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      // Translation results and pending spinners live outside the entries.
+      translation,
     }),
     [
       props.worktreeSetup,
@@ -2449,6 +2451,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      translation,
     ],
   );
   const reportHeaderMaterialVisibility = useCallback(
