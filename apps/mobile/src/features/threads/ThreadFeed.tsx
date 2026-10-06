@@ -1563,6 +1563,14 @@ function renderFeedEntry(
     const { message } = entry;
     if (message.role === "reasoning") {
       const messages = entry.reasoningMessages ?? [message];
+      const reasoningText = messages
+        .map((reasoningMessage) => reasoningMessage.text.trim())
+        .filter((text) => text.length > 0)
+        .join("\n\n");
+      const translatedReasoning =
+        reasoningText.length > 0
+          ? props.translation.translationFor(message.id, reasoningText)
+          : undefined;
       return (
         <ThreadReasoningRow
           rowSizing={props.workRowSizing}
@@ -1571,6 +1579,16 @@ function renderFeedEntry(
           label={`Thought${messages.length > 1 ? ` (×${messages.length})` : ""}`}
           streaming={false}
           onToggle={() => props.onToggleReasoning(entry.id)}
+          headerAccessory={
+            reasoningText.length > 0 && translatedReasoning === undefined ? (
+              <MessageTranslateButton
+                messageId={message.id}
+                sourceText={reasoningText}
+                translation={props.translation}
+                tintColor={iconSubtleColor}
+              />
+            ) : null
+          }
         >
           <MarkdownImageAvailableWidthContext
             value={props.markdownContentWidth - REASONING_CONTENT_INSET}
@@ -1587,6 +1605,17 @@ function renderFeedEntry(
                 />
               ))}
             </View>
+            {translatedReasoning !== undefined ? (
+              <MessageTranslationBlock
+                text={translatedReasoning}
+                markdownStyles={markdownStyles.assistant}
+                linkHandlers={props.markdownLinkHandlers}
+                renderImage={props.renderMarkdownImage}
+                skills={props.skills}
+                contentWidth={props.markdownContentWidth - REASONING_CONTENT_INSET - 24}
+                borderColor={props.translationBorderColor}
+              />
+            ) : null}
           </MarkdownImageAvailableWidthContext>
         </ThreadReasoningRow>
       );
