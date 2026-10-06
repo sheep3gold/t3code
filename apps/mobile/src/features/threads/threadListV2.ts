@@ -11,6 +11,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
+  hasUnseenThreadCompletion,
   sortActiveThreadsByOrderKey,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
@@ -142,7 +143,8 @@ function parseTimestampMs(isoDate: string): number {
 }
 
 /** The active order shared by web and native: new/reopened rows, then the
-    saved arrangement. Activity does not move a thread. */
+    saved arrangement. Callers that track read state pass
+    `isUnreadCompleted` so unseen completions lead the section. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
@@ -150,9 +152,11 @@ export function sortThreadsForListV2<
     readonly unsettledAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
+    readonly latestTurn?: { readonly completedAt?: string | null | undefined } | null | undefined;
+    readonly latestUserMessageAt?: string | null | undefined;
   },
->(threads: readonly T[]): T[] {
-  return sortActiveThreadsByOrderKey(threads);
+>(threads: readonly T[], options?: { readonly isUnreadCompleted?: (thread: T) => boolean }): T[] {
+  return sortActiveThreadsByOrderKey(threads, options);
 }
 
 /** Canonical card section for Move up/down, independent of search or scope. */
@@ -525,6 +529,9 @@ export function buildThreadListV2Items(input: {
       outbox. Such a thread has work the user is waiting on, so it stays in
       the active block even when the server has settled it. */
   readonly queuedThreadKeys?: ReadonlySet<string>;
+  /** Device-local read state. A turn completed after the visit stamp keeps
+      its row at the top of the active block until the user opens it. */
+  readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -594,7 +601,17 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+  const orderedActive = applyPendingThreadOrder(
+    sortThreadsForListV2(active, {
+      isUnreadCompleted: (thread) =>
+        hasUnseenThreadCompletion(
+          thread.latestTurn,
+          input.threadLastVisitedAtById?.[`${thread.environmentId}:${thread.id}`] ?? null,
+        ),
+    }),
+    "active",
+    pending,
+  );
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),

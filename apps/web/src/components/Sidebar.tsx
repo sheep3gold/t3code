@@ -2228,6 +2228,9 @@ export default function Sidebar() {
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
   const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
   const markThreadVisited = useUiStateStore((s) => s.markThreadVisited);
+  // Whole map, not a per-thread selector: the active-list sort reads it for
+  // every thread to keep unseen completions at the top of the section.
+  const threadLastVisitedAtById = useUiStateStore((s) => s.threadLastVisitedAtById);
   const acknowledgeWoke = useCallback(
     (threadRef: ScopedThreadRef, visitedAt: string) => {
       markThreadVisited(scopedThreadKey(threadRef), visitedAt);
@@ -2590,7 +2593,20 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortThreadsForSidebar(active);
+    // Attention tiers on top of the shared order (see
+    // sortActiveThreadsByOrderKey): unseen completions lead, then running
+    // work; the rest follows last activity. Read state is this browser's
+    // uiStateStore, so the predicate never runs for other devices.
+    const sortedActive = sortThreadsForSidebar(active, {
+      isUnreadCompleted: (thread) =>
+        hasUnseenCompletion({
+          ...thread,
+          lastVisitedAt:
+            threadLastVisitedAtById[
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+            ],
+        }),
+    });
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2619,7 +2635,15 @@ export default function Sidebar() {
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    nowMinute,
+    optimisticDrop,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threadLastVisitedAtById,
+    threads,
+  ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
