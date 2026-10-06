@@ -4810,6 +4810,155 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     ),
   );
 
+  // The real upstream occasionally emits one malformed JSON escape deep inside a
+  // long completion while answering a translation batch (observed as a 200 whose
+  // content fails json parsing). One re-ask usually returns a usable array, so
+  // the route absorbs that first malformed answer instead of failing the client.
+  it.effect("retries one malformed /api/translate upstream answer and still translates", () =>
+    Effect.gen(function* () {
+      const upstreamBodies: Array<string> = [];
+      const upstream = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const NodeHttp = await import("node:http");
+          return await new Promise<{ readonly close: () => Promise<void>; readonly url: string }>(
+            (resolve, reject) => {
+              const contents = [
+                // One valid JSON array with a broken escape inside the string.
+                '["你好\\u4e2d，世界x"]'.replace("x", "\\q"),
+                '["你好，世界"]',
+              ];
+              let served = 0;
+              const server = NodeHttp.createServer((request, response) => {
+                const chunks: Buffer[] = [];
+                request.on("data", (chunk) => {
+                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                });
+                request.on("end", () => {
+                  upstreamBodies.push(Buffer.concat(chunks).toString("utf8"));
+                  const content = contents[Math.min(served, contents.length - 1)]!;
+                  served += 1;
+                  response.statusCode = 200;
+                  response.setHeader("content-type", "application/json");
+                  response.end(
+                    JSON.stringify({
+                      choices: [{ message: { content }, finish_reason: "stop" }],
+                    }),
+                  );
+                });
+              });
+              server.on("error", reject);
+              server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address !== "object") {
+                  reject(new Error("Expected upstream listener address"));
+                  return;
+                }
+                resolve({
+                  url: `http://127.0.0.1:${address.port}/v1`,
+                  close: () =>
+                    new Promise<void>((resolveClose) => {
+                      server.close(() => resolveClose());
+                    }),
+                });
+              });
+            },
+          );
+        }),
+        ({ close }) => Effect.promise(close),
+      );
+
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", upstream.url);
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}`, "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+      const body = yield* responseJsonEffect<{ readonly translations?: ReadonlyArray<string> }>(
+        response,
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body.translations, ["你好，世界"]);
+      assert.equal(upstreamBodies.length, 2);
+      assert.isTrue(upstreamBodies.every((upstreamBody) => upstreamBody.includes("hello")));
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  it.effect("answers 502 from /api/translate when both upstream answers are malformed", () =>
+    Effect.gen(function* () {
+      const upstreamRequests: Array<string> = [];
+      const upstream = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const NodeHttp = await import("node:http");
+          return await new Promise<{ readonly close: () => Promise<void>; readonly url: string }>(
+            (resolve, reject) => {
+              const server = NodeHttp.createServer((request, response) => {
+                const chunks: Buffer[] = [];
+                request.on("data", (chunk) => {
+                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                });
+                request.on("end", () => {
+                  upstreamRequests.push(Buffer.concat(chunks).toString("utf8"));
+                  response.statusCode = 200;
+                  response.setHeader("content-type", "application/json");
+                  response.end(
+                    JSON.stringify({
+                      choices: [{ message: { content: '["你好\\q世界"]', finish_reason: "stop" } }],
+                    }),
+                  );
+                });
+              });
+              server.on("error", reject);
+              server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address !== "object") {
+                  reject(new Error("Expected upstream listener address"));
+                  return;
+                }
+                resolve({
+                  url: `http://127.0.0.1:${address.port}/v1`,
+                  close: () =>
+                    new Promise<void>((resolveClose) => {
+                      server.close(() => resolveClose());
+                    }),
+                });
+              });
+            },
+          );
+        }),
+        ({ close }) => Effect.promise(close),
+      );
+
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", upstream.url);
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}`, "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+
+      const body = yield* responseJsonEffect<{ readonly _tag?: string | null }>(response);
+      assert.equal(response.status, 502);
+      assert.equal(body?._tag, "EnvironmentTranslateUpstreamError");
+      assert.equal(upstreamRequests.length, 2);
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
   it.effect("does not allow management-only access tokens to operate the environment", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

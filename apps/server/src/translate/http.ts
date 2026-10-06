@@ -269,51 +269,80 @@ export const translateHttpApiLayer = HttpApiBuilder.group(
           const textsJson = yield* encodeTextsJson(batch).pipe(
             Effect.mapError(() => upstreamError("Could not encode texts.")),
           );
-          const upstreamJson = yield* httpClient
-            .execute(
-              HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
-                HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-                HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
-                HttpClientRequest.bodyJsonUnsafe({
-                  model,
-                  temperature: 0,
-                  max_tokens: UPSTREAM_MAX_TOKENS,
-                  messages: [
-                    { role: "system", content: SYSTEM_PROMPT },
-                    { role: "user", content: textsJson },
-                  ],
-                }),
-              ),
-            )
-            .pipe(
-              Effect.flatMap(HttpClientResponse.filterStatusOk),
-              Effect.flatMap((response) => response.json),
-              Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
-              Effect.tapError((cause) =>
-                Effect.logWarning("Translation upstream request failed", { cause, batchIndex }),
-              ),
-              Effect.mapError(() => upstreamError("Translation upstream failed.")),
+          const requestBatchTranslations = Effect.gen(function* () {
+            const upstreamJson = yield* httpClient
+              .execute(
+                HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
+                  HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+                  HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
+                  HttpClientRequest.bodyJsonUnsafe({
+                    model,
+                    temperature: 0,
+                    max_tokens: UPSTREAM_MAX_TOKENS,
+                    messages: [
+                      { role: "system", content: SYSTEM_PROMPT },
+                      { role: "user", content: textsJson },
+                    ],
+                  }),
+                ),
+              )
+              .pipe(
+                Effect.flatMap(HttpClientResponse.filterStatusOk),
+                Effect.flatMap((response) => response.json),
+                Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+                Effect.tapError((cause) =>
+                  Effect.logWarning("Translation upstream request failed", { cause, batchIndex }),
+                ),
+                Effect.mapError(() => upstreamError("Translation upstream failed.")),
+              );
+            const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
+              Effect.mapError(() => upstreamError("Unexpected upstream response.")),
             );
-          const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
-            Effect.mapError(() => upstreamError("Unexpected upstream response.")),
+            const content = completion.choices[0]?.message.content ?? "";
+            if (content.length === 0) {
+              // Reasoning flash models can spend the whole budget on thinking; the
+              // client falls back to untranslated text on 502 and retries later.
+              yield* Effect.logWarning("Translation upstream returned empty content", {
+                batchIndex,
+              });
+              return yield* upstreamError("Translation upstream returned empty content.");
+            }
+            const batchTranslations = yield* parseTranslationsJson(content);
+            if (batchTranslations === null || batchTranslations.length !== batch.length) {
+              return yield* upstreamError("Translation response malformed.");
+            }
+            return batchTranslations;
+          });
+
+          const isMalformedUpstream = (
+            error: EnvironmentTranslateUpstreamError,
+          ): error is EnvironmentTranslateUpstreamError =>
+            error.message === "Translation response malformed.";
+          const batchTranslations = yield* requestBatchTranslations.pipe(
+            Effect.catchIf(isMalformedUpstream, () =>
+              Effect.gen(function* () {
+                // Long reasoning outputs occasionally leave one JSON escape
+                // malformed; asking the model again usually returns a usable
+                // array, so absorb that transient upstream defect instead of
+                // surfacing an immediate 502 to the client.
+                yield* Effect.logWarning("Translation response could not be parsed; retrying", {
+                  batchIndex,
+                  expected: batch.length,
+                });
+                return yield* requestBatchTranslations.pipe(
+                  Effect.catchIf(isMalformedUpstream, (retryError) =>
+                    Effect.gen(function* () {
+                      yield* Effect.logWarning("Translation response could not be parsed", {
+                        batchIndex,
+                        expected: batch.length,
+                      });
+                      return yield* retryError;
+                    }),
+                  ),
+                );
+              }),
+            ),
           );
-          const content = completion.choices[0]?.message.content ?? "";
-          if (content.length === 0) {
-            // Reasoning flash models can spend the whole budget on thinking; the
-            // client falls back to untranslated text on 502 and retries later.
-            yield* Effect.logWarning("Translation upstream returned empty content", {
-              batchIndex,
-            });
-            return yield* upstreamError("Translation upstream returned empty content.");
-          }
-          const batchTranslations = yield* parseTranslationsJson(content);
-          if (batchTranslations === null || batchTranslations.length !== batch.length) {
-            yield* Effect.logWarning("Translation response could not be parsed", {
-              batchIndex,
-              expected: batch.length,
-            });
-            return yield* upstreamError("Translation response malformed.");
-          }
           translatedChunks.push(...batchTranslations);
         }
 
