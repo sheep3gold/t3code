@@ -4747,7 +4747,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           authorization: `Bearer ${bearerToken}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ texts: ["hello"] }),
+        body: jsonRequestBody({ texts: ["hello"] }),
       });
       const body = yield* responseJsonEffect<{ readonly _tag: string }>(response);
 
@@ -4768,7 +4768,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* fetchEffect(translateUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ texts: ["hello"] }),
+        body: jsonRequestBody({ texts: ["hello"] }),
       });
 
       assert.equal(response.status, 401);
@@ -4800,7 +4800,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* fetchEffect(translateUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ texts: ["hello"] }),
+        body: jsonRequestBody({ texts: ["hello"] }),
       });
 
       assert.equal(response.status, 503);
