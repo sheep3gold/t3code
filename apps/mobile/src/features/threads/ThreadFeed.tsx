@@ -94,6 +94,7 @@ import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { useThreadTranslation, type MessageTranslationState } from "../../state/translate";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
@@ -829,6 +830,79 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   });
 });
 
+/**
+ * Per-message translation into Simplified Chinese, mirroring the web client's
+ * MessageTranslateButton/MessageTranslationBlock. The button hides once a
+ * translation exists or the server reports translation unconfigured (503); the
+ * block renders under the source text with the same markdown layout.
+ */
+const MessageTranslateButton = memo(function MessageTranslateButton(props: {
+  readonly messageId: string;
+  readonly sourceText: string;
+  readonly translation: MessageTranslationState;
+  readonly tintColor: string | ColorValue;
+}) {
+  const { translation } = props;
+  if (!translation.available) return null;
+  if (translation.translationFor(props.messageId, props.sourceText) !== undefined) return null;
+  const pending = translation.pendingFor(props.messageId);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={pending ? "翻译中" : "翻译为中文"}
+      disabled={pending}
+      hitSlop={8}
+      onPress={() => translation.translateMessage(props.messageId, props.sourceText)}
+      style={({ pressed }) => ({
+        width: 28,
+        height: 28,
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 9,
+        opacity: pressed ? 0.52 : 1,
+      })}
+    >
+      {pending ? (
+        <ActivityIndicator size="small" color={props.tintColor} />
+      ) : (
+        <SymbolView
+          name={{ ios: "character.bubble", android: "language" }}
+          size={14}
+          tintColor={props.tintColor}
+          type="monochrome"
+        />
+      )}
+    </Pressable>
+  );
+});
+
+const MessageTranslationBlock = memo(function MessageTranslationBlock(props: {
+  readonly text: string;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly linkHandlers: MarkdownLinkHandlers;
+  readonly renderImage: MarkdownImageRenderer;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  readonly contentWidth: number;
+  readonly borderColor: string;
+}) {
+  return (
+    <View
+      className="mt-2 rounded-xl border px-3 py-2"
+      style={{ borderColor: props.borderColor, width: props.contentWidth }}
+    >
+      <MarkdownImageAvailableWidthContext value={props.contentWidth - 24}>
+        <AssistantMarkdownContent
+          markdown={props.text}
+          markdownStyles={props.markdownStyles}
+          linkHandlers={props.linkHandlers}
+          renderImage={props.renderImage}
+          skills={props.skills}
+        />
+      </MarkdownImageAvailableWidthContext>
+    </View>
+  );
+});
+
 function MarkdownCodeBlock(props: {
   readonly backgroundColor: string;
   readonly borderColor: string;
@@ -1380,6 +1454,8 @@ function renderFeedEntry(
     readonly renderMarkdownImage: MarkdownImageRenderer;
     readonly renderViewedImage: MarkdownImageRenderer;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
+    readonly translation: MessageTranslationState;
+    readonly translationBorderColor: string;
     readonly screenColor: string;
     readonly userBubbleColor: string | import("react-native").ColorValue;
     readonly markdownStyles: MarkdownStyleSets;
@@ -1712,6 +1788,20 @@ function renderFeedEntry(
             />
           </MarkdownImageAvailableWidthContext>
         ) : null}
+        {(() => {
+          const translated = props.translation.translationFor(message.id, message.text);
+          return translated !== undefined ? (
+            <MessageTranslationBlock
+              text={translated}
+              markdownStyles={styles}
+              linkHandlers={props.markdownLinkHandlers}
+              renderImage={props.renderMarkdownImage}
+              skills={props.skills}
+              contentWidth={props.markdownContentWidth}
+              borderColor={props.translationBorderColor}
+            />
+          ) : null;
+        })()}
         {attachments.map((attachment) => {
           return isImageAttachment(attachment) ? (
             <MessageAttachmentImage
@@ -1744,6 +1834,14 @@ function renderFeedEntry(
               buttonSize={28}
               iconSize={13}
             />
+            {message.text.trim().length > 0 ? (
+              <MessageTranslateButton
+                messageId={message.id}
+                sourceText={message.text}
+                translation={props.translation}
+                tintColor={iconSubtleColor}
+              />
+            ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {timestampLabel}
             </Text>
@@ -2079,6 +2177,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const iconSubtleColor = theme["--color-icon-subtle"];
   const screenColor = theme["--color-screen"];
   const userBubbleColor = theme["--color-user-bubble"];
+  const borderSubtleColor = theme["--color-border-subtle"];
+  const translation = useThreadTranslation(props.environmentId);
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
       const presentation = resolveMarkdownLinkPresentation(href);
@@ -2778,6 +2878,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             renderMarkdownImage,
             renderViewedImage,
             iconSubtleColor,
+            translation,
+            translationBorderColor: borderSubtleColor,
             screenColor,
             userBubbleColor,
             markdownStyles,
@@ -2831,6 +2933,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
+      translation,
+      borderSubtleColor,
       props.onUseArtifactTemplate,
       props.skills,
       renderMarkdownImage,
