@@ -119,6 +119,10 @@
       "types": "./src/state/scheduleHttp.ts",
       "default": "./src/state/scheduleHttp.ts"
     },
+    "./state/translate": {
+      "types": "./src/state/translateHttp.ts",
+      "default": "./src/state/translateHttp.ts"
+    },
     "./state/memory-ledger": {
       "types": "./src/state/memoryLedgerHttp.ts",
       "default": "./src/state/memoryLedgerHttp.ts"
