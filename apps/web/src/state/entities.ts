@@ -236,6 +236,16 @@ export function readEnvironmentSupportsActiveReorder(environmentId: EnvironmentI
   );
 }
 
+/** Whether the environment's server stores shared read state
+    (thread.read.mark / thread.unread.mark). Older servers keep read state
+    in this browser only. */
+export function readEnvironmentSupportsReadState(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadReadState === true
+  );
+}
+
 export function readEnvironmentThreadRefs(
   environmentId: EnvironmentId,
 ): ReadonlyArray<ScopedThreadRef> {

@@ -896,6 +896,69 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.read.mark": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Forward-only: a device replaying an older completion must not rewind
+      // a newer read recorded elsewhere. A stale stamp re-emits the current
+      // value so the command stays idempotent and projects as a no-op.
+      const currentMs = thread.lastReadAt ? Date.parse(thread.lastReadAt) : Number.NaN;
+      const lastReadAt =
+        Number.isFinite(currentMs) && currentMs >= Date.parse(command.readAt)
+          ? thread.lastReadAt!
+          : command.readAt;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          lastReadAt,
+          // Reading is not thread activity: it must not reorder the list.
+          updatedAt: thread.updatedAt,
+        },
+      };
+    }
+
+    case "thread.unread.mark": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Rewind to just before the latest completion so it reads as unseen
+      // everywhere. Without a completion there is nothing to mark unread.
+      const completedMs = thread.latestTurn?.completedAt
+        ? Date.parse(thread.latestTurn.completedAt)
+        : Number.NaN;
+      const lastReadAt = Number.isFinite(completedMs)
+        ? DateTime.formatIso(DateTime.makeUnsafe(completedMs - 1))
+        : (thread.lastReadAt ?? null);
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          lastReadAt,
+          updatedAt: thread.updatedAt,
+        },
+      };
+    }
+
     case "thread.meta.update": {
       const thread = yield* requireThread({
         readModel,

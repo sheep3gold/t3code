@@ -14,6 +14,7 @@ import {
   hasUnseenThreadCompletion,
   sortActiveThreadsByOrderKey,
   resolveSettledThreadTimestamp,
+  resolveThreadLastReadAt,
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -529,7 +530,8 @@ export function buildThreadListV2Items(input: {
       outbox. Such a thread has work the user is waiting on, so it stays in
       the active block even when the server has settled it. */
   readonly queuedThreadKeys?: ReadonlySet<string>;
-  /** Device-local read state. A turn completed after the visit stamp keeps
+  /** Device-local read state, the fallback when the server has no shared
+      stamp (thread.lastReadAt). A turn completed after the read stamp keeps
       its row at the top of the active block until the user opens it. */
   readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }): ThreadListV2Layout {
@@ -606,7 +608,10 @@ export function buildThreadListV2Items(input: {
       isUnreadCompleted: (thread) =>
         hasUnseenThreadCompletion(
           thread.latestTurn,
-          input.threadLastVisitedAtById?.[`${thread.environmentId}:${thread.id}`] ?? null,
+          resolveThreadLastReadAt(
+            thread,
+            input.threadLastVisitedAtById?.[`${thread.environmentId}:${thread.id}`],
+          ),
         ),
     }),
     "active",

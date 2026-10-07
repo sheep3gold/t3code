@@ -840,6 +840,11 @@ export const OrchestrationThread = Schema.Struct({
   // Manual Active placement. Keyless threads retain their creation/re-entry
   // order above the arranged run. Settling clears this slot.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Read state shared by every client of this server: the latest turn
+  // completion the user has seen, on any device. Null means no visit was
+  // recorded, which clients treat as read. Optional so payloads from
+  // pre-read-sync servers still decode (clients fall back to local stamps).
+  lastReadAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -910,6 +915,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // See OrchestrationThread.lastReadAt: cross-device read state.
+  lastReadAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -1227,6 +1234,24 @@ const ThreadActiveReorderCommand = Schema.Struct({
   orderKey: TrimmedNonEmptyString,
 });
 
+// Records that the user saw the thread up to readAt (the completion time of
+// the turn on screen, not wall-clock now). Forward-only: a stale client
+// re-sending an older stamp never rewinds a newer read from another device.
+const ThreadReadMarkCommand = Schema.Struct({
+  type: Schema.Literal("thread.read.mark"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  readAt: IsoDateTime,
+});
+
+// Explicit "Mark unread": the server rewinds lastReadAt to just before the
+// latest completion so the thread reads as unseen on every device.
+const ThreadUnreadMarkCommand = Schema.Struct({
+  type: Schema.Literal("thread.unread.mark"),
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
 const ThreadMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
@@ -1429,6 +1454,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadActiveReorderCommand,
+  ThreadReadMarkCommand,
+  ThreadUnreadMarkCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
@@ -1462,6 +1489,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadActiveReorderCommand,
+  ThreadReadMarkCommand,
+  ThreadUnreadMarkCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
@@ -1832,6 +1861,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // Order updates use this existing event so older clients can ignore the
   // new field while continuing to decode the event stream.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Read-state updates ride the same event for the same reason.
+  lastReadAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   title: Schema.optional(TrimmedNonEmptyString),
   /** Intent marker consumed by the title-generation reactor. Keeping this on
       the existing event lets older clients safely ignore the new field. */

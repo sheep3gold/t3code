@@ -209,6 +209,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinned_at,
           pin_order_key,
           active_order_key,
+          last_read_at,
           created_at,
           updated_at,
           deleted_at
@@ -232,6 +233,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '2026-02-24T00:00:01.000Z',
           'gm',
           'hq',
+          '2026-02-24T00:00:08.000Z',
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
           NULL
@@ -485,6 +487,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           activeOrderKey: "hq",
+          lastReadAt: "2026-02-24T00:00:08.000Z",
           titleRegeneration: null,
           titleState: null,
           deletedAt: null,
@@ -611,6 +614,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           activeOrderKey: "hq",
+          lastReadAt: "2026-02-24T00:00:08.000Z",
           titleRegeneration: null,
           titleState: null,
           session: {

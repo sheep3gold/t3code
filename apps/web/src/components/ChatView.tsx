@@ -161,6 +161,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { useUiStateStore } from "../uiStateStore";
+import { useThreadReadState } from "../hooks/useThreadReadState";
 import {
   latestWorkspaceMutationId,
   useWorkspaceMutationRefresh,
@@ -1590,7 +1591,7 @@ export default function ChatView(props: ChatViewProps) {
       },
     };
   }, [routeKind, routeThreadRef, routeThreadState]);
-  const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
+  const { markThreadVisited } = useThreadReadState();
   const settings = useEnvironmentSettings(environmentId);
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,

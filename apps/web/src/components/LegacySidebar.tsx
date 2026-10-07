@@ -99,6 +99,7 @@ import {
   resolveProjectExpanded,
   useUiStateStore,
 } from "../uiStateStore";
+import { useThreadReadState } from "../hooks/useThreadReadState";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -1192,7 +1193,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const { isMobile, setOpenMobile } = useSidebar();
-  const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
+  const { markThreadUnread } = useThreadReadState();
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);

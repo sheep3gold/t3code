@@ -440,6 +440,7 @@ export function projectEvent(
             settledAt: null,
             unsettledAt: null,
             activeOrderKey: null,
+            lastReadAt: null,
             snoozedUntil: null,
             snoozedAt: null,
             deletedAt: null,
@@ -626,6 +627,7 @@ export function projectEvent(
               ...(payload.activeOrderKey !== undefined
                 ? { activeOrderKey: payload.activeOrderKey }
                 : {}),
+              ...(payload.lastReadAt !== undefined ? { lastReadAt: payload.lastReadAt } : {}),
               ...(payload.branchPullRequest !== undefined
                 ? { branchPullRequest: payload.branchPullRequest }
                 : {}),
