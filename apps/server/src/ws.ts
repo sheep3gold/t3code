@@ -156,6 +156,10 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import {
+  publishMobileReinstallNotification,
+  shouldNotifyMobileReinstall,
+} from "./notifications/MsgHubMobileReinstall.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -434,6 +438,21 @@ const isClientWebDeployment = Schema.is(ClientWebDeployment);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
 const MAX_CLIENT_BROWSER_LENGTH = 64;
 const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
+const MAX_CLIENT_INSTALLED_AT_LENGTH = 64;
+
+// Mobile install anchor announced on the /ws upgrade URL. Same lenient contract
+// as the other client identity params: absent or malformed degrades to undefined
+// so a connection never fails over attribution metadata.
+function readClientInstalledAt(request: HttpServerRequest.HttpServerRequest): string | undefined {
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url)) {
+    return undefined;
+  }
+  const installedAt = url.value.searchParams.get("clientInstalledAt")?.trim() ?? "";
+  return installedAt !== "" && installedAt.length <= MAX_CLIENT_INSTALLED_AT_LENGTH
+    ? installedAt
+    : undefined;
+}
 
 // Optional client identity announced on the /ws upgrade URL next to wsTicket.
 // Lenient by design: absent or malformed values degrade to {} so a connection
@@ -4022,7 +4041,32 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         );
         const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);
-        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+        const clientInstalledAt = readClientInstalledAt(request);
+        const connectionRecord = yield* sessions.recordClientConnection(session.sessionId, {
+          ...clientOrigin,
+          ...(clientInstalledAt !== undefined ? { installedAt: clientInstalledAt } : {}),
+        });
+        if (
+          clientOrigin.surface === "mobile" &&
+          clientInstalledAt !== undefined &&
+          shouldNotifyMobileReinstall({
+            surface: clientOrigin.surface,
+            installedAt: clientInstalledAt,
+            previousInstalledAt: connectionRecord.previousInstalledAt,
+          })
+        ) {
+          // Fire-and-forget: the reinstall notification must never affect the connect path.
+          void publishMobileReinstallNotification({
+            installedAt: clientInstalledAt,
+            ...(clientAnalyticsProps.deviceModel
+              ? { deviceModel: clientAnalyticsProps.deviceModel }
+              : {}),
+            ...(clientAnalyticsProps.clientOs ? { os: clientAnalyticsProps.clientOs } : {}),
+            ...(clientAnalyticsProps.appVersion
+              ? { appVersion: clientAnalyticsProps.appVersion }
+              : {}),
+          });
+        }
         yield* analytics.record("client.connected", clientAnalyticsProps);
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;

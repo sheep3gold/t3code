@@ -99,7 +99,7 @@ const failingSessionLookupRepositoryLayer = Layer.succeed(AuthSessions.AuthSessi
   revoke: () => Effect.fail(repositoryFailure),
   revokeAllExcept: () => Effect.fail(repositoryFailure),
   setLastConnectedAt: () => Effect.void,
-  setClientConnection: () => Effect.void,
+  setClientConnection: () => Effect.succeed({ previousInstalledAt: null }),
 });
 
 const failingSessionLookupCredentialLayer = Layer.effect(
@@ -710,24 +710,51 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
       const readRow = sql<{
         readonly surface: string | null;
         readonly appVersion: string | null;
+        readonly installedAt: string | null;
       }>`
-        SELECT client_surface AS "surface", client_app_version AS "appVersion"
+        SELECT client_surface AS "surface", client_app_version AS "appVersion",
+               client_installed_at AS "installedAt"
         FROM auth_sessions
         WHERE session_id = ${issued.sessionId}
       `;
 
-      yield* sessions.recordClientConnection(issued.sessionId, {
+      const first = yield* sessions.recordClientConnection(issued.sessionId, {
         surface: "mobile",
         appVersion: "1.2.0",
       });
-      expect((yield* readRow)[0]).toEqual({ surface: "mobile", appVersion: "1.2.0" });
+      expect(first.previousInstalledAt).toBe(null);
+      expect((yield* readRow)[0]).toEqual({
+        surface: "mobile",
+        appVersion: "1.2.0",
+        installedAt: null,
+      });
 
       // A partial report (old or minimal client) must not null out stored data.
-      yield* sessions.recordClientConnection(issued.sessionId, { appVersion: "1.3.0" });
-      expect((yield* readRow)[0]).toEqual({ surface: "mobile", appVersion: "1.3.0" });
+      const anchor = "2026-10-07T08:00:00.000Z";
+      const second = yield* sessions.recordClientConnection(issued.sessionId, {
+        appVersion: "1.3.0",
+        installedAt: anchor,
+      });
+      expect(second.previousInstalledAt).toBe(null);
+      expect((yield* readRow)[0]).toEqual({
+        surface: "mobile",
+        appVersion: "1.3.0",
+        installedAt: anchor,
+      });
+
+      // Same anchor again: unchanged value reported back as previous.
+      const third = yield* sessions.recordClientConnection(issued.sessionId, {
+        installedAt: anchor,
+      });
+      expect(third.previousInstalledAt).toBe(anchor);
+      expect((yield* readRow)[0]).toMatchObject({ appVersion: "1.3.0", installedAt: anchor });
 
       yield* sessions.recordClientConnection(issued.sessionId, {});
-      expect((yield* readRow)[0]).toEqual({ surface: "mobile", appVersion: "1.3.0" });
+      expect((yield* readRow)[0]).toMatchObject({
+        surface: "mobile",
+        appVersion: "1.3.0",
+        installedAt: anchor,
+      });
     }).pipe(Effect.provide(Layer.mergeAll(makeSessionStoreLayer(), SqlitePersistenceMemory))),
   );
 });

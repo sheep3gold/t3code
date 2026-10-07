@@ -95,6 +95,7 @@ export const SetAuthSessionClientConnectionInput = Schema.Struct({
   sessionId: AuthSessionId,
   surface: Schema.NullOr(ClientSurface),
   appVersion: Schema.NullOr(Schema.String),
+  installedAt: Schema.NullOr(Schema.String),
 });
 export type SetAuthSessionClientConnectionInput = typeof SetAuthSessionClientConnectionInput.Type;
 
@@ -127,7 +128,7 @@ export class AuthSessionRepository extends Context.Service<
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
     readonly setClientConnection: (
       input: SetAuthSessionClientConnectionInput,
-    ) => Effect.Effect<void, AuthSessionRepositoryError>;
+    ) => Effect.Effect<{ readonly previousInstalledAt: string | null }, AuthSessionRepositoryError>;
   }
 >()("t3/persistence/AuthSessions/AuthSessionRepository") {}
 
@@ -328,13 +329,27 @@ export const make = Effect.gen(function* () {
 
   // COALESCE keeps the previous value when a client reports only one field, so
   // a partial report never nulls out data a fuller client stored earlier.
+  const readClientInstalledAtRow = SqlSchema.findAll({
+    Request: Schema.Struct({ sessionId: AuthSessionId }),
+    Result: Schema.Struct({
+      installedAt: Schema.NullOr(Schema.String),
+    }),
+    execute: ({ sessionId }) => sql`
+      SELECT client_installed_at AS "installedAt"
+      FROM auth_sessions
+      WHERE session_id = ${sessionId}
+        AND revoked_at IS NULL
+    `,
+  });
+
   const setClientConnectionRow = SqlSchema.void({
     Request: SetAuthSessionClientConnectionInput,
-    execute: ({ sessionId, surface, appVersion }) =>
+    execute: ({ sessionId, surface, appVersion, installedAt }) =>
       sql`
         UPDATE auth_sessions
         SET client_surface = COALESCE(${surface}, client_surface),
-            client_app_version = COALESCE(${appVersion}, client_app_version)
+            client_app_version = COALESCE(${appVersion}, client_app_version),
+            client_installed_at = COALESCE(${installedAt}, client_installed_at)
         WHERE session_id = ${sessionId}
           AND revoked_at IS NULL
       `,
@@ -498,15 +513,25 @@ export const make = Effect.gen(function* () {
     );
 
   const setClientConnection: AuthSessionRepository["Service"]["setClientConnection"] = (input) =>
-    setClientConnectionRow(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "AuthSessionRepository.setClientConnection:query",
-          "AuthSessionRepository.setClientConnection:encodeRequest",
-          { sessionId: input.sessionId },
+    sql
+      .withTransaction(
+        readClientInstalledAtRow({ sessionId: input.sessionId }).pipe(
+          Effect.flatMap((rows) =>
+            setClientConnectionRow(input).pipe(
+              Effect.map(() => ({ previousInstalledAt: rows[0]?.installedAt ?? null })),
+            ),
+          ),
         ),
-      ),
-    );
+      )
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "AuthSessionRepository.setClientConnection:query",
+            "AuthSessionRepository.setClientConnection:encodeRequest",
+            { sessionId: input.sessionId },
+          ),
+        ),
+      );
 
   return {
     create,

@@ -74,6 +74,7 @@ import Migration0059 from "./Migrations/059_ThreadWorkflows.ts";
 import Migration0060 from "./Migrations/060_ThreadWorkflowDag.ts";
 import Migration0061 from "./Migrations/061_ThreadScheduleCron.ts";
 import Migration0062 from "./Migrations/062_ProjectionThreadsLastReadAt.ts";
+import Migration0063 from "./Migrations/063_AuthSessionClientInstalledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -148,6 +149,7 @@ const migrationEntries = [
   [60, "ThreadWorkflowDag", Migration0060],
   [61, "ThreadScheduleCron", Migration0061],
   [62, "ProjectionThreadsLastReadAt", Migration0062],
+  [63, "AuthSessionClientInstalledAt", Migration0063],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
