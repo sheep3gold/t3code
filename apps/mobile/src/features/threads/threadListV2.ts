@@ -13,6 +13,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import {
   hasUnseenThreadCompletion,
   sortActiveThreadsByOrderKey,
+  resolveActiveThreadActivityTimestamp,
   resolveSettledThreadTimestamp,
   resolveThreadLastReadAt,
   sortPinnedThreadsByOrderKey,
@@ -40,7 +41,7 @@ export { snoozeWakeLabel };
  * (approval), "in motion" (working), and "broken" (failed). Ready is the
  * unlabeled resting state.
  */
-export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "ready";
+export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "done" | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 
 export function resolveThreadListV2SnoozeMenuSelection(input: {
@@ -118,8 +119,12 @@ export function resolveThreadListV2SnoozeGateExpiryMs(
 export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
+/** `unreadCompleted` comes from the list item (read state is resolved once
+    there, the same way the sort resolves it); a finished turn the user has
+    not seen yet reads as Done, matching the desktop sidebar. */
 export function resolveThreadListV2Status(
   thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
+  options?: { readonly unreadCompleted?: boolean },
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
@@ -132,6 +137,9 @@ export function resolveThreadListV2Status(
   }
   if (thread.session?.status === "error") {
     return "failed";
+  }
+  if (options?.unreadCompleted === true) {
+    return "done";
   }
   return "ready";
 }
@@ -205,6 +213,9 @@ export interface ThreadListV2Item {
   readonly snoozed: boolean;
   /** Pinned-block row: renders the pin glyph and offers Unpin. */
   readonly pinned: boolean;
+  /** Active row whose latest completion the user has not seen yet (read
+      state resolved like the sort). Renders the Done label. */
+  readonly unreadCompleted: boolean;
   readonly isLast: boolean;
 }
 
@@ -328,6 +339,7 @@ export function threadListV2ListItemsAreEqual(
         previous.item.variant === item.item.variant &&
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
+        previous.item.unreadCompleted === item.item.unreadCompleted &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -362,8 +374,9 @@ export function threadListV2ListItemsAreEqual(
 }
 
 /** The timestamp a row renders when it shows no status label: the settle
-    stamp on settled slim rows, otherwise the latest activity. Blank for
-    status-labelled cards and snoozed rows with a wake countdown — those
+    stamp on settled slim rows, otherwise the latest activity — the same
+    stamp the active list sorts by, so the labels read newest-first. Blank
+    for status-labelled cards and snoozed rows with a wake countdown — those
     never draw a time, so their minute tick must not invalidate the cell. */
 function resolveThreadListV2ItemTimeLabel(
   item: ThreadListV2Item,
@@ -371,11 +384,14 @@ function resolveThreadListV2ItemTimeLabel(
 ): string {
   const { thread, variant, snoozed } = item;
   if (showSnoozeWakeLabel) return "";
-  if (variant === "card" && resolveThreadListV2Status(thread) !== "ready") return "";
+  if (variant === "card" && resolveThreadListV2Status(thread, item) !== "ready") return "";
   const settledTimestamp =
     variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
   return relativeTime(
-    settledTimestamp ?? thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
+    settledTimestamp ??
+      resolveActiveThreadActivityTimestamp(thread) ??
+      thread.updatedAt ??
+      thread.createdAt,
   );
 }
 
@@ -603,17 +619,16 @@ export function buildThreadListV2Items(input: {
     }
   }
 
+  const isUnreadCompleted = (thread: EnvironmentThreadShell) =>
+    hasUnseenThreadCompletion(
+      thread.latestTurn,
+      resolveThreadLastReadAt(
+        thread,
+        input.threadLastVisitedAtById?.[`${thread.environmentId}:${thread.id}`],
+      ),
+    );
   const orderedActive = applyPendingThreadOrder(
-    sortThreadsForListV2(active, {
-      isUnreadCompleted: (thread) =>
-        hasUnseenThreadCompletion(
-          thread.latestTurn,
-          resolveThreadLastReadAt(
-            thread,
-            input.threadLastVisitedAtById?.[`${thread.environmentId}:${thread.id}`],
-          ),
-        ),
-    }),
+    sortThreadsForListV2(active, { isUnreadCompleted }),
     "active",
     pending,
   );
@@ -658,6 +673,7 @@ export function buildThreadListV2Items(input: {
       variant: "card",
       snoozed: false,
       pinned: true,
+      unreadCompleted: isUnreadCompleted(thread),
       isLast: false,
     });
   }
@@ -667,6 +683,7 @@ export function buildThreadListV2Items(input: {
       variant: "card",
       snoozed: false,
       pinned: false,
+      unreadCompleted: isUnreadCompleted(thread),
       isLast: false,
     });
   }
@@ -677,6 +694,7 @@ export function buildThreadListV2Items(input: {
       variant: "slim",
       snoozed: true,
       pinned: false,
+      unreadCompleted: false,
       isLast: false,
     });
   }
@@ -687,6 +705,7 @@ export function buildThreadListV2Items(input: {
       variant: "slim",
       snoozed: false,
       pinned: false,
+      unreadCompleted: false,
       isLast: false,
     });
   }
