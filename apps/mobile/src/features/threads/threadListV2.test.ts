@@ -1988,6 +1988,73 @@ describe("thread list v2 minute tick invalidation", () => {
   });
 });
 
+describe("thread list v2 active row labels", () => {
+  const completedTurn = (requestedMs: number, completedMs: number) =>
+    ({
+      turnId: TurnId.make(`turn-${completedMs}`),
+      state: "completed",
+      requestedAt: isoAt(requestedMs),
+      startedAt: isoAt(requestedMs),
+      completedAt: isoAt(completedMs),
+    }) as EnvironmentThreadShell["latestTurn"];
+
+  it("labels rows with the activity stamp they sort by and marks unseen completions Done", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(BASE_MS);
+      // Asked earlier but finished later: sorts first, so its label must too.
+      const finishedLater = makeThread({
+        id: ThreadId.make("finished-later"),
+        title: "finished later",
+        createdAt: isoAt(BASE_MS - 120 * MINUTE_MS),
+        latestUserMessageAt: isoAt(BASE_MS - 55 * MINUTE_MS),
+        latestTurn: completedTurn(BASE_MS - 55 * MINUTE_MS, BASE_MS - 52 * MINUTE_MS),
+        lastReadAt: isoAt(BASE_MS - 52 * MINUTE_MS),
+      });
+      const finishedEarlier = makeThread({
+        id: ThreadId.make("finished-earlier"),
+        title: "finished earlier",
+        createdAt: isoAt(BASE_MS - 120 * MINUTE_MS),
+        latestUserMessageAt: isoAt(BASE_MS - 54 * MINUTE_MS),
+        latestTurn: completedTurn(BASE_MS - 54 * MINUTE_MS, BASE_MS - 53 * MINUTE_MS),
+        lastReadAt: isoAt(BASE_MS - 53 * MINUTE_MS),
+      });
+      const unseen = makeThread({
+        id: ThreadId.make("unseen"),
+        title: "unseen",
+        createdAt: isoAt(BASE_MS - 120 * MINUTE_MS),
+        latestUserMessageAt: isoAt(BASE_MS - 90 * MINUTE_MS),
+        latestTurn: completedTurn(BASE_MS - 90 * MINUTE_MS, BASE_MS - 80 * MINUTE_MS),
+        lastReadAt: isoAt(BASE_MS - 100 * MINUTE_MS),
+      });
+      const { items } = buildThreadListV2Items({
+        threads: [finishedEarlier, unseen, finishedLater],
+        environmentId: null,
+        searchQuery: "",
+        now: isoAt(BASE_MS),
+      });
+      const rows = buildThreadListV2ListItems({ items, pendingTasks: [] }).flatMap((row) =>
+        row.type === "v2-thread"
+          ? [
+              {
+                id: row.item.thread.id,
+                timeLabel: row.timeLabel,
+                status: resolveThreadListV2Status(row.item.thread, row.item),
+              },
+            ]
+          : [],
+      );
+      expect(rows).toEqual([
+        { id: "unseen", timeLabel: "", status: "done" },
+        { id: "finished-later", timeLabel: "52m", status: "ready" },
+        { id: "finished-earlier", timeLabel: "53m", status: "ready" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("buildThreadListV2ListItems trailing dividers", () => {
   it("follows the final neighbour order, not the pre-splice blocks", () => {
     const activeA = makeThread({ id: ThreadId.make("div-a"), title: "a" });

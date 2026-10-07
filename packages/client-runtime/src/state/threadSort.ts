@@ -406,7 +406,19 @@ function activeThreadActivityMs(
     readonly unsettledAt?: string | null | undefined;
   } & ActiveThreadActivityInput,
 ): number {
-  let latest: number | null = null;
+  return toSortableTimestamp(resolveActiveThreadActivityTimestamp(thread) ?? undefined) ?? 0;
+}
+
+/** The stamp behind activeThreadActivityMs, for rows that label their time:
+    showing the same stamp the list sorts by keeps the labels in order. */
+export function resolveActiveThreadActivityTimestamp(
+  thread: {
+    readonly createdAt: string;
+    readonly unsettledAt?: string | null | undefined;
+  } & ActiveThreadActivityInput,
+): string | null {
+  let latest: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
   for (const candidate of [
     thread.latestUserMessageAt,
     thread.latestTurn?.completedAt,
@@ -416,11 +428,12 @@ function activeThreadActivityMs(
     thread.createdAt,
   ]) {
     const parsed = toSortableTimestamp(candidate ?? undefined);
-    if (parsed !== null) {
-      latest = latest === null ? parsed : Math.max(latest, parsed);
+    if (candidate != null && parsed !== null && parsed > latestMs) {
+      latest = candidate;
+      latestMs = parsed;
     }
   }
-  return latest ?? 0;
+  return latest;
 }
 
 /**

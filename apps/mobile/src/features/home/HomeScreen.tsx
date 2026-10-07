@@ -699,6 +699,7 @@ export function HomeScreen(props: HomeScreenProps) {
           snoozePresetMinute={item.snoozePresetMinute ?? ""}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
           timeLabel={item.timeLabel}
+          unreadCompleted={item.item.unreadCompleted}
           showTrailingDivider={item.showTrailingDivider}
           project={
             projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
