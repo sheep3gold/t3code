@@ -180,6 +180,9 @@ export const AuthClientPresentationMetadata = Schema.Struct({
   webDeployment: Schema.optionalKey(ClientWebDeployment),
   browser: Schema.optionalKey(TrimmedNonEmptyString),
   appVersion: Schema.optionalKey(TrimmedNonEmptyString),
+  // App installation anchor (ISO timestamp from a per-install sandbox file; absent on
+  // surfaces that do not track installs). Servers use its change to detect reinstalls.
+  installedAt: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClientPresentationMetadata = typeof AuthClientPresentationMetadata.Type;
 
