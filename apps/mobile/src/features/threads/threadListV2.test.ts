@@ -843,6 +843,47 @@ describe("buildThreadListV2Items", () => {
     expect(items.map((item) => item.thread.id)).toEqual(["unseen-older", "seen-newer"]);
   });
 
+  it("a completion read on another device no longer leads the list", () => {
+    const completedTurn = {
+      turnId: TurnId.make("turn-1"),
+      state: "completed",
+      requestedAt: "2026-06-01T08:00:00.000Z",
+      startedAt: "2026-06-01T08:00:01.000Z",
+      completedAt: "2026-06-01T08:30:00.000Z",
+    } as EnvironmentThreadShell["latestTurn"];
+    const build = (lastReadAt: string | null) =>
+      buildThreadListV2Items({
+        threads: [
+          makeThread({
+            id: ThreadId.make("read-on-desktop"),
+            title: "Read on desktop",
+            createdAt: "2026-06-01T08:00:00.000Z",
+            latestTurn: completedTurn,
+            lastReadAt,
+          }),
+          makeThread({
+            id: ThreadId.make("newer-created"),
+            title: "Newer",
+            createdAt: "2026-06-01T12:00:00.000Z",
+          }),
+        ],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+        // This phone last opened the thread before the turn completed.
+        threadLastVisitedAtById: {
+          [`${environmentId}:read-on-desktop`]: "2026-06-01T08:00:00.000Z",
+        },
+      }).items.map((item) => item.thread.id);
+
+    // Without a server stamp the stale local visit still lifts it.
+    expect(build(null)).toEqual(["read-on-desktop", "newer-created"]);
+    // The server says another device saw this completion.
+    expect(build("2026-06-01T08:30:00.000Z")).toEqual(["newer-created", "read-on-desktop"]);
+    // Mark unread elsewhere rewinds the server stamp and lifts it again.
+    expect(build("2026-06-01T08:29:59.999Z")).toEqual(["read-on-desktop", "newer-created"]);
+  });
+
   it("never-visited threads count as read, like web", () => {
     const { items } = buildThreadListV2Items({
       threads: [

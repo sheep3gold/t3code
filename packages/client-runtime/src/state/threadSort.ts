@@ -370,6 +370,32 @@ export function hasUnseenThreadCompletion(
   return completedMs > visitedMs;
 }
 
+/** Read stamp the unseen-completion signal compares against. A server that
+    stores read state is authoritative, so a read — or an explicit Mark
+    unread — on any device applies to every device. Threads the server has
+    no stamp for (null), and shells from servers that predate shared read
+    state (field absent), fall back to this device's local visit stamp. */
+export function resolveThreadLastReadAt(
+  thread: { readonly lastReadAt?: string | null | undefined },
+  localLastVisitedAt: string | null | undefined,
+): string | null {
+  return thread.lastReadAt ?? localLastVisitedAt ?? null;
+}
+
+/** True when the server should be told about a visit: it stores read state
+    and does not already have this completion (or a later one) as seen. Keeps
+    every open/re-render from dispatching a command. */
+export function shouldSyncThreadRead(
+  thread: { readonly lastReadAt?: string | null | undefined },
+  readAt: string,
+): boolean {
+  if (thread.lastReadAt === undefined) return false;
+  const readAtMs = toSortableTimestamp(readAt);
+  if (readAtMs === null) return false;
+  const currentMs = toSortableTimestamp(thread.lastReadAt ?? undefined);
+  return currentMs === null || currentMs < readAtMs;
+}
+
 /** The timestamp "rest" rows sort by inside the active block: the newest of
     the thread's activity stamps (latest user message, latest turn) and its
     creation/re-entry anchor, so recently handled threads lead while
@@ -403,8 +429,9 @@ function activeThreadActivityMs(
  * tiers keep the base order (creation/re-entry anchor, saved arrangement)
  * so rows do not shuffle while the user watches. Everything else follows
  * last activity, newest first, and manually arranged keys keep their run
- * at the bottom of the block. Read state is device-local, so callers pass
- * an `isUnreadCompleted` predicate; without it nothing is unread.
+ * at the bottom of the block. Callers pass an `isUnreadCompleted` predicate
+ * (server read state via resolveThreadLastReadAt, falling back to the
+ * device's local stamp); without it nothing is unread.
  */
 export function sortActiveThreadsByOrderKey<
   T extends {

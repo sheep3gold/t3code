@@ -331,10 +331,29 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   // never moves the stamp backwards).
   const { markThreadVisited } = useThreadVisitedState();
   const latestTurnCompletedAt = props.selectedThread.latestTurn?.completedAt ?? null;
+  const selectedThreadId = props.selectedThread.id;
+  const selectedThreadLastReadAt = props.selectedThread.lastReadAt;
   useEffect(() => {
     if (latestTurnCompletedAt === null) return;
-    markThreadVisited({ threadKey: selectedThreadKey, visitedAt: latestTurnCompletedAt });
-  }, [markThreadVisited, selectedThreadKey, latestTurnCompletedAt]);
+    // The server stamp is shared with web/desktop, so reading here clears
+    // the completion everywhere (and vice versa).
+    markThreadVisited({
+      threadKey: selectedThreadKey,
+      visitedAt: latestTurnCompletedAt,
+      thread: {
+        environmentId: props.environmentId,
+        threadId: selectedThreadId,
+        lastReadAt: selectedThreadLastReadAt,
+      },
+    });
+  }, [
+    markThreadVisited,
+    selectedThreadKey,
+    latestTurnCompletedAt,
+    props.environmentId,
+    selectedThreadId,
+    selectedThreadLastReadAt,
+  ]);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const draftMessageRef = useRef(props.draftMessage);
   draftMessageRef.current = props.draftMessage;

@@ -9,6 +9,8 @@ import {
   planPinnedMove,
   planPinnedReorder,
   resolveSettledThreadTimestamp,
+  resolveThreadLastReadAt,
+  shouldSyncThreadRead,
   sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
   sortThreads,
@@ -528,5 +530,60 @@ describe("sortActiveThreadsByOrderKey", () => {
     const keys = new Map(assignments.map((assignment) => [assignment.id, assignment.orderKey]));
     const updated = threads.map((thread) => ({ ...thread, activeOrderKey: keys.get(thread.id) }));
     expect(sortActiveThreadsByOrderKey(updated).map((thread) => thread.id)).toEqual(orderedIds);
+  });
+});
+
+describe("resolveThreadLastReadAt", () => {
+  it("prefers the server stamp so reads on other devices apply here", () => {
+    expect(
+      resolveThreadLastReadAt(
+        { lastReadAt: "2026-01-01T00:09:00.000Z" },
+        "2026-01-01T00:01:00.000Z",
+      ),
+    ).toBe("2026-01-01T00:09:00.000Z");
+    // Mark unread on another device rewinds below this device's own visit.
+    expect(
+      resolveThreadLastReadAt(
+        { lastReadAt: "2026-01-01T00:01:00.000Z" },
+        "2026-01-01T00:09:00.000Z",
+      ),
+    ).toBe("2026-01-01T00:01:00.000Z");
+  });
+
+  it("falls back to the local stamp without a server stamp", () => {
+    expect(resolveThreadLastReadAt({ lastReadAt: null }, "2026-01-01T00:01:00.000Z")).toBe(
+      "2026-01-01T00:01:00.000Z",
+    );
+    expect(resolveThreadLastReadAt({}, "2026-01-01T00:01:00.000Z")).toBe(
+      "2026-01-01T00:01:00.000Z",
+    );
+    expect(resolveThreadLastReadAt({}, undefined)).toBeNull();
+  });
+
+  it("clears the unseen completion once another device read it", () => {
+    const latestTurn = { completedAt: "2026-01-01T00:05:00.000Z" };
+    const staleLocalVisit = "2026-01-01T00:01:00.000Z";
+    expect(hasUnseenThreadCompletion(latestTurn, staleLocalVisit)).toBe(true);
+    expect(
+      hasUnseenThreadCompletion(
+        latestTurn,
+        resolveThreadLastReadAt({ lastReadAt: "2026-01-01T00:05:00.000Z" }, staleLocalVisit),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("shouldSyncThreadRead", () => {
+  const readAt = "2026-01-01T00:05:00.000Z";
+  it("syncs only completions the server has not recorded yet", () => {
+    expect(shouldSyncThreadRead({ lastReadAt: null }, readAt)).toBe(true);
+    expect(shouldSyncThreadRead({ lastReadAt: "2026-01-01T00:01:00.000Z" }, readAt)).toBe(true);
+    expect(shouldSyncThreadRead({ lastReadAt: readAt }, readAt)).toBe(false);
+    expect(shouldSyncThreadRead({ lastReadAt: "2026-01-01T00:09:00.000Z" }, readAt)).toBe(false);
+  });
+
+  it("never syncs to servers without shared read state or with a malformed stamp", () => {
+    expect(shouldSyncThreadRead({}, readAt)).toBe(false);
+    expect(shouldSyncThreadRead({ lastReadAt: null }, "not-a-date")).toBe(false);
   });
 });

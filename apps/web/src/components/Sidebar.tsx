@@ -115,6 +115,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
+import { useThreadReadState } from "../hooks/useThreadReadState";
 import {
   getThreadKeysToDeselectAfterDelete,
   useThreadSelectionStore,
@@ -2226,8 +2227,7 @@ export default function Sidebar() {
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
-  const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
-  const markThreadVisited = useUiStateStore((s) => s.markThreadVisited);
+  const { markThreadUnread, markThreadVisited } = useThreadReadState();
   // Whole map, not a per-thread selector: the active-list sort reads it for
   // every thread to keep unseen completions at the top of the section.
   const threadLastVisitedAtById = useUiStateStore((s) => s.threadLastVisitedAtById);
