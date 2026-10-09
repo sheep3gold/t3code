@@ -128,6 +128,40 @@ describe("mobile preferences state", () => {
     }),
   );
 
+  it.effect("persists hidden usage providers without resetting other preferences", () =>
+    Effect.gen(function* () {
+      let persisted: Preferences = { themeMode: "dark" };
+      const state = makePreferencesState({
+        load: Effect.succeed(persisted),
+        savePatch: (patch) =>
+          Effect.sync(() => {
+            persisted = { ...persisted, ...patch };
+            return persisted;
+          }),
+      });
+      const registry = AtomRegistry.make();
+      const unmountPreferences = registry.mount(state.preferencesAtom);
+      const unmountUpdate = registry.mount(state.updatePreferencesAtom);
+      yield* AtomRegistry.getResult(registry, state.preferencesAtom, { suspendOnWaiting: true });
+
+      registry.set(state.updatePreferencesAtom, { hiddenUsageProviders: ["claude", "grok"] });
+      yield* AtomRegistry.getResult(registry, state.updatePreferencesAtom, {
+        suspendOnWaiting: true,
+      });
+      expect(persisted).toEqual({ themeMode: "dark", hiddenUsageProviders: ["claude", "grok"] });
+
+      registry.set(state.updatePreferencesAtom, { hiddenUsageProviders: [] });
+      yield* AtomRegistry.getResult(registry, state.updatePreferencesAtom, {
+        suspendOnWaiting: true,
+      });
+      expect(persisted.hiddenUsageProviders).toEqual([]);
+
+      unmountUpdate();
+      unmountPreferences();
+      registry.dispose();
+    }),
+  );
+
   it.effect("keeps both favorites when the React setter sends updates before a render", () =>
     Effect.gen(function* () {
       let persisted: Preferences = { modelFavorites: [] };

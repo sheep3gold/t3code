@@ -1,10 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type UsageProviderKind } from "@t3tools/contracts";
 import {
   collectLimitAccounts,
   collectLimitNotices,
   collectLimitPools,
+  filterLimitPresentations,
   formatDuration,
   formatResetsIn,
   remainingPercent,
@@ -24,7 +25,11 @@ import { environmentPresentations } from "../../state/presentation";
 import { ResetCredits } from "./UsageLimitsSection";
 import { useProviderColors } from "./usageProviders";
 
-const DRIVER_LABEL: Partial<Record<string, string>> = { codex: "Codex", claudeAgent: "Claude" };
+const DRIVER_LABEL: Partial<Record<string, string>> = {
+  codex: "Codex",
+  claudeAgent: "Claude",
+  grok: "Grok",
+};
 const PACE_LABEL = { ahead: "Ahead of pace", on: "On pace", under: "Under pace" } as const;
 
 function accountName(account: LimitAccount) {
@@ -196,16 +201,20 @@ export function UsageLimitsSection({
   now,
   failedLabels,
   selectedEnvironmentIds,
+  hiddenProviders,
 }: {
   readonly now: number;
   readonly failedLabels: readonly string[];
   readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
+  readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
 }) {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
-  const selected =
+  const selected = filterLimitPresentations(
     selectedEnvironmentIds === null
       ? presentations
-      : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
+      : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id))),
+    hiddenProviders,
+  );
   const pools = collectLimitPools(collectLimitAccounts(selected), now);
   const notices = collectLimitNotices(selected);
   const colors = useProviderColors();
@@ -230,7 +239,13 @@ export function UsageLimitsSection({
             <PoolWindowCard
               key={`${window.kind}:${window.id}`}
               pool={window}
-              color={pool.driver === "claudeAgent" ? colors.claude : colors.codex}
+              color={
+                pool.driver === "claudeAgent"
+                  ? colors.claude
+                  : pool.driver === "grok"
+                    ? colors.grok
+                    : colors.codex
+              }
               now={now}
               environmentIds={selectedEnvironmentIds === null ? null : [...selectedEnvironmentIds]}
             />

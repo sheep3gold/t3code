@@ -5,7 +5,11 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import type { ProviderInstanceId, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import {
+  UsageProviderKind,
+  type ProviderInstanceId,
+  type SidebarProjectGroupingMode,
+} from "@t3tools/contracts";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
@@ -40,6 +44,7 @@ export interface Preferences {
     readonly provider: ProviderInstanceId;
     readonly model: string;
   }>;
+  readonly hiddenUsageProviders?: readonly UsageProviderKind[];
   /** Fresh keys reset both shelves to collapsed when users update. */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
@@ -129,6 +134,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingMode?: SidebarProjectGroupingMode;
     planModeEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
+    hiddenUsageProviders?: Preferences["hiddenUsageProviders"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadLastVisitedAtById?: Readonly<Record<string, string>>;
@@ -208,6 +214,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
         favorite.provider.length > 0 &&
         typeof favorite.model === "string" &&
         favorite.model.trim().length > 0,
+    );
+  }
+  if (Array.isArray(parsed.hiddenUsageProviders)) {
+    preferences.hiddenUsageProviders = parsed.hiddenUsageProviders.filter(
+      Schema.is(UsageProviderKind),
     );
   }
   if (typeof parsed.threadListSettledShelfExpanded === "boolean") {

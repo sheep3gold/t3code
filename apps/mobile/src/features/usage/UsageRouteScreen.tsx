@@ -1,5 +1,6 @@
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
-import { EnvironmentId, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { EnvironmentId, USAGE_CONTRACT_VERSION, type UsageProviderKind } from "@t3tools/contracts";
 import { type RouteProp, useIsFocused, useNavigation, useRoute } from "@react-navigation/native";
 import {
   isCompatibleUsageContractVersion,
@@ -18,6 +19,7 @@ import {
   formatUsd,
   makeWindow,
 } from "@t3tools/shared/usageFormat";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, RefreshControl, View } from "react-native";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
@@ -27,16 +29,19 @@ import { SegmentedControl } from "../../components/SegmentedControl";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { UsageDailyChart } from "./UsageDailyChart";
 import { toggleUsageEnvironment } from "./usageEnvironmentSelection";
 import { useRefreshLimits } from "./UsageLimitsSection";
 import { UsageLimitsSection } from "./UsageLimitsPooled";
-import { ControlPillMenu } from "../../components/ControlPill";
+import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import type { UsageChartMetric } from "./usageChartData";
-import { PROVIDER_LABEL, useProviderColors } from "./usageProviders";
+import { PROVIDER_LABEL, PROVIDER_ORDER, useProviderColors } from "./usageProviders";
+
+const NO_HIDDEN_PROVIDERS: readonly UsageProviderKind[] = [];
 
 type UsageTab = "usage" | "limits";
 const TAB_OPTIONS = [
@@ -87,6 +92,13 @@ export function UsageRouteScreen() {
     window: makeWindow(30),
   }));
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferencesReady = AsyncResult.isSuccess(preferencesResult) && !preferencesResult.waiting;
+  const hiddenProviderKeys = AsyncResult.isSuccess(preferencesResult)
+    ? (preferencesResult.value.hiddenUsageProviders ?? NO_HIDDEN_PROVIDERS)
+    : NO_HIDDEN_PROVIDERS;
+  const hiddenProviders = useMemo(() => new Set(hiddenProviderKeys), [hiddenProviderKeys]);
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
@@ -94,6 +106,7 @@ export function UsageRouteScreen() {
   const { merged, environments, selectedEnvironments, isPending, refresh } = useUsage(
     window,
     selectedEnvironmentIds,
+    hiddenProviders,
   );
   const isFocused = useIsFocused();
   const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && tab === "limits");
@@ -190,6 +203,49 @@ export function UsageRouteScreen() {
     },
     [environments],
   );
+  const providerActions = useMemo(
+    () => [
+      {
+        id: "all",
+        title: "All usage providers",
+        state: hiddenProviders.size === 0 ? ("on" as const) : ("off" as const),
+      },
+      ...PROVIDER_ORDER.map((provider) => ({
+        id: provider,
+        title: PROVIDER_LABEL[provider],
+        state: hiddenProviders.has(provider) ? ("off" as const) : ("on" as const),
+      })),
+    ],
+    [hiddenProviders],
+  );
+  const selectProvider = useCallback(
+    (value: string) => {
+      if (!preferencesReady) return;
+      if (value !== "all" && !PROVIDER_ORDER.some((provider) => provider === value)) return;
+      savePreferences({
+        transform: (current) => {
+          const next = new Set(current.hiddenUsageProviders ?? []);
+          if (value === "all") {
+            return { hiddenUsageProviders: next.size === 0 ? PROVIDER_ORDER : [] };
+          }
+          const provider = value as UsageProviderKind;
+          if (next.has(provider)) next.delete(provider);
+          else next.add(provider);
+          return { hiddenUsageProviders: [...next] };
+        },
+      });
+    },
+    [preferencesReady, savePreferences],
+  );
+  const visibleProviders = PROVIDER_ORDER.filter((provider) => !hiddenProviders.has(provider));
+  const providerLabel =
+    visibleProviders.length === PROVIDER_ORDER.length
+      ? "All usage providers"
+      : visibleProviders.length === 0
+        ? "No usage providers"
+        : visibleProviders.length === 1
+          ? PROVIDER_LABEL[visibleProviders[0]!]
+          : `${visibleProviders.length} providers`;
   const environmentFilter = useMemo(
     () =>
       showEnvironmentFilter ? (
@@ -252,6 +308,23 @@ export function UsageRouteScreen() {
       >
         <SegmentedControl options={TAB_OPTIONS} selected={tab} onSelect={setTab} role="tab" />
 
+        <View className="flex-row items-center gap-3">
+          <Text className="text-sm text-foreground-muted">Providers</Text>
+          <ControlPillMenu
+            title="Providers"
+            actions={providerActions}
+            onPressAction={({ nativeEvent }) => selectProvider(nativeEvent.event)}
+          >
+            <ControlPill
+              icon="line.3.horizontal.decrease"
+              label={providerLabel}
+              accessibilityLabel={`Filter providers, ${providerLabel}`}
+              variant="pill"
+              disabled={!preferencesReady}
+            />
+          </ControlPillMenu>
+        </View>
+
         <Animated.View
           key={tab}
           entering={FadeIn.duration(160).reduceMotion(ReduceMotion.System)}
@@ -262,6 +335,7 @@ export function UsageRouteScreen() {
               now={limits.now}
               failedLabels={limits.failedLabels}
               selectedEnvironmentIds={selectedEnvironmentIds}
+              hiddenProviders={hiddenProviders}
             />
           ) : (
             <>
@@ -298,6 +372,10 @@ export function UsageRouteScreen() {
                   {environments.length === 0
                     ? "Connect an environment to see usage."
                     : "Select an environment to see usage."}
+                </Text>
+              ) : hiddenProviders.size === PROVIDER_ORDER.length ? (
+                <Text className="py-16 text-center text-base text-foreground-muted">
+                  No usage providers selected. Choose providers in the filter above.
                 </Text>
               ) : (
                 <>
