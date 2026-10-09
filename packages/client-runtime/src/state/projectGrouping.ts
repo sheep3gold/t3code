@@ -133,6 +133,13 @@ export function deriveLogicalProjectKey(
     return derivePhysicalProjectKey(project);
   }
 
+  // Environment sections keep every project of an environment in its own
+  // group; a per-project override (repository / repository_path / separate)
+  // still takes precedence inside that section.
+  if (groupingMode === "environment") {
+    return `environment:${project.environmentId}:${derivePhysicalProjectKey(project)}`;
+  }
+
   return (
     deriveRepositoryScopedKey(project, groupingMode) ??
     derivePhysicalProjectKey(project) ??
@@ -267,9 +274,18 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
       shouldReplacePhysicalProjectWinner(current, candidate) ? candidate : current,
     );
     const identitySource = selectProjectIdentitySource(physicalProjects, winner);
-    const logicalKey = deriveLogicalProjectKey(identitySource, {
-      groupingMode: resolveProjectGroupingMode(winner, input.settings),
+    const resolvedGroupingMode = resolveProjectGroupingMode(winner, input.settings);
+    const resolvedLogicalKey = deriveLogicalProjectKey(identitySource, {
+      groupingMode: resolvedGroupingMode,
     });
+    // Environment mode sections by server: an override-derived key must stay
+    // inside the project's own section, otherwise identical repositories on
+    // two servers would merge back into one cross-environment row.
+    const logicalKey =
+      input.settings.sidebarProjectGroupingMode === "environment" &&
+      resolvedGroupingMode !== "environment"
+        ? `environment:${winner.environmentId}:${resolvedLogicalKey}`
+        : resolvedLogicalKey;
     logicalKeyByPhysicalKey.set(physicalProjectKey, logicalKey);
     const member = { physicalProjectKey, project: winner };
     const existing = groupedMembers.get(logicalKey);
