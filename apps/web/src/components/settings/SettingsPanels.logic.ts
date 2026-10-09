@@ -28,15 +28,22 @@ export function projectGroupingModeFromToggle(
   lastEnabledMode: SidebarProjectGroupingMode = "repository",
 ): SidebarProjectGroupingMode {
   if (!enabled) return "separate";
-  return lastEnabledMode === "repository_path" ? "repository_path" : "repository";
+  return lastEnabledMode === "separate" ? "repository" : lastEnabledMode;
 }
 
 const LAST_ENABLED_PROJECT_GROUPING_MODE_KEY = "t3code:last-enabled-project-grouping-mode";
+const ENABLED_PROJECT_GROUPING_MODES: ReadonlySet<SidebarProjectGroupingMode> = new Set([
+  "repository",
+  "repository_path",
+  "environment",
+]);
 
 export function readLastEnabledProjectGroupingMode(): SidebarProjectGroupingMode {
   try {
-    return localStorage.getItem(LAST_ENABLED_PROJECT_GROUPING_MODE_KEY) === "repository_path"
-      ? "repository_path"
+    const stored = localStorage.getItem(LAST_ENABLED_PROJECT_GROUPING_MODE_KEY);
+    return stored !== null &&
+      ENABLED_PROJECT_GROUPING_MODES.has(stored as SidebarProjectGroupingMode)
+      ? (stored as SidebarProjectGroupingMode)
       : "repository";
   } catch {
     return "repository";

@@ -35,6 +35,11 @@ const GROUPING_OPTIONS: ReadonlyArray<{
     label: "Keep separate",
     description: "Show every workspace as its own project.",
   },
+  {
+    mode: "environment",
+    label: "Group by server",
+    description: "List projects in one section per server.",
+  },
 ];
 
 export function SettingsProjectGroupingRouteScreen() {

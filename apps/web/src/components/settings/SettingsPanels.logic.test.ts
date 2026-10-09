@@ -149,6 +149,11 @@ describe("project grouping toggle", () => {
     expect(projectGroupingModeFromToggle(false, "repository_path")).toBe("separate");
     expect(projectGroupingModeFromToggle(true, "repository_path")).toBe("repository_path");
   });
+
+  it("treats environment grouping as an enabled mode that round-trips", () => {
+    expect(isProjectGroupingEnabled("environment")).toBe(true);
+    expect(projectGroupingModeFromToggle(true, "environment")).toBe("environment");
+  });
 });
 
 describe("formatDiagnosticsDescription", () => {

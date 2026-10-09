@@ -66,6 +66,7 @@ export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
   "separate",
+  "environment",
 ]);
 export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
 const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
