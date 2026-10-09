@@ -16,6 +16,7 @@ import {
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   type UsageLimitSourceSnapshots,
+  type UsageProviderKind,
 } from "@t3tools/contracts";
 
 import * as DateTime from "effect/DateTime";
@@ -51,6 +52,47 @@ export type LimitPresentations = ReadonlyMap<
     } | null;
   }
 >;
+
+const USAGE_DRIVER_KIND = {
+  codex: "codex",
+  claude: "claudeAgent",
+  grok: "grok",
+} as const satisfies Record<UsageProviderKind, string>;
+
+/** Hides every instance and hub account of a provider before pooling or producing notices. */
+export function filterLimitPresentations(
+  presentations: LimitPresentations,
+  hiddenProviders: ReadonlySet<UsageProviderKind>,
+): LimitPresentations {
+  if (hiddenProviders.size === 0) return presentations;
+  const hiddenDrivers = new Set<string>(
+    [...hiddenProviders].map((kind) => USAGE_DRIVER_KIND[kind]),
+  );
+  return new Map(
+    [...presentations].map(([id, presentation]) => {
+      const config = presentation.serverConfig;
+      if (config === null) return [id, presentation] as const;
+      return [
+        id,
+        {
+          ...presentation,
+          serverConfig: {
+            ...config,
+            providers: config.providers?.filter((provider) => !hiddenDrivers.has(provider.driver)),
+            usageLimitSources: config.usageLimitSources?.flatMap((source) => {
+              const accounts = source.accounts.filter(
+                (account) => !hiddenDrivers.has(account.driver),
+              );
+              return accounts.length === 0 && source.accounts.length > 0
+                ? []
+                : [{ ...source, accounts }];
+            }),
+          },
+        },
+      ] as const;
+    }),
+  );
+}
 
 function accountKey(driver: ServerProvider["driver"], email: string | undefined): string | null {
   const normalizedEmail = email?.trim().toLowerCase();

@@ -215,6 +215,54 @@ describe("mergeUsage", () => {
     expect(merged.staleEnvironments).toEqual([]);
   });
 
+  it("filters providers before merging totals, sessions, charts, and duplicate sources", () => {
+    const shared = { provider: "claude" as const, hostId: "mac", homePath: "/shared" };
+    const environments = [
+      environment("env-a", summary([bucket({ hourStart: "2026-08-07T12:00:00.000Z" })], [shared])),
+      environment(
+        "env-b",
+        summary(
+          [
+            bucket({ hourStart: "2026-08-07T12:00:00.000Z" }),
+            bucket({
+              provider: "codex",
+              model: "gpt-5",
+              costUsd: 4,
+              hourStart: "2026-08-07T12:00:00.000Z",
+            }),
+            bucket({
+              provider: "grok",
+              model: "grok",
+              costUsd: 3,
+              hourStart: "2026-08-07T12:00:00.000Z",
+            }),
+          ],
+          [
+            shared,
+            { provider: "codex", hostId: "mac", homePath: "/codex" },
+            { provider: "grok", hostId: "mac", homePath: "/grok" },
+          ],
+        ),
+      ),
+    ];
+    const filtered = mergeUsage(environments, USAGE_CONTRACT_VERSION, new Set(["claude", "grok"]));
+    expect(filtered).toMatchObject({ costUsd: 4, sessions: 1, records: 5, duplicateSources: [] });
+    expect(filtered.providers.map((provider) => [provider.provider, provider.costShare])).toEqual([
+      ["codex", 1],
+    ]);
+    expect(filtered.models.map((model) => model.provider)).toEqual(["codex"]);
+    expect(filtered.daily[0]?.byProvider.has("claude")).toBe(false);
+    expect(filtered.hourly[0]?.byProvider.has("grok")).toBe(false);
+    expect(filtered.daily[0]?.costUsd).toBe(4);
+    expect(filtered.hourly[0]?.costUsd).toBe(4);
+    expect(
+      mergeUsage(environments, USAGE_CONTRACT_VERSION, new Set(["claude", "codex", "grok"]))
+        .providers,
+    ).toEqual([]);
+    expect(mergeUsage(environments, USAGE_CONTRACT_VERSION).costUsd).toBe(17);
+    expect(environments[1]?.summary.buckets).toHaveLength(3);
+  });
+
   it("derives provider shares and cost quality", () => {
     const merged = mergeUsage(
       [

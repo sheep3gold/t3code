@@ -15,6 +15,7 @@ import {
   type EnvironmentId,
   type UsageSummary,
   type UsageSummaryInput,
+  type UsageProviderKind,
 } from "@t3tools/contracts";
 import { refreshUsage } from "@t3tools/client-runtime/state/usage";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
@@ -78,9 +79,12 @@ export interface UsageView {
   readonly refresh: (input?: UsageSummaryInput) => Promise<void>;
 }
 
+const NO_HIDDEN_PROVIDERS: ReadonlySet<UsageProviderKind> = new Set();
+
 export function useUsage(
   input: UsageSummaryInput,
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+  hiddenProviders: ReadonlySet<UsageProviderKind> = NO_HIDDEN_PROVIDERS,
 ): UsageView {
   const windowKey = useMemo(
     () =>
@@ -135,8 +139,8 @@ export function useUsage(
             },
           ],
     );
-    return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [selectedEnvironments]);
+    return mergeUsage(answered, USAGE_CONTRACT_VERSION, hiddenProviders);
+  }, [selectedEnvironments, hiddenProviders]);
 
   const answeredCount = selectedEnvironments.filter(
     (environment) => environment.summary !== null,

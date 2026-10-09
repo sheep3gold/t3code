@@ -35,6 +35,17 @@ describe("Usage page preferences", () => {
     }
   });
 
+  it("preserves legacy preferences while round-tripping hidden providers", () => {
+    values.set(key, '{"metric":"tokens","windowDays":7}');
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 7 });
+    saveUsagePagePreferences({
+      metric: "tokens",
+      windowDays: 7,
+      hiddenProviders: ["grok", "claude"],
+    });
+    expect(readUsagePagePreferences().hiddenProviders).toEqual(["grok", "claude"]);
+  });
+
   it.each([
     "not-json",
     '{"metric":"unknown","windowDays":7}',
