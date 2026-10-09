@@ -190,6 +190,46 @@ describe("buildProjectGroups", () => {
     ]);
   });
 
+  it("keeps one group per environment when grouping by environment", () => {
+    const projects = [
+      makeProject("t3code", "/work/t3code"),
+      makeProject("t3code-2", "/work/t3code-2"),
+      makeProject("remote", "/srv/t3code", { environmentId: EnvironmentId.make("remote") }),
+    ];
+
+    const groups = buildProjectGroups({ projects, settings: settings("environment") });
+    expect(groups).toHaveLength(3);
+    for (const group of groups) {
+      expect(group.members).toHaveLength(1);
+      expect(group.key.startsWith(`environment:${group.members[0]?.project.environmentId}:`)).toBe(
+        true,
+      );
+    }
+  });
+
+  it("lets a per-project repository override merge rows inside an environment section", () => {
+    const projects = [
+      makeProject("t3code", "/work/t3code"),
+      makeProject("t3code-2", "/work/t3code-2"),
+      makeProject("remote", "/srv/t3code", { environmentId: EnvironmentId.make("remote") }),
+    ];
+
+    const groups = buildProjectGroups({
+      projects,
+      settings: settings("environment", {
+        [derivePhysicalProjectKey(projects[0]!)]: "repository",
+        [derivePhysicalProjectKey(projects[1]!)]: "repository",
+      }),
+    });
+
+    expect(groups).toHaveLength(2);
+    const merged = groups.find((group) => group.members.length > 1);
+    expect(merged?.members.map((member) => member.project.id).toSorted()).toEqual([
+      "t3code",
+      "t3code-2",
+    ]);
+  });
+
   it("dedupes stale registrations at one physical path using the freshest project", () => {
     const stale = makeProject("stale", "/work/t3code", {
       repositoryIdentity: null,
