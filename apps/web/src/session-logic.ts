@@ -78,6 +78,8 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
+  /** A secret request card or its outcome: the row shows a lock, never the payload detail. */
+  secretRequest?: boolean;
   /** Grouping key for subagent lifecycle rows (one row per agent). */
   taskId?: string;
   /** Agent role (subagent_type) for labeled timeline rows. */
@@ -594,10 +596,19 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const answer = decodeQuestionAttachmentAnswer(payload);
     if (Option.isSome(answer)) entry.questionAnswer = answer.value;
   }
+  if (
+    (activity.kind === "user-input.requested" || activity.kind === "user-input.resolved") &&
+    payload?.responseMode === "message" &&
+    (payload?.secretRequest === true || typeof payload?.secretStatus === "string")
+  ) {
+    entry.secretRequest = true;
+  }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   const viewedImagePath = asTrimmedString(asRecord(payload?.data)?.imagePath);
-  if (detail) {
+  // The label ("Secret requested: …" / "Secret saved securely") already says
+  // everything the row may show; the payload carries the request text.
+  if (detail && !entry.secretRequest) {
     entry.detail = detail;
   } else if (activity.kind === "runtime.error" || activity.kind === "runtime.warning") {
     const message = asTrimmedString(payload?.message);
