@@ -190,7 +190,13 @@ const ApplicationObservabilityLive = ObservabilityLive.pipe(
 
 const PtyAdapterLive = NodePtyAdapter.layer;
 
-const SecretRequestsLayerLive = SecretRequests.layer.pipe(Layer.provide(ServerSecretStore.layer));
+// Supply the engine and snapshot query at this boundary; without an explicit
+// provide they leak into the server's CLI Effect context. Reusing this layer
+// reference shares the engine instance with ProviderRuntimeLayerLive.
+const SecretRequestsLayerLive = SecretRequests.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(OrchestrationLayerLive),
+);
 
 const ServerSettingsLayerLive = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
