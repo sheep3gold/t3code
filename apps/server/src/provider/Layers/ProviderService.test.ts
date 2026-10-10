@@ -5017,6 +5017,7 @@ describe("agent browser access", () => {
         getThreadDetailById: () => Effect.die("unused"),
         getThreadDetailSnapshot: () => Effect.die("unused"),
         searchThreads: () => Effect.die("unused"),
+        searchThread: () => Effect.die("unused"),
       });
       const providerLayer = makeProviderServiceLive({
         issueMcpCredential: (request) =>

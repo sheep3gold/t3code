@@ -1042,6 +1042,8 @@ const buildAppUnderTest = (options?: {
               updatedAt: "1970-01-01T00:00:00.000Z",
             }),
           searchThreads: () => Effect.succeed({ matches: [] }),
+          searchThread: () =>
+            Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),

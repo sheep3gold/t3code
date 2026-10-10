@@ -44,6 +44,7 @@ import {
   type OrchestrationShellStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
+  OrchestrationSearchThreadError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
@@ -1986,6 +1987,7 @@ const makeWsRpcLayer = (
             threadResumeCompletionMarker: true,
             threadSnapshotPagination: true,
             reasoningMessages: true,
+            threadFind: true,
           };
         });
 
@@ -2124,6 +2126,20 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new OrchestrationSearchThreadsError({
                     message: "Failed to search threads",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.searchThread]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.searchThread,
+            projectionSnapshotQuery.searchThread(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationSearchThreadError({
+                    message: "Failed to search this thread",
                     cause,
                   }),
               ),

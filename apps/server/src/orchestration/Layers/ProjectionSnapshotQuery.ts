@@ -37,6 +37,8 @@ import {
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { legacyLinkedPullRequestOf } from "@t3tools/shared/threadPullRequests";
+import { countThreadSearchOccurrences } from "@t3tools/shared/threadSearch";
+import { searchableMessageSegments, searchablePlanSegments } from "@t3tools/shared/threadFindText";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -3014,6 +3016,112 @@ pending_approval_requests AS (
     };
   });
 
+  const searchThread: ProjectionSnapshotQueryShape["searchThread"] = Effect.fn(
+    "ProjectionSnapshotQuery.searchThread",
+  )(function* (input) {
+    const [messageRows, planRows] = yield* Effect.all([
+      listThreadMessageRowsByThread({ threadId: input.threadId }),
+      listThreadProposedPlanRowsByThread({ threadId: input.threadId }),
+    ]).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.searchThread:query",
+          "ProjectionSnapshotQuery.searchThread:decodeRows",
+        ),
+      ),
+    );
+
+    // Same ordering the timeline renders: chronological, tie-broken by id.
+    interface FindDocument {
+      readonly entryId: string;
+      readonly createdAt: string;
+      readonly count: number;
+    }
+    const documents: FindDocument[] = [];
+    for (const row of messageRows) {
+      if (row.role !== "user" && row.role !== "assistant") continue;
+      // Streaming rows are still changing; the client re-queries on completion.
+      if (row.isStreaming === 1) continue;
+      const segments = searchableMessageSegments({
+        role: row.role,
+        text: row.text,
+        streaming: row.isStreaming === 1,
+        ...(row.context !== null ? { hasContext: true } : {}),
+      });
+      if (segments === null) continue;
+      documents.push({
+        entryId: row.messageId,
+        createdAt: row.createdAt,
+        count: segments.reduce(
+          (sum, text) => sum + countThreadSearchOccurrences(text, input.query),
+          0,
+        ),
+      });
+    }
+    for (const row of planRows) {
+      documents.push({
+        entryId: row.planId,
+        createdAt: row.createdAt,
+        count: searchablePlanSegments(row.planMarkdown).reduce(
+          (sum, text) => sum + countThreadSearchOccurrences(text, input.query),
+          0,
+        ),
+      });
+    }
+    documents.sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.entryId.localeCompare(right.entryId),
+    );
+
+    const totalMatches = documents.reduce((sum, doc) => sum + doc.count, 0);
+    let requestedIndex = input.index ?? 0;
+    if (input.index === undefined && input.start) {
+      const startIndex = documents.findIndex((doc) => doc.entryId === input.start?.entryId);
+      if (startIndex >= 0) {
+        requestedIndex =
+          documents.slice(0, startIndex).reduce((sum, doc) => sum + doc.count, 0) +
+          Math.min(input.start.occurrence, documents[startIndex]!.count);
+        if (requestedIndex >= totalMatches) requestedIndex = 0;
+      }
+    }
+    const activeIndex =
+      input.index === undefined && totalMatches > 0
+        ? (((requestedIndex + (input.offset ?? 0)) % totalMatches) + totalMatches) % totalMatches
+        : Math.min(requestedIndex, Math.max(0, totalMatches - 1));
+
+    let occurrence = activeIndex;
+    let selected: FindDocument | null = null;
+    for (const document of documents) {
+      if (occurrence < document.count) {
+        selected = document;
+        break;
+      }
+      occurrence -= document.count;
+    }
+
+    let startIndex = 0;
+    const entries = documents.flatMap(({ entryId, count }) => {
+      const entry = { entryId, count, startIndex };
+      startIndex += count;
+      return count > 0 ? [entry] : [];
+    });
+    const selectedEntry = entries.findIndex((entry) => entry.entryId === selected?.entryId);
+    const navigation =
+      entries.length <= 17
+        ? entries
+        : Array.from(
+            { length: 17 },
+            (_, i) => entries[(selectedEntry + i - 8 + entries.length) % entries.length]!,
+          );
+
+    return {
+      totalMatches,
+      activeIndex,
+      match: selected === null ? null : { entryId: selected.entryId, occurrence },
+      navigation,
+    };
+  });
+
   const getActiveProjectByWorkspaceRoot: ProjectionSnapshotQueryShape["getActiveProjectByWorkspaceRoot"] =
     (workspaceRoot) =>
       getActiveProjectRowByWorkspaceRoot({ workspaceRoot }).pipe(
@@ -3781,6 +3889,7 @@ pending_approval_requests AS (
     getArchivedShellSnapshot,
     getDeletedWorktreeThreads,
     searchThreads,
+    searchThread,
     getSnapshotSequence,
     getCounts,
     getEventReplayStats,

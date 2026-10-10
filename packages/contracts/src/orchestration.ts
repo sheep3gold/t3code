@@ -38,6 +38,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
+  searchThread: "orchestration.searchThread",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -2321,6 +2322,44 @@ export const OrchestrationSearchThreadsResult = Schema.Struct({
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
+/**
+ * Find within one thread: user/assistant messages and proposed plans, ordered
+ * as rendered. `index` is absolute; `start`+`offset` navigate relative to an
+ * entry identity so edits before it do not shift the selection.
+ */
+export const OrchestrationSearchThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  query: TrimmedString.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+  index: Schema.optionalKey(NonNegativeInt),
+  offset: Schema.optionalKey(Schema.Int),
+  start: Schema.optionalKey(
+    Schema.Struct({ entryId: TrimmedNonEmptyString, occurrence: NonNegativeInt }),
+  ),
+});
+export type OrchestrationSearchThreadInput = typeof OrchestrationSearchThreadInput.Type;
+
+export const OrchestrationThreadFindMatch = Schema.Struct({
+  /** messageId for messages, planId for proposed plans. */
+  entryId: TrimmedNonEmptyString,
+  occurrence: NonNegativeInt,
+});
+export type OrchestrationThreadFindMatch = typeof OrchestrationThreadFindMatch.Type;
+
+export const OrchestrationSearchThreadResult = Schema.Struct({
+  totalMatches: NonNegativeInt,
+  activeIndex: NonNegativeInt,
+  match: Schema.NullOr(OrchestrationThreadFindMatch),
+  /** Counts and identities around the selection let clients step without another round trip. */
+  navigation: Schema.Array(
+    Schema.Struct({
+      entryId: TrimmedNonEmptyString,
+      startIndex: NonNegativeInt,
+      count: NonNegativeInt,
+    }),
+  ).check(Schema.isMaxLength(64)),
+});
+export type OrchestrationSearchThreadResult = typeof OrchestrationSearchThreadResult.Type;
+
 export const OrchestrationGetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   /** Absolute path from the workflow's runHandles.scriptPath. The server
@@ -2390,6 +2429,10 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationSearchThreadsInput,
     output: OrchestrationSearchThreadsResult,
   },
+  searchThread: {
+    input: OrchestrationSearchThreadInput,
+    output: OrchestrationSearchThreadResult,
+  },
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationShellSnapshot,
@@ -2439,6 +2482,14 @@ export class OrchestrationGetFullThreadDiffError extends Schema.TaggedError<Orch
 
 export class OrchestrationSearchThreadsError extends Schema.TaggedError<OrchestrationSearchThreadsError>()(
   "OrchestrationSearchThreadsError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationSearchThreadError extends Schema.TaggedError<OrchestrationSearchThreadError>()(
+  "OrchestrationSearchThreadError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
