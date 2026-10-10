@@ -12,7 +12,7 @@ import {
   type MsgHubPublisherConfig,
 } from "./MsgHubPublisher.ts";
 
-export const DEFAULT_TURN_COMPLETION_SUBJECT = "dingding.notify.vibecoding.t3code.turn.done";
+const DEFAULT_TURN_COMPLETION_SUBJECT = "dingding.notify.vibecoding.t3code.turn.done";
 const MAX_TEXT_CHARS = 1_100;
 
 export type TurnCompletionState = "completed" | "failed" | "interrupted" | "cancelled";

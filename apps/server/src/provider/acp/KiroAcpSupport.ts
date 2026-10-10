@@ -126,7 +126,7 @@ export function kiroAcpSpawnArgs(
   return args;
 }
 
-export function buildKiroAcpSpawnInput(
+function buildKiroAcpSpawnInput(
   settings: KiroAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,

@@ -74,7 +74,7 @@ export const RequestSecretResult = Schema.Union([
 ]);
 export type RequestSecretResult = typeof RequestSecretResult.Type;
 
-export const RequestSecretTool = Tool.make("request_secret", {
+const RequestSecretTool = Tool.make("request_secret", {
   description:
     "Ask the user for a secret (a token, API key, signing secret, password) through a private card in this thread, and wait for them to answer. The value is kept by the app and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that accepts one. It works once. Never ask for secrets in chat, and never invent one.",
   parameters: RequestSecretInput,

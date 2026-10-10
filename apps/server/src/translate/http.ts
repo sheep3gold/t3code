@@ -37,7 +37,7 @@ import {
 } from "../auth/http.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 
-export const TRANSLATE_ROUTE_PATH = "/api/translate";
+const TRANSLATE_ROUTE_PATH = "/api/translate";
 
 const DEFAULT_BASE_URL = "https://llm.zxytech.cn/v1";
 // The owner's model-gateway routes by tier; appKeys only allow "auto" and the

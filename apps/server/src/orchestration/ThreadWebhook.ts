@@ -26,7 +26,7 @@ import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 
-export const THREAD_WEBHOOK_ROUTE_PREFIX = "/api/orchestration/hooks";
+const THREAD_WEBHOOK_ROUTE_PREFIX = "/api/orchestration/hooks";
 const SIGNING_SECRET_NAME = "thread-webhook-signing-key";
 const DEFAULT_TTL_SECONDS = 4 * 60 * 60;
 const MIN_TTL_SECONDS = 60;
@@ -182,7 +182,7 @@ const loadSigningSecret = Effect.gen(function* () {
   return yield* secrets.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
 });
 
-export const issueThreadWebhook = Effect.fn("ThreadWebhook.issue")(function* (input: {
+const issueThreadWebhook = Effect.fn("ThreadWebhook.issue")(function* (input: {
   readonly threadId: ThreadId;
   readonly expiresInSeconds?: number;
   readonly baseUrl?: string;
@@ -213,7 +213,7 @@ export const issueThreadWebhook = Effect.fn("ThreadWebhook.issue")(function* (in
   } satisfies RegisterThreadWebhookResult;
 });
 
-export const validateThreadWebhookToken = Effect.fn("ThreadWebhook.validate")(function* (
+const validateThreadWebhookToken = Effect.fn("ThreadWebhook.validate")(function* (
   token: string,
 ) {
   const secret = yield* loadSigningSecret.pipe(Effect.orElseSucceed(() => null));
