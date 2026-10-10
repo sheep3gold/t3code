@@ -1850,6 +1850,150 @@ describe("deriveMessagesTimelineRows", () => {
     ).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
   });
 
+  it("keeps MCP app rows outside turn folds and apart from trailing tool groups", () => {
+    const turnId = TurnId.make("turn-1");
+    const appReference = {
+      attachmentId: "attach-app",
+      server: "weather",
+      tool: "render_map",
+      resourceUri: "ui://weather/map.html",
+    };
+    const appEntry = {
+      id: "app-entry",
+      kind: "work" as const,
+      createdAt: "2026-01-01T00:00:03Z",
+      entry: {
+        id: "app-entry",
+        createdAt: "2026-01-01T00:00:03Z",
+        turnId,
+        label: "Ran render_map",
+        tone: "tool" as const,
+        toolCallId: "call-app",
+        itemType: "mcp_tool_call" as const,
+        sourceActivityKind: "tool.completed" as const,
+        mcpApp: appReference,
+      },
+    };
+    const timelineEntries = [
+      {
+        id: "assistant-first-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:01Z",
+        message: {
+          id: "assistant-first" as never,
+          role: "assistant" as const,
+          text: "Rendering.",
+          turnId,
+          createdAt: "2026-01-01T00:00:01Z",
+          updatedAt: "2026-01-01T00:00:02Z",
+          streaming: false,
+        },
+      },
+      appEntry,
+      {
+        id: "assistant-final-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:05Z",
+        message: {
+          id: "assistant-final" as never,
+          role: "assistant" as const,
+          text: "Here is the map.",
+          turnId,
+          createdAt: "2026-01-01T00:00:05Z",
+          updatedAt: "2026-01-01T00:00:06Z",
+          streaming: false,
+        },
+      },
+      ...Array.from({ length: 3 }, (_, index) => ({
+        id: `work-entry-after-text-${index}`,
+        kind: "work" as const,
+        createdAt: `2026-01-01T00:00:0${index + 7}Z`,
+        entry: {
+          id: `work-after-text-${index}`,
+          createdAt: `2026-01-01T00:00:0${index + 7}Z`,
+          turnId,
+          label: "Ran command",
+          tone: "tool" as const,
+          itemType: "command_execution" as const,
+          toolLifecycleStatus: "completed" as const,
+        },
+      })),
+    ];
+
+    const input = {
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    };
+
+    // The app stays visible through the fold while plain tool work folds away.
+    const midTurn = deriveMessagesTimelineRows({ ...input, timelineEntries });
+    expect(midTurn.map((row) => row.id)).toEqual([
+      "turn-fold:turn-1",
+      "app-entry",
+      "assistant-final-entry",
+      "work-toggle:work-entry-after-text-0",
+      "assistant-meta:assistant-final",
+    ]);
+    expect(midTurn.find((row) => row.kind === "mcp-app")).toMatchObject({
+      entry: { mcpApp: appReference },
+    });
+
+    // An app after the response is interactive content of its own: the tools
+    // after it do not become the response's trailing block, and the meta row
+    // stays on the message instead of moving below them.
+    const appAfterResponse = timelineEntries.map((entry) =>
+      entry.kind === "work" && entry.id === "app-entry"
+        ? {
+            ...entry,
+            id: "app-after-entry",
+            createdAt: "2026-01-01T00:00:06Z",
+            entry: { ...entry.entry, id: "app-after-entry", createdAt: "2026-01-01T00:00:06Z" },
+          }
+        : entry,
+    );
+    const movedApp = appAfterResponse.splice(
+      appAfterResponse.findIndex((entry) => entry.id === "app-after-entry"),
+      1,
+    )[0]!;
+    appAfterResponse.splice(
+      appAfterResponse.findIndex((entry) => entry.id === "work-entry-after-text-0"),
+      0,
+      movedApp,
+    );
+    const afterResponse = deriveMessagesTimelineRows({
+      ...input,
+      timelineEntries: appAfterResponse,
+    });
+    expect(afterResponse.map((row) => row.id)).toEqual([
+      "turn-fold:turn-1",
+      "assistant-final-entry",
+      "app-after-entry",
+      "work-toggle:work-entry-after-text-0",
+    ]);
+    expect(afterResponse.some((row) => row.kind === "assistant-meta")).toBe(false);
+    expect(
+      afterResponse.find((row) => row.kind === "message" && row.message.role === "assistant"),
+    ).toMatchObject({ showAssistantMeta: true });
+
+    // Without a trusted app reference the same entry is ordinary folded work.
+    const withoutApp = deriveMessagesTimelineRows({
+      ...input,
+      timelineEntries: timelineEntries.map((entry) => {
+        if (entry.kind !== "work" || !("mcpApp" in entry.entry)) return entry;
+        const { mcpApp: _omitted, ...entryWithoutApp } = entry.entry;
+        return { ...entry, entry: entryWithoutApp };
+      }),
+    });
+    expect(withoutApp.map((row) => row.id)).toEqual([
+      "turn-fold:turn-1",
+      "assistant-final-entry",
+      "work-toggle:work-entry-after-text-0",
+      "assistant-meta:assistant-final",
+    ]);
+  });
+
   it("folds all assistant messages before the terminal message", () => {
     const timelineEntries = [
       {

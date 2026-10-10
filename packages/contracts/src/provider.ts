@@ -81,6 +81,16 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  /** What the thread's MCP Apps want the agent to know
+      (`ui/update-model-context`), keyed per app. */
+  appContext: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        key: Schema.String,
+        text: Schema.String,
+      }),
+    ),
+  ),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

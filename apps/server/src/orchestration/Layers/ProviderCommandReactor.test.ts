@@ -32,6 +32,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -70,6 +71,9 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as ThreadLedgerPersistence from "../../persistence/ThreadLedger.ts";
 import * as AgentMemoryPersistence from "../../persistence/AgentMemories.ts";
+import * as McpAppModelContextModule from "../../mcpApps/McpAppModelContext.ts";
+
+const encodeAppActivityPayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -124,7 +128,8 @@ describe("ProviderCommandReactor", () => {
     | ProjectionSnapshotQuery
     | SqlClient.SqlClient
     | AgentMemoryPersistence.AgentMemoryRepository
-    | ThreadLedgerPersistence.ThreadLedgerRepository,
+    | ThreadLedgerPersistence.ThreadLedgerRepository
+    | McpAppModelContextModule.McpAppModelContext,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -497,6 +502,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ThreadLedgerPersistence.layer),
       Layer.provideMerge(AgentMemoryPersistence.layer),
+      Layer.provideMerge(McpAppModelContextModule.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -512,6 +518,8 @@ describe("ProviderCommandReactor", () => {
         E,
         | AgentMemoryPersistence.AgentMemoryRepository
         | ThreadLedgerPersistence.ThreadLedgerRepository
+        | McpAppModelContextModule.McpAppModelContext
+        | SqlClient.SqlClient
       >,
     ) => runtime!.runPromise(effect);
 
@@ -861,6 +869,69 @@ describe("ProviderCommandReactor", () => {
       );
     }),
   );
+
+  it("carries MCP app model context on the provider turn", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    await harness.runEffect(
+      McpAppModelContextModule.McpAppModelContext.pipe(
+        Effect.flatMap((store) =>
+          store.set({
+            threadId,
+            toolCallId: "call-kept",
+            server: "todos",
+            tool: "list_todos",
+            text: "Three todos are selected.",
+          }),
+        ),
+      ),
+    );
+    const appActivityPayload = encodeAppActivityPayload({
+      toolCallId: "call-kept",
+    });
+    await harness.runEffect(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at, sequence)
+          VALUES (
+            'activity-call-kept',
+            'thread-1',
+            'turn-1',
+            'tool',
+            'tool.completed',
+            'Ran list_todos',
+            ${appActivityPayload},
+            '2026-01-01T00:00:00.000Z',
+            1
+          )
+        `;
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-app-context-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-app-context"),
+          role: "user",
+          text: "Continue now",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      appContext: [{ key: "mcp_app_call-kept", text: "Three todos are selected." }],
+    });
+  });
 
   it("injects the durable thread ledger before the current provider request", async () => {
     const harness = await createHarness();

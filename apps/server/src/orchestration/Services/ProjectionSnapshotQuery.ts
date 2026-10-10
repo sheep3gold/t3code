@@ -79,6 +79,12 @@ export interface ProjectionThreadDetailQuery {
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
 export interface ProjectionSnapshotQueryShape {
+  /** Read one completed MCP tool call by its native item id without loading the thread history. */
+  readonly getMcpAppActivity: (input: {
+    readonly threadId: ThreadId;
+    readonly toolCallId: string;
+  }) => Effect.Effect<Option.Option<OrchestrationThreadActivity>, ProjectionRepositoryError>;
+
   /** Read the latest request or resolution without loading the thread history. */
   readonly getUserInputActivity: (input: {
     readonly threadId: ThreadId;

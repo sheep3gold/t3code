@@ -310,9 +310,14 @@ function projectPreviewToolMetadata(data: Record<string, unknown>, status: unkno
  * MCP tool calls carry full tool results (`data.item.result` on Codex,
  * `data.result` on Claude/OpenCode) that used to bypass slimming entirely to
  * keep the expanded-row UI working. Keep the fields the UI actually renders
- * and summarize the result like regular tool output.
+ * and summarize the result like regular tool output. An app-producing call
+ * keeps its whole result: the app's initialize handshake delivers it as the
+ * tool call it was created by, and a text summary is not a substitute.
  */
-function projectMcpToolCallData(data: Record<string, unknown>): Record<string, unknown> {
+function projectMcpToolCallData(
+  data: Record<string, unknown>,
+  { keepResult = false }: { readonly keepResult?: boolean } = {},
+): Record<string, unknown> {
   const projectedData: Record<string, unknown> = {};
 
   const item = asRecord(data.item);
@@ -323,7 +328,7 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
         projectedItem[key] = item[key];
       }
     }
-    const result = summarizeMcpResult(item.result);
+    const result = keepResult ? asRecord(item.result) : summarizeMcpResult(item.result);
     if (result) {
       projectedItem.result = result;
     }
@@ -447,7 +452,10 @@ export function projectActivityPayload(
       ...activity,
       payload: {
         ...projectedPayload,
-        data: { ...projectMcpToolCallData(data), ...questionInput },
+        data: {
+          ...projectMcpToolCallData(data, { keepResult: statusPayload.mcpApp !== undefined }),
+          ...questionInput,
+        },
       },
     };
   }
