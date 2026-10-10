@@ -16,6 +16,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type { Tool } from "effect/unstable/ai";
+import type { AiError } from "effect/unstable/ai/AiError";
 
 import {
   OrchestrationEngineService,
@@ -107,7 +108,7 @@ const makeHarness = Effect.fn("makeSecretsToolkitHarness")(function* (options: H
   );
   const call = (
     params: Parameters<typeof toolkit.handle<"request_secret">>[1],
-  ): Effect.Effect<Tool.Success<(typeof SecretsToolkit.tools)["request_secret"]>, never> =>
+  ): Effect.Effect<Tool.Success<(typeof SecretsToolkit.tools)["request_secret"]>, AiError> =>
     toolkit.handle("request_secret", params).pipe(
       Stream.unwrap,
       Stream.runCollect,
