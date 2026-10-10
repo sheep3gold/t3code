@@ -211,7 +211,10 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
 
 const config: ExpoConfig = {
   name: variant.appName,
-  slug: "t3-code",
+  // Must match the EAS project's own slug: eas-cli aborts `env:pull` (and every
+  // later build/update command) when extra.eas.projectId resolves to a
+  // different slug than this field.
+  slug: "t3code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: "1.3.1",
