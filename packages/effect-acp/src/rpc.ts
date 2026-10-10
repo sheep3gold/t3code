@@ -78,7 +78,7 @@ const SetSessionModelRpc = Rpc.make(AGENT_METHODS.session_set_model, {
  * the response the spec requires. A missing `configOptions` decodes to an empty
  * list, which callers must treat as "no snapshot", not "no options".
  */
-const SetSessionConfigOptionResponseLenient = Schema.Struct({
+export const SetSessionConfigOptionResponseLenient = Schema.Struct({
   ...AcpSchema.SetSessionConfigOptionResponse.fields,
   configOptions: AcpSchema.SetSessionConfigOptionResponse.fields.configOptions.pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
