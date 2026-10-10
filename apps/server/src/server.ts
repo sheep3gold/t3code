@@ -122,6 +122,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
@@ -188,6 +189,8 @@ const ApplicationObservabilityLive = ObservabilityLive.pipe(
 );
 
 const PtyAdapterLive = NodePtyAdapter.layer;
+
+const SecretRequestsLayerLive = SecretRequests.layer.pipe(Layer.provide(ServerSecretStore.layer));
 
 const ServerSettingsLayerLive = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
@@ -541,7 +544,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
   Layer.provideMerge(
-    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
+    Layer.mergeAll(
+      Keybindings.layer,
+      EnvironmentTheme.layer,
+      UsageLimitSources.layer,
+      SecretRequestsLayerLive,
+    ),
   ),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
