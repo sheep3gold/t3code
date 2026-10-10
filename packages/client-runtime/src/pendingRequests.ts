@@ -162,6 +162,10 @@ export function derivePendingRequests(activities: ReadonlyArray<OrchestrationThr
       });
     } else if (activity.kind === "user-input.requested") {
       if (closedUserInputs.has(requestId)) continue;
+      // A secret request has its own card and answer RPC; the value must
+      // never flow through the ordinary question panel, which writes answers
+      // into the transcript.
+      if (payload.responseMode === "message" && payload.secretRequest === true) continue;
       const questions = parseQuestions(payload.questions);
       if (questions.length === 0) continue;
       userInputs.set(requestId, {

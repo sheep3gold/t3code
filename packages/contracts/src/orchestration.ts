@@ -42,6 +42,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  answerSecretRequest: "orchestration.answerSecretRequest",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
