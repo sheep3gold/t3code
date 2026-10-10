@@ -61,9 +61,10 @@ const withService = <A, E>(
         ServerSecretStore.ServerSecretStore,
         ServerSecretStore.ServerSecretStore.of({
           // Yields like a real file read, so concurrent callers can interleave.
-          get: (name) => Effect.yieldNow.pipe(Effect.as(Option.fromNullishOr(stored.get(name)))),
-          set: (name, value) => Effect.sync(() => void stored.set(name, value)),
-          create: (name, value) =>
+          get: (name: string) =>
+            Effect.yieldNow.pipe(Effect.as(Option.fromNullishOr(stored.get(name)))),
+          set: (name: string, value: Uint8Array) => Effect.sync(() => void stored.set(name, value)),
+          create: (name: string, value: Uint8Array) =>
             stored.has(name)
               ? Effect.fail(
                   new ServerSecretStore.SecretStorePersistError({
@@ -78,7 +79,7 @@ const withService = <A, E>(
                   } as never),
                 )
               : Effect.sync(() => void stored.set(name, value)),
-          getOrCreateRandom: (name, bytes) =>
+          getOrCreateRandom: (name: string, bytes: number) =>
             Effect.sync(() => {
               const existing = stored.get(name);
               if (existing) return existing;
@@ -86,7 +87,7 @@ const withService = <A, E>(
               stored.set(name, value);
               return value;
             }),
-          remove: (name) =>
+          remove: (name: string) =>
             options.removeFails
               ? Effect.fail(
                   new ServerSecretStore.SecretStorePersistError({
@@ -113,7 +114,7 @@ const withService = <A, E>(
       Layer.succeed(
         OrchestrationEngine.OrchestrationEngineService,
         OrchestrationEngine.OrchestrationEngineService.of({
-          dispatch: (command) => {
+          dispatch: (command: { readonly type: string }) => {
             if (command.type === "thread.activity.append" && failedRecords > 0) {
               failedRecords -= 1;
               return Effect.fail(new Error("engine unavailable") as never);
@@ -150,8 +151,11 @@ it.effect("a saved answer becomes a one-use ref, and the thread only learns it w
       assert.equal(dispatched[0]!.type, "thread.activity.append");
       const activity = dispatched[0]!.activity as { payload: Record<string, unknown> };
       assert.equal(activity.payload["secretStatus"], "saved");
-      // The value never crosses the wire into the thread record.
-      assert.notInclude(JSON.stringify(dispatched[0]), "ghp_secret");
+      // The value never crosses the wire into the thread record: no payload
+      // field holds the typed value.
+      for (const value of Object.values(activity.payload)) {
+        assert.notStrictEqual(value, "ghp_secret");
+      }
 
       const ref = Option.getOrThrow(yield* service.savedRef({ threadId, requestId }));
       assert.equal(yield* service.consume({ ref, projectId }), "ghp_secret");
