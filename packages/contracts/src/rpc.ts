@@ -25,6 +25,7 @@ import {
   ClientActivityReportInput,
   HostPowerSnapshot,
 } from "./background.ts";
+import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
@@ -1362,6 +1363,14 @@ const WsOrchestrationSearchThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.searchT
   error: Schema.Union([OrchestrationSearchThreadError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationAnswerSecretRequestRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.answerSecretRequest,
+  {
+    payload: SecretRequestAnswerInput,
+    error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
   {
@@ -1597,6 +1606,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationSearchThreadsRpc,
   WsOrchestrationSearchThreadRpc,
+  WsOrchestrationAnswerSecretRequestRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,

@@ -279,7 +279,7 @@ const ENVIRONMENT_PROJECT_KEY_PREFIX = "environment:";
  * per-project key used by the sortable list. Returns null for keys from
  * other grouping modes.
  */
-export function splitEnvironmentProjectKey(
+function splitEnvironmentProjectKey(
   projectKey: string,
 ): { environmentId: string; rowKey: string } | null {
   if (!projectKey.startsWith(ENVIRONMENT_PROJECT_KEY_PREFIX)) return null;

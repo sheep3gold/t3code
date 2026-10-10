@@ -191,5 +191,8 @@ export const RuntimeTaskId = makeEntityId("RuntimeTaskId");
 export type RuntimeTaskId = typeof RuntimeTaskId.Type;
 export const ApprovalRequestId = makeEntityId("ApprovalRequestId");
 export type ApprovalRequestId = typeof ApprovalRequestId.Type;
+/** A one-use handle to a secret the user entered for an agent; the agent never sees the value. */
+export const SecretRef = makeEntityId("SecretRef");
+export type SecretRef = typeof SecretRef.Type;
 export const CheckpointRef = makeEntityId("CheckpointRef");
 export type CheckpointRef = typeof CheckpointRef.Type;

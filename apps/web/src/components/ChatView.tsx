@@ -14,6 +14,7 @@ import {
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { usageLimitsBannerItem } from "./chat/ComposerUsageLimits";
 import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
+import { deriveSecretRequestCards } from "@t3tools/client-runtime/secret-request";
 import { canRetryThread, THREAD_RETRY_PROMPT } from "@t3tools/client-runtime/operations";
 import {
   questionAttachmentDraftId,
@@ -684,8 +685,13 @@ function eventPathContainsSelector(event: Event, selector: string): boolean {
  * should be redirected into the composer. Shared by type-to-focus and
  * paste-to-focus so both honour the same surfaces.
  */
+const SECRET_REQUEST_SELECTOR = '[data-secret-request-card="true"]';
+
 function shouldRedirectInputToComposer(event: Event): boolean {
   if (event.defaultPrevented) return false;
+  // Near a pending secret request, input is meant for its private field: it
+  // must never land in the composer draft, which is persisted and sent.
+  if (eventPathContainsSelector(event, SECRET_REQUEST_SELECTOR)) return false;
   if (eventPathContainsSelector(event, TYPE_TO_FOCUS_EDITABLE_SELECTOR)) return false;
   if (eventPathContainsSelector(event, TYPE_TO_FOCUS_INTERACTIVE_SELECTOR)) return false;
   if (document.querySelector(TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR)) return false;
@@ -2980,6 +2986,15 @@ export default function ChatView(props: ChatViewProps) {
   const { approvals: pendingApprovals, userInputs: pendingUserInputs } = useMemo(
     () => derivePendingRequests(threadActivities),
     [threadActivities],
+  );
+  const pendingSecretRequests = useMemo(
+    () =>
+      activeThreadId
+        ? deriveSecretRequestCards(activeThreadId, threadActivities)
+            .filter(({ display }) => display.kind === "pending")
+            .map(({ card }) => card)
+        : [],
+    [activeThreadId, threadActivities],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingRequestKey = JSON.stringify([
@@ -10301,6 +10316,7 @@ export default function ChatView(props: ChatViewProps) {
                               activePendingApproval={activePendingApproval}
                               pendingApprovals={pendingApprovals}
                               pendingUserInputs={pendingUserInputs}
+                              pendingSecretRequests={pendingSecretRequests}
                               activePendingProgress={activePendingProgress}
                               activePendingResolvedAnswers={activePendingResolvedAnswers}
                               activePendingIsResponding={activePendingIsResponding}
