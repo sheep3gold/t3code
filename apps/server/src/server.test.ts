@@ -189,6 +189,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
@@ -1101,6 +1102,12 @@ const buildAppUnderTest = (options?: {
             answer: () => Effect.die("unused SecretRequests.answer"),
             savedRef: () => Effect.succeed(Option.none()),
             consume: () => Effect.die("unused SecretRequests.consume"),
+          }),
+          Layer.mock(McpAppRequests.McpAppRequests)({
+            callTool: () => Effect.die("unused McpAppRequests.callTool"),
+            toolInfo: () => Effect.die("unused McpAppRequests.toolInfo"),
+            readResource: () => Effect.die("unused McpAppRequests.readResource"),
+            updateModelContext: () => Effect.die("unused McpAppRequests.updateModelContext"),
           }),
         ),
       ),

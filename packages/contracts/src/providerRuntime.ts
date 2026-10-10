@@ -438,6 +438,7 @@ export const ItemLifecyclePayload = Schema.Struct({
   toolIcon: Schema.optional(ToolActivityIcon),
   toolSource: Schema.optional(ToolActivitySource),
   data: Schema.optional(Schema.Unknown),
+  mcpApp: Schema.optional(Schema.Unknown),
   /**
    * Owning agent when this item ran inside a subagent (resolved from the
    * SDK's parent_tool_use_id). Clients re-home attributed items out of the

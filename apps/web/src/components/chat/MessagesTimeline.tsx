@@ -1,4 +1,5 @@
 import { ArrowUpIcon, ClockIcon } from "lucide-react";
+import { McpAppFrame } from "./McpAppFrame";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
 import { type ThreadFindMatch, type ThreadFindPositionReader } from "./threadFind";
@@ -314,6 +315,13 @@ interface TimelineRowSharedState {
   translationForMessage: (messageId: string) => string | undefined;
   translationPendingFor: (messageId: string) => boolean;
   onTranslateMessage: (messageId: string) => void;
+  /** Queues a message from an MCP app, exactly like a queued follow-up. */
+  onSendAppMessage?: ((text: string) => Promise<void>) | undefined;
+  /** A full-screen MCP app row is pinned outside virtualization. */
+  mcpAppFullscreenRowKey: string | null;
+  onMcpAppFullscreenChange: ((rowKey: string, fullscreen: boolean) => void) | undefined;
+  /** The agent waits on the user, in a panel a full-screen app would cover. */
+  awaitingUser: boolean | undefined;
 }
 
 interface TimelineRowActivityState {
@@ -484,6 +492,13 @@ interface MessagesTimelineProps {
   translationForMessage?: (messageId: string) => string | undefined;
   translationPendingFor?: (messageId: string) => boolean;
   onTranslateMessage?: (messageId: string) => void;
+  /** Queues a message from an MCP app, exactly like a queued follow-up. */
+  onSendAppMessage?: ((text: string) => Promise<void>) | undefined;
+  /** A full-screen MCP app row is pinned outside virtualization. */
+  mcpAppFullscreenRowKey?: string | null;
+  onMcpAppFullscreenChange?: ((rowKey: string, fullscreen: boolean) => void) | undefined;
+  /** The agent waits on the user, in a panel a full-screen app would cover. */
+  awaitingUser?: boolean | undefined;
   findOpen?: boolean;
   findPositionReaderRef?: React.RefObject<ThreadFindPositionReader | null>;
   findExpanded?: boolean;
@@ -572,6 +587,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
   translationForMessage,
   translationPendingFor,
   onTranslateMessage,
+  onSendAppMessage,
+  mcpAppFullscreenRowKey = null,
+  onMcpAppFullscreenChange,
+  awaitingUser,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -1009,7 +1028,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
     setFindListReady(true);
   }, [onCitationListLoad]);
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
-  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender;
+  // A full-screen app's row stays mounted even while the list is recycling;
+  // unmounting the frame would drop the app's session.
+  const mcpAppAlwaysRender = useMemo(
+    () => (mcpAppFullscreenRowKey !== null ? { keys: [mcpAppFullscreenRowKey] } : undefined),
+    [mcpAppFullscreenRowKey],
+  );
+  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender ?? mcpAppAlwaysRender;
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const [minimapCurrentIndex, setMinimapCurrentIndex] = useState<number | null>(null);
   const handleAnchorReady = useCallback(
@@ -1266,6 +1291,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
       translationForMessage: translationForMessage ?? NOOP_TRANSLATION_FOR_MESSAGE,
       translationPendingFor: translationPendingFor ?? NOOP_TRANSLATION_PENDING_FOR,
       onTranslateMessage: onTranslateMessage ?? NOOP_TRANSLATE_MESSAGE,
+      onSendAppMessage,
+      mcpAppFullscreenRowKey,
+      onMcpAppFullscreenChange,
+      awaitingUser,
     }),
     [
       readyCitationRequest,
@@ -1306,6 +1335,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
       translationForMessage,
       translationPendingFor,
       onTranslateMessage,
+      onSendAppMessage,
+      mcpAppFullscreenRowKey,
+      onMcpAppFullscreenChange,
+      awaitingUser,
     ],
   );
   const backgroundWorktreeSetup =
@@ -1818,6 +1851,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
           displayLabel={row.displayLabel}
         />
       ) : null}
+      {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
       {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
       {row.kind === "activity-group" ? <ActivityGroupTimelineRow row={row} /> : null}
       {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
@@ -1839,6 +1873,43 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
+
+/**
+ * The row an app-producing tool call leaves behind. The entry's tool data
+ * carries the call's arguments and result, which the app receives at
+ * initialize as the call it was created by.
+ */
+function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mcp-app" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const { entry } = row;
+  const app = entry.mcpApp;
+  const threadId = ctx.threadRef?.threadId;
+  const toolCall = useMemo(() => {
+    const item =
+      entry.toolData !== null && typeof entry.toolData === "object"
+        ? (entry.toolData as { readonly arguments?: unknown; readonly result?: unknown })
+        : undefined;
+    return item === undefined ? undefined : { arguments: item.arguments, result: item.result };
+  }, [entry.toolData]);
+  if (app === undefined || threadId === undefined || entry.toolCallId === undefined) return null;
+  return (
+    <McpAppFrame
+      environmentId={ctx.activeThreadEnvironmentId}
+      threadId={threadId}
+      conversationThreadId={threadId}
+      toolCallId={entry.toolCallId}
+      toolCall={toolCall}
+      app={app}
+      onSendMessage={ctx.onSendAppMessage}
+      awaitingUser={ctx.awaitingUser}
+      onFullscreenChange={
+        ctx.onMcpAppFullscreenChange === undefined
+          ? undefined
+          : (fullscreen) => ctx.onMcpAppFullscreenChange?.(row.id, fullscreen)
+      }
+    />
+  );
+}
 
 function WorktreeSetupTimelineRow({
   row,

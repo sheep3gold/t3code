@@ -123,6 +123,8 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
+import * as McpAppModelContext from "./mcpApps/McpAppModelContext.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
@@ -308,6 +310,9 @@ const ThreadLedgerRepositoryLayerLive = ThreadLedgerPersistence.layer.pipe(
 const AgentMemoryRepositoryLayerLive = AgentMemoryPersistence.layer.pipe(
   Layer.provide(PersistenceLayerLive),
 );
+const McpAppModelContextLayerLive = McpAppModelContext.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
 const ArtifactRepositoryLayerLive = ArtifactPersistence.layer.pipe(
   Layer.provide(PersistenceLayerLive),
 );
@@ -490,6 +495,13 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const McpAppRequestsLayerLive = McpAppRequests.McpAppRequestsLayerLive.pipe(
+  Layer.provide(ProviderAdapterRegistryLive),
+  Layer.provide(ProviderSessionDirectoryLayerLive),
+  Layer.provide(McpAppModelContextLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+);
+
 const ProviderRuntimeLayerLive = Layer.mergeAll(
   ProviderSessionReaperLive.pipe(
     // Subscribes to `account.rate-limits.updated` so usage bars track live
@@ -501,6 +513,7 @@ const ProviderRuntimeLayerLive = Layer.mergeAll(
   // RuntimeCoreDependenciesLive) keeps those requirements satisfied by the
   // same OrchestrationLayerLive instance instead of leaking them outward.
   SecretRequestsLayerLive,
+  McpAppRequestsLayerLive,
 ).pipe(Layer.provideMerge(OrchestrationLayerLive));
 
 const AntigravityInstallationRefreshLive = Layer.effectDiscard(
@@ -550,6 +563,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ThreadPullRequestMonitorRepositoryLayerLive),
   Layer.provideMerge(ThreadLedgerRepositoryLayerLive),
   Layer.provideMerge(AgentMemoryRepositoryLayerLive),
+  Layer.provideMerge(McpAppModelContextLayerLive),
   Layer.provideMerge(ArtifactRepositoryLayerLive),
   Layer.provideMerge(WorkflowRepositoryLayerLive),
   // Both read a user-owned file out of the state directory and stream changes

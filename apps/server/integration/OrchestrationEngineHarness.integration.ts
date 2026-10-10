@@ -32,6 +32,7 @@ import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Laye
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
 import * as AgentMemoryPersistence from "../src/persistence/AgentMemories.ts";
 import * as ThreadLedgerPersistence from "../src/persistence/ThreadLedger.ts";
+import * as McpAppModelContext from "../src/mcpApps/McpAppModelContext.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ProjectionPendingApprovalRepository } from "../src/persistence/Services/ProjectionPendingApprovals.ts";
 import { makeAdapterRegistryMock } from "../src/provider/testUtils/providerAdapterRegistryMock.ts";
@@ -351,6 +352,7 @@ export const makeOrchestrationIntegrationHarness = (
           Layer.provide(persistenceLayer),
         ),
       ),
+      Layer.provide(McpAppModelContext.layerEmpty),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),

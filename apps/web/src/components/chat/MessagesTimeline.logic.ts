@@ -322,6 +322,7 @@ function isActivityEntry(entry: TimelineEntry): entry is ActivityEntry {
     : entry.kind === "work" &&
         entry.entry.agentSpawn === undefined &&
         entry.entry.questionAnswer === undefined &&
+        entry.entry.mcpApp === undefined &&
         entry.entry.sourceActivityKind !== "context-compaction" &&
         entry.entry.tone !== "error";
 }
@@ -344,6 +345,13 @@ export type MessagesTimelineRow =
       groupedEntries: WorkLogEntry[];
       isExpandedToolGroup: boolean;
       displayLabel?: string;
+    }
+  | {
+      /** An MCP app: the captured document renders instead of a tool row. */
+      kind: "mcp-app";
+      id: string;
+      createdAt: string;
+      entry: WorkLogEntry;
     }
   | {
       kind: "work-live";
@@ -734,10 +742,13 @@ function deriveTurnFolds(input: {
       ) {
         continue;
       }
-      // User input and subagent batches stay visible after their turn settles.
+      // User input, subagent batches, and MCP apps stay visible after their
+      // turn settles: the app is a live surface the user interacts with.
       if (
         entry.kind === "work" &&
-        (entry.entry.questionAnswer !== undefined || entry.entry.agentSpawn !== undefined)
+        (entry.entry.questionAnswer !== undefined ||
+          entry.entry.agentSpawn !== undefined ||
+          entry.entry.mcpApp !== undefined)
       ) {
         continue;
       }
@@ -841,6 +852,11 @@ function attachTrailingToolGroupsToAssistant(
         continue;
       }
       if (candidate.kind === "message") {
+        break;
+      }
+      // An MCP app is interactive content in its own right, not part of the
+      // response's trailing tool block; the meta stays on the message.
+      if (candidate.kind === "mcp-app") {
         break;
       }
       if (
@@ -1019,6 +1035,7 @@ export function deriveMessagesTimelineRows(input: {
       !entryBelongsToActiveTurn(entry, index) ||
       entry.kind !== "work" ||
       entry.entry.questionAnswer !== undefined ||
+      entry.entry.mcpApp !== undefined ||
       entry.entry.sourceActivityKind === "context-compaction" ||
       entry.entry.tone === "error"
     ) {
@@ -1197,6 +1214,15 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
+      if (timelineEntry.entry.mcpApp !== undefined) {
+        nextRows.push({
+          kind: "mcp-app",
+          id: timelineEntry.id,
+          createdAt: timelineEntry.createdAt,
+          entry: timelineEntry.entry,
+        });
+        continue;
+      }
       if (
         timelineEntry.entry.agentSpawn !== undefined ||
         timelineEntry.entry.questionAnswer !== undefined ||
@@ -1226,6 +1252,7 @@ export function deriveMessagesTimelineRows(input: {
           nextEntry.kind !== "work" ||
           nextEntry.entry.agentSpawn !== undefined ||
           nextEntry.entry.questionAnswer !== undefined ||
+          nextEntry.entry.mcpApp !== undefined ||
           nextEntry.entry.sourceActivityKind === "context-compaction" ||
           nextEntry.entry.tone === "error" ||
           activeWorkEntryIds.has(nextEntry.id) ||
@@ -1616,6 +1643,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
+
+    case "mcp-app":
+      return a.entry === (b as typeof a).entry;
 
     case "queued-message": {
       const bq = b as typeof a;

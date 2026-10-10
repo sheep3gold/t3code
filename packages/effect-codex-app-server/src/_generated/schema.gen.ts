@@ -3207,6 +3207,7 @@ export const V1InitializeParams__ClientInfo = Schema.Struct({
 
 export type V1InitializeParams__InitializeCapabilities = {
   readonly experimentalApi?: boolean;
+  readonly extensions?: { readonly [x: string]: Schema.Json } | null;
   readonly mcpServerOpenaiFormElicitation?: boolean;
   readonly optOutNotificationMethods?: ReadonlyArray<string> | null;
   readonly requestAttestation?: boolean;
@@ -3217,6 +3218,9 @@ export const V1InitializeParams__InitializeCapabilities = Schema.Struct({
       description: "Opt into receiving experimental API methods and fields.",
       default: false,
     }),
+  ),
+  extensions: Schema.optionalKey(
+    Schema.Union([Schema.Record(Schema.String, Schema.Json), Schema.Null]),
   ),
   mcpServerOpenaiFormElicitation: Schema.optionalKey(
     Schema.Boolean.annotate({

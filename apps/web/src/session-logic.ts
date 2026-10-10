@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import { shallow } from "zustand/vanilla/shallow";
+import { mcpAppFromActivity, type McpAppReference } from "@t3tools/shared/mcpApp";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   commandDetailRepeatsCommand,
@@ -94,6 +95,12 @@ export interface WorkLogEntry {
     workflowId: string | null;
     agentTaskIds: ReadonlyArray<string>;
   };
+  /**
+   * The completed MCP tool call produced an app: the row renders its captured
+   * document instead of a tool summary. `mcpAppFromActivity` already checked
+   * the call actually belongs to the referenced server and tool.
+   */
+  mcpApp?: McpAppReference;
 }
 
 const workLogCollapseKey = Symbol();
@@ -649,6 +656,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (toolData !== undefined) {
       entry.toolData = toolData;
     }
+    // Only the completed call carries the reference, so an app appears once
+    // its document was captured, never while the call is still running.
+    const app = mcpAppFromActivity(activity);
+    if (app) entry.mcpApp = app;
   }
   if (itemType) {
     entry.itemType = itemType;

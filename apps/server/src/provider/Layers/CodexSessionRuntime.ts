@@ -145,6 +145,11 @@ const isMcpElicitationForm = Schema.is(McpElicitationForm);
 const CodexTurnStartParamsWithCollaborationMode = EffectCodexSchema.V2TurnStartParams.pipe(
   Schema.fieldsAssign({
     collaborationMode: Schema.optionalKey(EffectCodexSchema.V2TurnStartParams__CollaborationMode),
+    // The generator has not attached this field to TurnStartParams yet, same
+    // lag as collaborationMode; the app-server accepts it on turn/start.
+    additionalContext: Schema.optionalKey(
+      Schema.Record(Schema.String, EffectCodexSchema.V2TurnStartParams__AdditionalContextEntry),
+    ),
   }),
 );
 const decodeCodexTurnStartParamsWithCollaborationMode = Schema.decodeUnknownEffect(
@@ -193,6 +198,8 @@ export interface CodexSessionRuntimeSendTurnInput {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly interactionMode?: ProviderInteractionMode;
+  /** What the thread's MCP Apps want the agent to know (`ui/update-model-context`). */
+  readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -220,6 +227,23 @@ export interface CodexSessionRuntimeShape {
   readonly uploadFeedback: (
     reason?: string,
   ) => Effect.Effect<EffectCodexSchema.V2FeedbackUploadResponse, CodexSessionRuntimeError>;
+  readonly mcpApps?: {
+    readonly listTools: (
+      server: string,
+    ) => Effect.Effect<
+      ReadonlyArray<EffectCodexSchema.V2ListMcpServerStatusResponse__Tool>,
+      CodexSessionRuntimeError
+    >;
+    readonly readResource: (
+      server: string,
+      uri: string,
+    ) => Effect.Effect<EffectCodexSchema.V2McpResourceReadResponse, CodexSessionRuntimeError>;
+    readonly callTool: (
+      server: string,
+      tool: string,
+      arguments_: Record<string, unknown>,
+    ) => Effect.Effect<EffectCodexSchema.V2McpServerToolCallResponse, CodexSessionRuntimeError>;
+  };
   readonly respondToRequest: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -623,6 +647,7 @@ export function buildTurnStartParams(input: {
   readonly interactionMode?: ProviderInteractionMode;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
+  readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -645,6 +670,15 @@ export function buildTurnStartParams(input: {
     ...(input.effort ? { effort: input.effort } : {}),
     browserToolsAvailable: input.browserToolsAvailable ?? true,
   });
+  // An app's context is text an MCP server wrote, so it goes in as untrusted
+  // context: Codex renders it as quoted user-side input, never as developer
+  // instructions. Codex resends it only when it changes.
+  const additionalContext = Object.fromEntries(
+    (input.appContext ?? []).map((entry) => [
+      entry.key,
+      { kind: "untrusted" as const, value: entry.text },
+    ]),
+  );
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
     threadId: input.threadId,
@@ -656,6 +690,7 @@ export function buildTurnStartParams(input: {
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(collaborationMode ? { collaborationMode } : {}),
+    ...(Object.keys(additionalContext).length > 0 ? { additionalContext } : {}),
   }).pipe(
     Effect.mapError((cause) =>
       CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
@@ -2494,6 +2529,42 @@ export const makeCodexSessionRuntime = (
     return {
       start,
       getSession: Ref.get(sessionRef),
+      mcpApps: {
+        listTools: (server) =>
+          Effect.gen(function* () {
+            const threadId = yield* readProviderThreadId;
+            let cursor: string | undefined;
+            const seen = new Set<string>();
+            do {
+              const response = yield* client.request("mcpServerStatus/list", {
+                threadId,
+                detail: "toolsAndAuthOnly",
+                ...(cursor ? { cursor } : {}),
+              });
+              const match = response.data.find((entry) => entry.name === server);
+              if (match) return Object.values(match.tools);
+              cursor = response.nextCursor ?? undefined;
+              if (cursor && seen.has(cursor)) break;
+              if (cursor) seen.add(cursor);
+            } while (cursor && seen.size <= 20);
+            return [];
+          }),
+        readResource: (server, uri) =>
+          Effect.gen(function* () {
+            const threadId = yield* readProviderThreadId;
+            return yield* client.request("mcpServer/resource/read", { threadId, server, uri });
+          }),
+        callTool: (server, tool, arguments_) =>
+          Effect.gen(function* () {
+            const threadId = yield* readProviderThreadId;
+            return yield* client.request("mcpServer/tool/call", {
+              threadId,
+              server,
+              tool,
+              arguments: arguments_,
+            });
+          }),
+      },
       compactThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
         yield* client.request("thread/compact/start", { threadId: providerThreadId });
@@ -2522,6 +2593,7 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+            ...(input.appContext ? { appContext: input.appContext } : {}),
             // Derived from the session's own credential rather than the
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.
