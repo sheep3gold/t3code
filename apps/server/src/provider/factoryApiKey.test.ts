@@ -58,6 +58,7 @@ describe("factory API key resolver", () => {
       expect(yield* read()).toBe("key-two");
       expect(requests[0]).toEqual({
         url: "https://etcd.test/etcd/v3/kv/range",
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
         body: JSON.stringify({ key: Buffer.from("/droid/appkey").toString("base64") }),
       });
     }),
