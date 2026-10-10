@@ -17,10 +17,10 @@ layer("058_Artifacts", (it) => {
         SELECT name FROM sqlite_master
         WHERE type = 'table' AND name IN ('artifacts', 'artifact_versions')
       `;
-      assert.deepStrictEqual(
-        tables.map((table) => table.name).toSorted(),
-        ["artifact_versions", "artifacts"],
-      );
+      assert.deepStrictEqual(tables.map((table) => table.name).toSorted(), [
+        "artifact_versions",
+        "artifacts",
+      ]);
     }),
   );
 });

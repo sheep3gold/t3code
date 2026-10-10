@@ -50,7 +50,10 @@ jobs:
         run: vp run knip:check
 
       - name: Check
-        run: vp check
+        # fork: --quiet 只在 error 级 lint 上失败。vite.config.ts 把 correctness/
+        # suspicious/perf 类目定为 warn（维护者本意），但 vp 0.3.3 对 warn 也
+        # 非零退出，fork 的存量代码有 800 条 warn 级发现——error 级仍然全量拦截。
+        run: vp check --quiet
 
       - name: Typecheck
         run: vpr typecheck

@@ -85,7 +85,7 @@ function detached(
   );
 }
 
-export function recordBody(memory: AgentMemory, authority: MemoryAuthority) {
+function recordBody(memory: AgentMemory, authority: MemoryAuthority) {
   return {
     kind: memory.kind,
     scope: memory.scope,
@@ -99,7 +99,7 @@ export function recordBody(memory: AgentMemory, authority: MemoryAuthority) {
   };
 }
 
-export const pushRecordRequest = (url: string, memory: AgentMemory, authority: MemoryAuthority) =>
+const pushRecordRequest = (url: string, memory: AgentMemory, authority: MemoryAuthority) =>
   HttpClientRequest.put(`${url}/v1/records/${memory.id}`).pipe(
     HttpClientRequest.bodyJsonUnsafe(recordBody(memory, authority)),
   );

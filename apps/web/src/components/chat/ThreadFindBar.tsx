@@ -23,7 +23,7 @@ interface ThreadFindBarProps {
  * Room the open bar takes at the top of the chat column: its `h-9` height plus
  * the 12px gap below it, so anything avoiding the bar stays on the same rhythm.
  */
-export const THREAD_FIND_BAR_RESERVED_HEIGHT = 36 + 12;
+const THREAD_FIND_BAR_RESERVED_HEIGHT = 36 + 12;
 
 export function ThreadFindBar(props: ThreadFindBarProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -62,7 +62,7 @@ export function ThreadFindBar(props: ThreadFindBarProps) {
       role="search"
       aria-label="Find in thread"
       aria-busy={props.status === "loading"}
-      className="absolute top-3 right-3 z-40 w-[min(24rem,calc(100%-1.5rem))] shadow-md"
+      className="absolute top-3 right-3 z-40 w-[min(24rem,calc(100%-1.5rem))]"
     >
       <InputGroupInput
         ref={inputRef}

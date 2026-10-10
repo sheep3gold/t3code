@@ -57,17 +57,17 @@
     {
       "driver": "kiro",
       "t3CodeRange": ">=0.0.42",
-      "ranges": []
+      "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
     },
     {
       "driver": "minimax",
       "t3CodeRange": ">=0.0.42",
-      "ranges": []
+      "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
     },
     {
       "driver": "factory",
       "t3CodeRange": ">=0.0.42",
-      "ranges": []
+      "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
     }
   ],
   "currentModels": {

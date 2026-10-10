@@ -40,7 +40,7 @@ type WorkflowMutationInput = {
   readonly workflowId: string;
 };
 
-export const fetchEnvironmentWorkflows = Effect.fn("fetchEnvironmentWorkflows")(function* (
+const fetchEnvironmentWorkflows = Effect.fn("fetchEnvironmentWorkflows")(function* (
   input: WorkflowRequestContext & { readonly projectId: ProjectId },
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -54,7 +54,7 @@ export const fetchEnvironmentWorkflows = Effect.fn("fetchEnvironmentWorkflows")(
   });
 });
 
-export const fetchEnvironmentWorkflow = Effect.fn("fetchEnvironmentWorkflow")(function* (
+const fetchEnvironmentWorkflow = Effect.fn("fetchEnvironmentWorkflow")(function* (
   input: WorkflowRequestContext & WorkflowMutationInput,
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -73,7 +73,7 @@ export const fetchEnvironmentWorkflow = Effect.fn("fetchEnvironmentWorkflow")(fu
   });
 });
 
-export const createEnvironmentWorkflow = Effect.fn("createEnvironmentWorkflow")(function* (
+const createEnvironmentWorkflow = Effect.fn("createEnvironmentWorkflow")(function* (
   input: WorkflowRequestContext & WorkflowCreateInput,
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({

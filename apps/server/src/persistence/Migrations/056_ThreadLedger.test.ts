@@ -17,10 +17,10 @@ layer("056_ThreadLedger", (it) => {
         SELECT name FROM sqlite_master
         WHERE type = 'table' AND name IN ('thread_ledger_state', 'thread_ledger_events')
       `;
-      assert.deepStrictEqual(
-        tables.map((table) => table.name).toSorted(),
-        ["thread_ledger_events", "thread_ledger_state"],
-      );
+      assert.deepStrictEqual(tables.map((table) => table.name).toSorted(), [
+        "thread_ledger_events",
+        "thread_ledger_state",
+      ]);
     }),
   );
 });

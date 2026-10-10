@@ -24,7 +24,7 @@ type ArtifactRequestContext = {
   readonly timeoutMs?: number;
 };
 
-export const fetchEnvironmentArtifacts = Effect.fn("fetchEnvironmentArtifacts")(function* (
+const fetchEnvironmentArtifacts = Effect.fn("fetchEnvironmentArtifacts")(function* (
   input: ArtifactRequestContext & { readonly projectId: ProjectId },
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -38,7 +38,7 @@ export const fetchEnvironmentArtifacts = Effect.fn("fetchEnvironmentArtifacts")(
   });
 });
 
-export const fetchEnvironmentArtifact = Effect.fn("fetchEnvironmentArtifact")(function* (
+const fetchEnvironmentArtifact = Effect.fn("fetchEnvironmentArtifact")(function* (
   input: ArtifactRequestContext & {
     readonly projectId: ProjectId;
     readonly slug: string;
@@ -63,26 +63,24 @@ export const fetchEnvironmentArtifact = Effect.fn("fetchEnvironmentArtifact")(fu
   });
 });
 
-export const fetchEnvironmentArtifactVersions = Effect.fn("fetchEnvironmentArtifactVersions")(
-  function* (
-    input: ArtifactRequestContext & { readonly projectId: ProjectId; readonly slug: string },
-  ) {
-    return yield* executeAuthenticatedEnvironmentHttpRequest({
-      ...input,
-      group: "artifacts",
-      method: "GET",
-      url: (base) =>
-        environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/versions`),
-      timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
-      request: ({ client, headers }) =>
-        client.versions({
-          params: { slug: input.slug },
-          payload: { projectId: input.projectId },
-          headers,
-        }),
-    });
-  },
-);
+const fetchEnvironmentArtifactVersions = Effect.fn("fetchEnvironmentArtifactVersions")(function* (
+  input: ArtifactRequestContext & { readonly projectId: ProjectId; readonly slug: string },
+) {
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    group: "artifacts",
+    method: "GET",
+    url: (base) =>
+      environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/versions`),
+    timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
+    request: ({ client, headers }) =>
+      client.versions({
+        params: { slug: input.slug },
+        payload: { projectId: input.projectId },
+        headers,
+      }),
+  });
+});
 
 export type ArtifactUpdateInput = {
   readonly projectId: ProjectId;
@@ -95,7 +93,7 @@ export type ArtifactUpdateInput = {
   readonly reason?: string;
 };
 
-export const updateEnvironmentArtifact = Effect.fn("updateEnvironmentArtifact")(function* (
+const updateEnvironmentArtifact = Effect.fn("updateEnvironmentArtifact")(function* (
   input: ArtifactRequestContext & ArtifactUpdateInput,
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -122,7 +120,7 @@ export const updateEnvironmentArtifact = Effect.fn("updateEnvironmentArtifact")(
   });
 });
 
-export const revertEnvironmentArtifact = Effect.fn("revertEnvironmentArtifact")(function* (
+const revertEnvironmentArtifact = Effect.fn("revertEnvironmentArtifact")(function* (
   input: ArtifactRequestContext & {
     readonly projectId: ProjectId;
     readonly slug: string;
@@ -145,7 +143,7 @@ export const revertEnvironmentArtifact = Effect.fn("revertEnvironmentArtifact")(
   });
 });
 
-export const removeEnvironmentArtifact = Effect.fn("removeEnvironmentArtifact")(function* (
+const removeEnvironmentArtifact = Effect.fn("removeEnvironmentArtifact")(function* (
   input: ArtifactRequestContext & { readonly projectId: ProjectId; readonly slug: string },
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({

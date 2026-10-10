@@ -60,7 +60,7 @@ export interface RemoteApplyResult {
   readonly skipped: number;
 }
 
-export function memoryFingerprint(memory: {
+function memoryFingerprint(memory: {
   readonly kind: AgentMemoryKind;
   readonly scope: AgentMemoryScope;
   readonly projectId: string | null;
