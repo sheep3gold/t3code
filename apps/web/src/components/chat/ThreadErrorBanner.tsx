@@ -61,18 +61,18 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
           <AlertAction>
             <div className="flex items-center gap-1">
               {onRetry ? (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={retrying}
-                  onClick={onRetry}
-                >
+                <Button variant="ghost" size="xs" disabled={retrying} onClick={onRetry}>
                   <RefreshCwIcon />
                   {retrying ? "Retrying…" : "Retry"}
                 </Button>
               ) : null}
               {onDismiss ? (
-                <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Dismiss error"
+                  onClick={onDismiss}
+                >
                   <XIcon className="text-destructive" />
                 </Button>
               ) : null}

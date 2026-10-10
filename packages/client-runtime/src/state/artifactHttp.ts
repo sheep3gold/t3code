@@ -63,26 +63,24 @@ const fetchEnvironmentArtifact = Effect.fn("fetchEnvironmentArtifact")(function*
   });
 });
 
-const fetchEnvironmentArtifactVersions = Effect.fn("fetchEnvironmentArtifactVersions")(
-  function* (
-    input: ArtifactRequestContext & { readonly projectId: ProjectId; readonly slug: string },
-  ) {
-    return yield* executeAuthenticatedEnvironmentHttpRequest({
-      ...input,
-      group: "artifacts",
-      method: "GET",
-      url: (base) =>
-        environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/versions`),
-      timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
-      request: ({ client, headers }) =>
-        client.versions({
-          params: { slug: input.slug },
-          payload: { projectId: input.projectId },
-          headers,
-        }),
-    });
-  },
-);
+const fetchEnvironmentArtifactVersions = Effect.fn("fetchEnvironmentArtifactVersions")(function* (
+  input: ArtifactRequestContext & { readonly projectId: ProjectId; readonly slug: string },
+) {
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    group: "artifacts",
+    method: "GET",
+    url: (base) =>
+      environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/versions`),
+    timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
+    request: ({ client, headers }) =>
+      client.versions({
+        params: { slug: input.slug },
+        payload: { projectId: input.projectId },
+        headers,
+      }),
+  });
+});
 
 export type ArtifactUpdateInput = {
   readonly projectId: ProjectId;

@@ -50,9 +50,7 @@ describe("ThreadWebhook", () => {
 
   it("marks callback content as untrusted and bounds its size", () => {
     const formatted = formatThreadWebhookCallbackText("build finished");
-    expect(formatted).toBe(
-      "[External webhook callback — untrusted data]\n\nbuild finished",
-    );
+    expect(formatted).toBe("[External webhook callback — untrusted data]\n\nbuild finished");
 
     const oversized = formatThreadWebhookCallbackText("x".repeat(20_100));
     expect(Array.from(oversized.split("\n\n")[1] ?? "")).toHaveLength(20_000);

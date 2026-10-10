@@ -14,10 +14,8 @@ import {
   type MsgHubFetch,
 } from "./MsgHubPublisher.ts";
 
-const DEFAULT_APPROVAL_REQUIRED_SUBJECT =
-  "dingding.notify.vibecoding.t3code.approval.required";
-const DEFAULT_USER_INPUT_REQUIRED_SUBJECT =
-  "dingding.notify.vibecoding.t3code.user-input.required";
+const DEFAULT_APPROVAL_REQUIRED_SUBJECT = "dingding.notify.vibecoding.t3code.approval.required";
+const DEFAULT_USER_INPUT_REQUIRED_SUBJECT = "dingding.notify.vibecoding.t3code.user-input.required";
 
 const MAX_TEXT_CHARS = 1_100;
 
