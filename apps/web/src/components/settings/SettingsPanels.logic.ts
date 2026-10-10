@@ -38,7 +38,7 @@ const ENABLED_PROJECT_GROUPING_MODES: ReadonlySet<SidebarProjectGroupingMode> = 
   "environment",
 ]);
 
-export function readLastEnabledProjectGroupingMode(): SidebarProjectGroupingMode {
+function readLastEnabledProjectGroupingMode(): SidebarProjectGroupingMode {
   try {
     const stored = localStorage.getItem(LAST_ENABLED_PROJECT_GROUPING_MODE_KEY);
     return stored !== null &&
