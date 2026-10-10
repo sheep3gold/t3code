@@ -31,7 +31,7 @@ type TranslateRequestContext = {
 
 export type TranslateEnvironmentError = RemoteEnvironmentRequestError;
 
-export const translateEnvironmentTexts = Effect.fn("translateEnvironmentTexts")(function* (
+const translateEnvironmentTexts = Effect.fn("translateEnvironmentTexts")(function* (
   input: TranslateRequestContext & { readonly texts: ReadonlyArray<string> },
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({

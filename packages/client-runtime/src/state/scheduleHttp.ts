@@ -36,7 +36,7 @@ type ScheduleCreateInput = {
   readonly skipDates?: ReadonlyArray<string>;
 };
 
-export const fetchEnvironmentSchedules = Effect.fn("fetchEnvironmentSchedules")(function* (
+const fetchEnvironmentSchedules = Effect.fn("fetchEnvironmentSchedules")(function* (
   input: ScheduleRequestContext & { readonly projectId: ProjectId },
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -50,7 +50,7 @@ export const fetchEnvironmentSchedules = Effect.fn("fetchEnvironmentSchedules")(
   });
 });
 
-export const createEnvironmentSchedule = Effect.fn("createEnvironmentSchedule")(function* (
+const createEnvironmentSchedule = Effect.fn("createEnvironmentSchedule")(function* (
   input: ScheduleRequestContext & ScheduleCreateInput,
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -119,13 +119,13 @@ const mutateEnvironmentSchedule = Effect.fn("mutateEnvironmentSchedule")(functio
   });
 });
 
-export const pauseEnvironmentSchedule = (input: ScheduleMutationInput) =>
+const pauseEnvironmentSchedule = (input: ScheduleMutationInput) =>
   mutateEnvironmentSchedule({ ...input, operation: "pause" });
 
-export const resumeEnvironmentSchedule = (input: ScheduleMutationInput) =>
+const resumeEnvironmentSchedule = (input: ScheduleMutationInput) =>
   mutateEnvironmentSchedule({ ...input, operation: "resume" });
 
-export const removeEnvironmentSchedule = (input: ScheduleMutationInput) =>
+const removeEnvironmentSchedule = (input: ScheduleMutationInput) =>
   mutateEnvironmentSchedule({ ...input, operation: "remove" });
 
 export type FetchEnvironmentScheduleError = RemoteEnvironmentRequestError;

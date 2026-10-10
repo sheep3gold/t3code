@@ -67,7 +67,7 @@ export function parseAssistantOptions(text: string): ParsedAssistantOptions | nu
 }
 
 /** 输入框内容里是否已含这一条候选（按块比对，避免匹配到用户正文里的巧合子串）。 */
-export function isOptionSelected(prompt: string, label: string): boolean {
+function isOptionSelected(prompt: string, label: string): boolean {
   return prompt.split(BLOCK_SEPARATOR).some((block) => block.trim() === label);
 }
 

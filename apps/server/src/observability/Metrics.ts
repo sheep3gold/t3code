@@ -75,7 +75,7 @@ export const terminalRestartsTotal = Metric.counter("t3_terminal_restarts_total"
 });
 
 /** Secrets agents asked users for, by how each ended: saved, declined, cancelled, timed_out. */
-export const secretRequestsTotal = Metric.counter("t3_secret_requests_total", {
+const secretRequestsTotal = Metric.counter("t3_secret_requests_total", {
   description: "Secrets agents asked users for, by how each request ended.",
 });
 

@@ -635,35 +635,35 @@ export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequest
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
 
-export const SecretsToolkitRegistrationLive = McpServer.toolkit(SecretsToolkit).pipe(
+const SecretsToolkitRegistrationLive = McpServer.toolkit(SecretsToolkit).pipe(
   Layer.provide(SecretsToolkitHandlersLive),
 );
 
-export const ThreadWebhookToolkitRegistrationLive = McpServer.toolkit(ThreadWebhookToolkit).pipe(
+const ThreadWebhookToolkitRegistrationLive = McpServer.toolkit(ThreadWebhookToolkit).pipe(
   Layer.provide(ThreadWebhookToolkitHandlersLive),
 );
 
-export const ThreadScheduleToolkitRegistrationLive = McpServer.toolkit(ThreadScheduleToolkit).pipe(
+const ThreadScheduleToolkitRegistrationLive = McpServer.toolkit(ThreadScheduleToolkit).pipe(
   Layer.provide(ThreadScheduleToolkitHandlersLive),
 );
 
-export const ThreadLedgerToolkitRegistrationLive = McpServer.toolkit(ThreadLedgerToolkit).pipe(
+const ThreadLedgerToolkitRegistrationLive = McpServer.toolkit(ThreadLedgerToolkit).pipe(
   Layer.provide(ThreadLedgerToolkitHandlersLive),
 );
 
-export const AgentMemoryToolkitRegistrationLive = McpServer.toolkit(AgentMemoryToolkit).pipe(
+const AgentMemoryToolkitRegistrationLive = McpServer.toolkit(AgentMemoryToolkit).pipe(
   Layer.provide(AgentMemoryToolkitHandlersLive),
 );
 
-export const ArtifactToolkitRegistrationLive = McpServer.toolkit(ArtifactToolkit).pipe(
+const ArtifactToolkitRegistrationLive = McpServer.toolkit(ArtifactToolkit).pipe(
   Layer.provide(ArtifactToolkitHandlersLive),
 );
 
-export const ThreadWorkflowToolkitRegistrationLive = McpServer.toolkit(ThreadWorkflowToolkit).pipe(
+const ThreadWorkflowToolkitRegistrationLive = McpServer.toolkit(ThreadWorkflowToolkit).pipe(
   Layer.provide(ThreadWorkflowToolkitHandlersLive),
 );
 
-export const AgentNotificationToolkitRegistrationLive = McpServer.toolkit(
+const AgentNotificationToolkitRegistrationLive = McpServer.toolkit(
   AgentNotificationToolkit,
 ).pipe(Layer.provide(AgentNotificationToolkitHandlersLive));
 

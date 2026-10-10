@@ -614,7 +614,7 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
+class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
   .add(
     HttpApiEndpoint.get("list", "/api/artifacts", {
       headers: OptionalBearerHeaders,
@@ -706,7 +706,7 @@ const EnvironmentScheduleCreatePayload = Schema.Struct({
   skipDates: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 
-export class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")
+class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")
   .add(
     HttpApiEndpoint.get("list", "/api/schedules", {
       headers: OptionalBearerHeaders,
@@ -799,7 +799,7 @@ const EnvironmentWorkflowRestartPayload = Schema.Struct({
   fromStep: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
 });
 
-export class EnvironmentWorkflowsHttpApi extends HttpApiGroup.make("workflows")
+class EnvironmentWorkflowsHttpApi extends HttpApiGroup.make("workflows")
   .add(
     HttpApiEndpoint.get("list", "/api/workflows", {
       headers: OptionalBearerHeaders,
@@ -940,7 +940,7 @@ const EnvironmentLedgerUpdatePayload = Schema.Struct({
   event: Schema.optional(TrimmedNonEmptyString),
 });
 
-export class EnvironmentMemoryLedgerHttpApi extends HttpApiGroup.make("memoryLedger")
+class EnvironmentMemoryLedgerHttpApi extends HttpApiGroup.make("memoryLedger")
   .add(
     HttpApiEndpoint.get("listMemories", "/api/memories", {
       headers: OptionalBearerHeaders,
