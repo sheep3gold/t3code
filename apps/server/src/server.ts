@@ -484,13 +484,18 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
-  // Subscribes to `account.rate-limits.updated` so usage bars track live
-  // telemetry instead of waiting for the next status probe.
-  Layer.provideMerge(ProviderUsageLimitsIngestionLive),
-  Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(OrchestrationLayerLive),
-);
+const ProviderRuntimeLayerLive = Layer.mergeAll(
+  ProviderSessionReaperLive.pipe(
+    // Subscribes to `account.rate-limits.updated` so usage bars track live
+    // telemetry instead of waiting for the next status probe.
+    Layer.provideMerge(ProviderUsageLimitsIngestionLive),
+    Layer.provideMerge(ProviderLayerLive),
+  ),
+  // Needs the engine and snapshot query; merging here (instead of into
+  // RuntimeCoreDependenciesLive) keeps those requirements satisfied by the
+  // same OrchestrationLayerLive instance instead of leaking them outward.
+  SecretRequestsLayerLive,
+).pipe(Layer.provideMerge(OrchestrationLayerLive));
 
 const AntigravityInstallationRefreshLive = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -544,12 +549,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
   Layer.provideMerge(
-    Layer.mergeAll(
-      Keybindings.layer,
-      EnvironmentTheme.layer,
-      UsageLimitSources.layer,
-      SecretRequestsLayerLive,
-    ),
+    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
   ),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
