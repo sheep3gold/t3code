@@ -188,6 +188,7 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
@@ -1092,7 +1093,17 @@ const buildAppUnderTest = (options?: {
     ).pipe(Layer.provide(SqlitePersistenceMemory));
 
     const appLayer = servedRoutesLayer.pipe(
-      Layer.provide(Layer.mergeAll(threadRepositoriesLayer, resourceTelemetryLayer)),
+      Layer.provide(
+        Layer.mergeAll(
+          threadRepositoriesLayer,
+          resourceTelemetryLayer,
+          Layer.mock(SecretRequests.SecretRequests)({
+            answer: () => Effect.die("unused SecretRequests.answer"),
+            savedRef: () => Effect.succeed(Option.none()),
+            consume: () => Effect.die("unused SecretRequests.consume"),
+          }),
+        ),
+      ),
       Layer.provide(
         options?.layers?.usageService === undefined
           ? UsageService.layerTest
