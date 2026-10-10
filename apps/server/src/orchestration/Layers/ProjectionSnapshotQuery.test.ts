@@ -2135,19 +2135,17 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
-  it.effect(
-    "searches active user messages and canonical assistant outputs",
-    () =>
-      Effect.gen(function* () {
-        const snapshotQuery = yield* ProjectionSnapshotQuery;
-        const sql = yield* SqlClient.SqlClient;
+  it.effect("searches active user messages and canonical assistant outputs", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
 
-        yield* sql`DELETE FROM projection_thread_messages`;
-        yield* sql`DELETE FROM projection_turns`;
-        yield* sql`DELETE FROM projection_threads`;
-        yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_projects (
           project_id,
           title,
@@ -2170,7 +2168,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_threads (
           thread_id,
           project_id,
@@ -2250,7 +2248,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           )
       `;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_thread_messages (
           message_id,
           thread_id,
@@ -2334,7 +2332,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           )
       `;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_turns (
           thread_id,
           turn_id,
@@ -2359,60 +2357,61 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-        const literalPercent = yield* snapshotQuery.searchThreads({ query: "100%" });
-        assert.deepStrictEqual(
-          literalPercent.matches.map((match) => [match.threadId, match.source]),
-          [[ThreadId.make("thread-active"), "user"]],
-        );
+      const literalPercent = yield* snapshotQuery.searchThreads({ query: "100%" });
+      assert.deepStrictEqual(
+        literalPercent.matches.map((match) => [match.threadId, match.source]),
+        [[ThreadId.make("thread-active"), "user"]],
+      );
 
-        const user = yield* snapshotQuery.searchThreads({ query: "user needle" });
-        assert.equal(user.matches[0]?.source, "user");
-        assert.match(user.matches[0]?.snippet ?? "", /USER needle/);
+      const user = yield* snapshotQuery.searchThreads({ query: "user needle" });
+      assert.equal(user.matches[0]?.source, "user");
+      assert.match(user.matches[0]?.snippet ?? "", /USER needle/);
 
-        const assistant = yield* snapshotQuery.searchThreads({ query: "FINAL NEEDLE" });
-        assert.equal(assistant.matches[0]?.source, "assistant");
+      const assistant = yield* snapshotQuery.searchThreads({ query: "FINAL NEEDLE" });
+      assert.equal(assistant.matches[0]?.source, "assistant");
 
-        const deduped = yield* snapshotQuery.searchThreads({ query: "needle" });
-        assert.deepStrictEqual(
-          deduped.matches.map((match) => [match.threadId, match.source]),
-          [[ThreadId.make("thread-active"), "user"]],
-        );
+      const deduped = yield* snapshotQuery.searchThreads({ query: "needle" });
+      assert.deepStrictEqual(
+        deduped.matches.map((match) => [match.threadId, match.source]),
+        [[ThreadId.make("thread-active"), "user"]],
+      );
 
-        assert.deepStrictEqual(
-          (yield* snapshotQuery.searchThreads({ query: "interim needle" })).matches,
-          [],
-        );
-        assert.deepStrictEqual(
-          (yield* snapshotQuery.searchThreads({ query: "system needle" })).matches,
-          [],
-        );
-        assert.deepStrictEqual(
-          (yield* snapshotQuery.searchThreads({ query: "hidden needle" })).matches,
-          [],
-        );
-        yield* sql`
+      assert.deepStrictEqual(
+        (yield* snapshotQuery.searchThreads({ query: "interim needle" })).matches,
+        [],
+      );
+      assert.deepStrictEqual(
+        (yield* snapshotQuery.searchThreads({ query: "system needle" })).matches,
+        [],
+      );
+      assert.deepStrictEqual(
+        (yield* snapshotQuery.searchThreads({ query: "hidden needle" })).matches,
+        [],
+      );
+      yield* sql`
         UPDATE projection_threads
         SET deleted_at = '2026-05-01T00:00:20.000Z'
         WHERE thread_id = 'thread-active'
       `;
-        assert.deepStrictEqual(
-          (yield* snapshotQuery.searchThreads({ query: "user needle" })).matches,
-          [],
-        );
-      }),
+      assert.deepStrictEqual(
+        (yield* snapshotQuery.searchThreads({ query: "user needle" })).matches,
+        [],
+      );
+    }),
+  );
 
-    it.effect("finds matches within one thread with navigation around the selection", () =>
-      Effect.gen(function* () {
-        const snapshotQuery = yield* ProjectionSnapshotQuery;
-        const sql = yield* SqlClient.SqlClient;
+  it.effect("finds matches within one thread with navigation around the selection", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
 
-        yield* sql`DELETE FROM projection_thread_proposed_plans`;
-        yield* sql`DELETE FROM projection_thread_messages`;
-        yield* sql`DELETE FROM projection_turns`;
-        yield* sql`DELETE FROM projection_threads`;
-        yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_projects (
           project_id,
           title,
@@ -2435,7 +2434,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_threads (
           thread_id,
           project_id,
@@ -2476,7 +2475,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_thread_messages (
           message_id,
           thread_id,
@@ -2530,7 +2529,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           )
       `;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_turns (
           thread_id,
           turn_id,
@@ -2555,7 +2554,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-        yield* sql`
+      yield* sql`
         INSERT INTO projection_thread_proposed_plans (
           plan_id,
           thread_id,
@@ -2574,88 +2573,87 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-        // Two in the user message, two in the assistant message, one in the plan.
-        const first = yield* snapshotQuery.searchThread({
-          threadId: ThreadId.make("thread-find"),
-          query: "needle",
-          index: 0,
-        });
-        assert.equal(first.totalMatches, 5);
-        assert.equal(first.activeIndex, 0);
-        assert.deepStrictEqual(first.match, {
-          entryId: MessageId.make("message-u1"),
-          occurrence: 0,
-        });
-        assert.deepStrictEqual(
-          first.navigation.map((entry) => [entry.entryId, entry.startIndex, entry.count]),
-          [
-            [MessageId.make("message-u1"), 0, 2],
-            [MessageId.make("message-a1"), 2, 2],
-            ["plan-1", 4, 1],
-          ],
-        );
+      // Two in the user message, two in the assistant message, one in the plan.
+      const first = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        index: 0,
+      });
+      assert.equal(first.totalMatches, 5);
+      assert.equal(first.activeIndex, 0);
+      assert.deepStrictEqual(first.match, {
+        entryId: MessageId.make("message-u1"),
+        occurrence: 0,
+      });
+      assert.deepStrictEqual(
+        first.navigation.map((entry) => [entry.entryId, entry.startIndex, entry.count]),
+        [
+          [MessageId.make("message-u1"), 0, 2],
+          [MessageId.make("message-a1"), 2, 2],
+          ["plan-1", 4, 1],
+        ],
+      );
 
-        // Index into the assistant message (markdown bold markers must not split
-        // the phrase, and paragraph breaks keep the count).
-        const third = yield* snapshotQuery.searchThread({
-          threadId: ThreadId.make("thread-find"),
-          query: "needle",
-          index: 3,
-        });
-        assert.equal(third.activeIndex, 3);
-        assert.deepStrictEqual(third.match, {
-          entryId: MessageId.make("message-a1"),
-          occurrence: 1,
-        });
+      // Index into the assistant message (markdown bold markers must not split
+      // the phrase, and paragraph breaks keep the count).
+      const third = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        index: 3,
+      });
+      assert.equal(third.activeIndex, 3);
+      assert.deepStrictEqual(third.match, {
+        entryId: MessageId.make("message-a1"),
+        occurrence: 1,
+      });
 
-        // start+offset navigates relative to an entry identity and wraps.
-        const wrapped = yield* snapshotQuery.searchThread({
-          threadId: ThreadId.make("thread-find"),
-          query: "needle",
-          start: { entryId: "plan-1", occurrence: 0 },
-          offset: 1,
-        });
-        assert.equal(wrapped.activeIndex, 0);
-        assert.deepStrictEqual(wrapped.match, {
-          entryId: MessageId.make("message-u1"),
-          occurrence: 0,
-        });
+      // start+offset navigates relative to an entry identity and wraps.
+      const wrapped = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        start: { entryId: "plan-1", occurrence: 0 },
+        offset: 1,
+      });
+      assert.equal(wrapped.activeIndex, 0);
+      assert.deepStrictEqual(wrapped.match, {
+        entryId: MessageId.make("message-u1"),
+        occurrence: 0,
+      });
 
-        const backwards = yield* snapshotQuery.searchThread({
-          threadId: ThreadId.make("thread-find"),
-          query: "needle",
-          start: { entryId: MessageId.make("message-u1"), occurrence: 0 },
-          offset: -1,
-        });
-        assert.equal(backwards.activeIndex, 4);
-        assert.deepStrictEqual(backwards.match, { entryId: "plan-1", occurrence: 0 });
+      const backwards = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        start: { entryId: MessageId.make("message-u1"), occurrence: 0 },
+        offset: -1,
+      });
+      assert.equal(backwards.activeIndex, 4);
+      assert.deepStrictEqual(backwards.match, { entryId: "plan-1", occurrence: 0 });
 
-        // Streaming and system rows are not indexed.
-        assert.equal(
-          (yield* snapshotQuery.searchThread({
-            threadId: ThreadId.make("thread-find"),
-            query: "streaming needle",
-          })).totalMatches,
-          0,
-        );
-        assert.equal(
-          (yield* snapshotQuery.searchThread({
-            threadId: ThreadId.make("thread-find"),
-            query: "system needle",
-          })).totalMatches,
-          0,
-        );
-
-        // No match: null match, zero totals, empty navigation.
-        const none = yield* snapshotQuery.searchThread({
+      // Streaming and system rows are not indexed.
+      assert.equal(
+        (yield* snapshotQuery.searchThread({
           threadId: ThreadId.make("thread-find"),
-          query: "absent",
-        });
-        assert.equal(none.totalMatches, 0);
-        assert.equal(none.match, null);
-        assert.deepStrictEqual(none.navigation, []);
-      }),
-    ),
+          query: "streaming needle",
+        })).totalMatches,
+        0,
+      );
+      assert.equal(
+        (yield* snapshotQuery.searchThread({
+          threadId: ThreadId.make("thread-find"),
+          query: "system needle",
+        })).totalMatches,
+        0,
+      );
+
+      // No match: null match, zero totals, empty navigation.
+      const none = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "absent",
+      });
+      assert.equal(none.totalMatches, 0);
+      assert.equal(none.match, null);
+      assert.deepStrictEqual(none.navigation, []);
+    }),
   );
 });
 
