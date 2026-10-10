@@ -60,6 +60,11 @@ export default defineConfig({
     },
   },
   test: {
+    // expo-modules-core (and friends) reference __DEV__ bare. In tests it isn't
+    // defined by any bundler, so expose a benign default via Vitest's define.
+    define: {
+      __DEV__: "true",
+    },
     environment: "node",
     exclude: [
       "**/.repos/**",
