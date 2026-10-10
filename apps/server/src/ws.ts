@@ -3851,7 +3851,14 @@ const makeWsRpcLayer = (
                     Stream.fromEffect(providerRegistry.getProviders),
                     providerRegistry.streamChanges,
                   ),
-                  serverSettings.streamChanges,
+                  // The live settings stream is change-only, same as the
+                  // registry stream above. Without the current-settings seed
+                  // the zip never pairs, so provider statuses would not
+                  // stream to clients until the first settings edit.
+                  Stream.concat(
+                    Stream.fromEffect(serverSettings.getSettings),
+                    serverSettings.streamChanges,
+                  ),
                 ).pipe(
                   Stream.map(([providers, settings]) =>
                     withDisabledSkillsFiltered(providers, settings.disabledSkills),
