@@ -1,5 +1,5 @@
 // @effect-diagnostics globalTimers:off -- promise-based fire-and-forget publisher outside the Effect runtime; the timer bounds one fetch.
-import * as NodeOs from "node:os";
+import * as NodeOS from "node:os";
 
 const DEFAULT_BASE_URL = "https://mq.zxytech.cn";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -31,7 +31,7 @@ export function resolveMsgHubPublisherConfig(
     token,
     hostLabel:
       environment.T3CODE_MSGHUB_HOST_LABEL?.trim().slice(0, 32) ||
-      NodeOs.hostname().split(".")[0] ||
+      NodeOS.hostname().split(".")[0] ||
       "unknown",
   };
 }

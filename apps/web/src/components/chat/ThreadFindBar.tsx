@@ -62,7 +62,7 @@ export function ThreadFindBar(props: ThreadFindBarProps) {
       role="search"
       aria-label="Find in thread"
       aria-busy={props.status === "loading"}
-      className="absolute top-3 right-3 z-40 w-[min(24rem,calc(100%-1.5rem))] shadow-md"
+      className="absolute top-3 right-3 z-40 w-[min(24rem,calc(100%-1.5rem))]"
     >
       <InputGroupInput
         ref={inputRef}

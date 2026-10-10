@@ -1,9 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off -- a real loopback HTTP server stands in for memsearch.
-import * as Http from "node:http";
+import * as NodeHttp from "node:http";
 
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, vi } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 
 import { formatAgentLessonContext, rankAgentMemories, searchAgentMemories } from "./AgentMemory.ts";
 import type { AgentMemory } from "../persistence/AgentMemories.ts";
@@ -59,47 +60,57 @@ describe("AgentMemory", () => {
       memory("low-score", "Use dark mode"),
     ];
 
-    it("falls back to keyword ranking when memsearch is not configured", async () => {
-      vi.stubEnv("T3CODE_MEMSEARCH_URL", "");
-      const ranked = await Effect.runPromise(rankAgentMemories(candidates, "focused tests", 10));
-      expect(ranked.map((entry) => entry.id)).toEqual(["keyword"]);
-    });
+    it.live("falls back to keyword ranking when memsearch is not configured", () =>
+      Effect.gen(function* () {
+        vi.stubEnv("T3CODE_MEMSEARCH_URL", "");
+        const ranked = yield* rankAgentMemories(candidates, "focused tests", 10);
+        expect(ranked.map((entry) => entry.id)).toEqual(["keyword"]);
+      }),
+    );
 
-    it("puts semantic hits first, drops low scores and unknown ids, then adds keyword hits", async () => {
-      const server = Http.createServer((request, response) => {
-        expect(request.headers.authorization).toBe("Bearer test-key");
-        expect(request.url).toBe("/v1/records/search");
-        response.setHeader("content-type", "application/json");
-        response.end(
-          JSON.stringify({
-            results: [
-              { score: 0.9, record: { id: "semantic" } },
-              { score: 0.8, record: { id: "not-visible" } },
-              { score: 0.7, record: { id: "keyword" } },
-              { score: 0.1, record: { id: "low-score" } },
-            ],
-          }),
-        );
-      });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-      const { port } = server.address() as { port: number };
-      vi.stubEnv("T3CODE_MEMSEARCH_URL", `http://127.0.0.1:${port}`);
-      vi.stubEnv("T3CODE_MEMSEARCH_API_KEY", "test-key");
-      // The mirror refuses to talk to memory-api under vitest unless a test opts in.
-      vi.stubEnv("T3CODE_MEMSEARCH_IN_TESTS", "1");
-      try {
-        const ranked = await Effect.runPromise(rankAgentMemories(candidates, "focused tests", 10));
-        expect(ranked.map((entry) => entry.id)).toEqual(["semantic", "keyword"]);
-      } finally {
-        server.close();
-      }
-    });
+    it.live(
+      "puts semantic hits first, drops low scores and unknown ids, then adds keyword hits",
+      () =>
+        Effect.gen(function* () {
+          const server = NodeHttp.createServer((request, response) => {
+            expect(request.headers.authorization).toBe("Bearer test-key");
+            expect(request.url).toBe("/v1/records/search");
+            response.setHeader("content-type", "application/json");
+            response.end(
+              JSON.stringify({
+                results: [
+                  { score: 0.9, record: { id: "semantic" } },
+                  { score: 0.8, record: { id: "not-visible" } },
+                  { score: 0.7, record: { id: "keyword" } },
+                  { score: 0.1, record: { id: "low-score" } },
+                ],
+              }),
+            );
+          });
+          yield* Effect.promise(
+            () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+          );
+          const { port } = server.address() as { port: number };
+          vi.stubEnv("T3CODE_MEMSEARCH_URL", `http://127.0.0.1:${port}`);
+          vi.stubEnv("T3CODE_MEMSEARCH_API_KEY", "test-key");
+          // The mirror refuses to talk to memory-api under vitest unless a test opts in.
+          vi.stubEnv("T3CODE_MEMSEARCH_IN_TESTS", "1");
+          try {
+            const ranked = yield* rankAgentMemories(candidates, "focused tests", 10);
+            expect(ranked.map((entry) => entry.id)).toEqual(["semantic", "keyword"]);
+          } finally {
+            server.close();
+          }
+        }),
+    );
 
-    it("falls back to keyword ranking when memsearch is unreachable", async () => {
-      vi.stubEnv("T3CODE_MEMSEARCH_URL", "http://127.0.0.1:9");
-      vi.stubEnv("T3CODE_MEMSEARCH_API_KEY", "test-key");
-      const ranked = await Effect.runPromise(rankAgentMemories(candidates, "focused tests", 10));
-      expect(ranked.map((entry) => entry.id)).toEqual(["keyword"]);
-    });
+    it.live("falls back to keyword ranking when memsearch is unreachable", () =>
+      Effect.gen(function* () {
+        vi.stubEnv("T3CODE_MEMSEARCH_URL", "http://127.0.0.1:9");
+        vi.stubEnv("T3CODE_MEMSEARCH_API_KEY", "test-key");
+        const ranked = yield* rankAgentMemories(candidates, "focused tests", 10);
+        expect(ranked.map((entry) => entry.id)).toEqual(["keyword"]);
+      }),
+    );
   });
 });

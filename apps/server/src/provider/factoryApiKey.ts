@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - the bootstrap file read happens inside a promise-based fetch helper
 import * as NodeCrypto from "node:crypto";
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
@@ -30,7 +30,7 @@ function defaultBootstrapPath(): string {
 
 async function readBootstrap(path: string): Promise<Record<string, string>> {
   const values: Record<string, string> = {};
-  for (const line of (await NodeFS.readFile(path, "utf8")).split("\n")) {
+  for (const line of (await NodeFSP.readFile(path, "utf8")).split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
     const index = trimmed.indexOf("=");
