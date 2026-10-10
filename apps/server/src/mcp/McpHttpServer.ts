@@ -663,9 +663,9 @@ const ThreadWorkflowToolkitRegistrationLive = McpServer.toolkit(ThreadWorkflowTo
   Layer.provide(ThreadWorkflowToolkitHandlersLive),
 );
 
-const AgentNotificationToolkitRegistrationLive = McpServer.toolkit(
-  AgentNotificationToolkit,
-).pipe(Layer.provide(AgentNotificationToolkitHandlersLive));
+const AgentNotificationToolkitRegistrationLive = McpServer.toolkit(AgentNotificationToolkit).pipe(
+  Layer.provide(AgentNotificationToolkitHandlersLive),
+);
 
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
   Layer.provide(DeviceStandardToolkitHandlersLive),

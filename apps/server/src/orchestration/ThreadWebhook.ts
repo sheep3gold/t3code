@@ -213,9 +213,7 @@ const issueThreadWebhook = Effect.fn("ThreadWebhook.issue")(function* (input: {
   } satisfies RegisterThreadWebhookResult;
 });
 
-const validateThreadWebhookToken = Effect.fn("ThreadWebhook.validate")(function* (
-  token: string,
-) {
+const validateThreadWebhookToken = Effect.fn("ThreadWebhook.validate")(function* (token: string) {
   const secret = yield* loadSigningSecret.pipe(Effect.orElseSucceed(() => null));
   if (!secret) return null;
   return decodeThreadWebhookToken(token, secret, yield* Clock.currentTimeMillis);

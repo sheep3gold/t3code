@@ -17,10 +17,10 @@ layer("059_ThreadWorkflows", (it) => {
         SELECT name FROM sqlite_master
         WHERE type = 'table' AND name IN ('thread_workflows', 'thread_workflow_steps')
       `;
-      assert.deepStrictEqual(
-        tables.map((table) => table.name).toSorted(),
-        ["thread_workflow_steps", "thread_workflows"],
-      );
+      assert.deepStrictEqual(tables.map((table) => table.name).toSorted(), [
+        "thread_workflow_steps",
+        "thread_workflows",
+      ]);
     }),
   );
 });
