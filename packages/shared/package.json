@@ -342,6 +342,14 @@
     "./gitPatchPath": {
       "types": "./src/gitPatchPath.ts",
       "import": "./src/gitPatchPath.ts"
+    },
+    "./threadFindText": {
+      "types": "./src/threadFindText.ts",
+      "import": "./src/threadFindText.ts"
+    },
+    "./threadSearch": {
+      "types": "./src/threadSearch.ts",
+      "import": "./src/threadSearch.ts"
     }
   },
   "scripts": {
@@ -354,6 +362,12 @@
     "@t3tools/contracts": "workspace:*",
     "effect": "catalog:",
     "jose": "catalog:",
+    "rehype-raw": "^7.0.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.0.0",
+    "unified": "^11.0.0",
     "yaml": "catalog:"
   },
   "devDependencies": {

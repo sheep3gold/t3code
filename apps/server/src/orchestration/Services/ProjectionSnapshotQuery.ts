@@ -16,6 +16,8 @@ import type {
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
+  OrchestrationSearchThreadInput,
+  OrchestrationSearchThreadResult,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
   OrchestrationShellSnapshot,
@@ -151,6 +153,14 @@ export interface ProjectionSnapshotQueryShape {
   readonly searchThreads: (
     input: OrchestrationSearchThreadsInput,
   ) => Effect.Effect<OrchestrationSearchThreadsResult, ProjectionRepositoryError>;
+
+  /**
+   * Find within one thread: user/assistant messages and proposed plans in
+   * rendered order, with match navigation around the selection.
+   */
+  readonly searchThread: (
+    input: OrchestrationSearchThreadInput,
+  ) => Effect.Effect<OrchestrationSearchThreadResult, ProjectionRepositoryError>;
 
   /**
    * Read the latest projection snapshot sequence without hydrating read-model

@@ -55,6 +55,8 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getThreadDetailById: () => Effect.die("unused"),
     getThreadDetailSnapshot: () => Effect.die("unused"),
     searchThreads: () => Effect.succeed({ matches: [] }),
+    searchThread: () =>
+      Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
   });
 
 type TerminalOverrides = Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
