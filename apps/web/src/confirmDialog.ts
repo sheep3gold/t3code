@@ -101,6 +101,15 @@ export function requestConfirmDialog(
   return confirmation;
 }
 
+/**
+ * Whether a confirmation is showing or about to show. Callers that must not
+ * stack on top of a dialog (a full-screen MCP app, for example) check this
+ * before taking the screen.
+ */
+export function isConfirmDialogActive(): boolean {
+  return registeredHostCount > 0 && (activeConfirmation !== null || queuedConfirmations.length > 0);
+}
+
 export function respondToConfirmDialog(confirmed: boolean): void {
   if (state.status !== "confirming" || !activeConfirmation) return;
 

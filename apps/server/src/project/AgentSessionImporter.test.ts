@@ -33,6 +33,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as AgentMemoryPersistence from "../persistence/AgentMemories.ts";
 import * as ThreadLedgerPersistence from "../persistence/ThreadLedger.ts";
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import { OrchestrationEngineLive } from "../orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
@@ -939,6 +940,7 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
               Layer.provide(SqlitePersistenceMemory),
             ),
           ),
+          Layer.provide(McpAppModelContext.layerEmpty),
         );
 
         yield* engine.dispatch({

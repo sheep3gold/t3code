@@ -71,6 +71,7 @@ import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { readThreadLedgerContext } from "../ThreadLedger.ts";
 import { readAgentLessonContext } from "../AgentMemory.ts";
 import * as MemsearchMirror from "../../persistence/MemsearchMirror.ts";
+import { McpAppModelContext } from "../../mcpApps/McpAppModelContext.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -275,6 +276,7 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
+  const mcpAppModelContext = yield* McpAppModelContext;
   const serverSettingsService = yield* ServerSettingsService;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -969,12 +971,30 @@ const make = Effect.gen(function* () {
           : requestedModelSelection
         : input.modelSelection;
 
+    // A context read that fails costs the agent the apps' notes for this
+    // turn, not the turn itself.
+    const appContext = (yield* mcpAppModelContext.forThread(input.threadId).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("provider turn could not read MCP app model context", {
+          threadId: input.threadId,
+          cause,
+        }).pipe(Effect.as([])),
+      ),
+    )).map((entry) => ({
+      // The tool call id alone is unique and needs no escaping; server and
+      // tool names are free text that would break the key the provider wraps
+      // the context in.
+      key: `mcp_app_${entry.toolCallId.replace(/[^\w.-]/g, "_")}`,
+      text: entry.text,
+    }));
+
     return {
       threadId: input.threadId,
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(appContext.length > 0 ? { appContext } : {}),
     };
   });
 

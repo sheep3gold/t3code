@@ -1461,6 +1461,42 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getMcpAppActivityRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({ threadId: ThreadId, toolCallId: Schema.String }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, toolCallId }) => sql`
+      SELECT
+        a.activity_id AS "activityId",
+        a.thread_id AS "threadId",
+        a.turn_id AS "turnId",
+        a.tone,
+        a.kind,
+        a.summary,
+        a.payload_json AS "payload",
+        a.sequence,
+        a.created_at AS "createdAt"
+      FROM projection_thread_activities a
+      JOIN projection_threads t ON t.thread_id = a.thread_id
+      WHERE a.thread_id = ${threadId}
+        AND a.kind = 'tool.completed'
+        AND json_extract(a.payload_json, '$.toolCallId') = ${toolCallId}
+        AND t.deleted_at IS NULL
+      ORDER BY a.sequence DESC, a.created_at DESC, a.activity_id DESC
+      LIMIT 1
+    `,
+  });
+
+  const getMcpAppActivity: ProjectionSnapshotQueryShape["getMcpAppActivity"] = (input) =>
+    getMcpAppActivityRow(input).pipe(
+      Effect.map(Option.map(mapThreadActivityRow)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getMcpAppActivity:query",
+          "ProjectionSnapshotQuery.getMcpAppActivity:decodeRow",
+        ),
+      ),
+    );
+
   const getUserInputActivityRow = SqlSchema.findOneOption({
     Request: Schema.Struct({ threadId: ThreadId, requestId: ApprovalRequestId }),
     Result: ProjectionThreadActivityDbRowSchema,
@@ -3882,6 +3918,7 @@ pending_approval_requests AS (
 
   return {
     getCommandReadModel,
+    getMcpAppActivity,
     getUserInputActivity,
     listActivitiesByKind,
     getSnapshot,

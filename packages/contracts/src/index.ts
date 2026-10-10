@@ -46,3 +46,4 @@ export * from "./rpc.ts";
 export * from "./translate.ts";
 export * from "./worktreeSetup.ts";
 export * from "./secretRequest.ts";
+export * from "./mcpApps.ts";

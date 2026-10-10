@@ -238,6 +238,34 @@ describe("buildTurnStartParams", () => {
     });
   });
 
+  it("carries MCP app context as untrusted additional context", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Ship it",
+        appContext: [{ key: "mcp_app_call-1", text: "The map is zoomed to Paris." }],
+      }),
+    );
+
+    NodeAssert.deepStrictEqual(params.additionalContext, {
+      "mcp_app_call-1": { kind: "untrusted", value: "The map is zoomed to Paris." },
+    });
+  });
+
+  it("omits additional context when no app has any", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Ship it",
+        appContext: [],
+      }),
+    );
+
+    NodeAssert.equal(params.additionalContext, undefined);
+  });
+
   it("includes default collaboration mode and image attachments", () => {
     const params = Effect.runSync(
       buildTurnStartParams({

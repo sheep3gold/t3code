@@ -5836,6 +5836,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (!activeThread?.id || terminalUiState.terminalOpen) return;
     const frame = window.requestAnimationFrame(() => {
+      if (mcpAppFullscreenRef.current) return;
       focusComposer();
     });
     return () => {
@@ -5859,6 +5860,7 @@ export default function ChatView(props: ChatViewProps) {
       frame = window.requestAnimationFrame(() => {
         frame = window.requestAnimationFrame(() => {
           frame = null;
+          if (mcpAppFullscreenRef.current) return;
           if (shouldRefocusComposerOnWindowFocus(document.activeElement)) focusComposer();
         });
       });
@@ -8787,6 +8789,48 @@ export default function ChatView(props: ChatViewProps) {
     queueSendGate,
   ]);
 
+  // A message an MCP app asked to send rides the ordinary queue: visible as a
+  // ghost bubble, subject to the same due rules as a typed follow-up.
+  const appMessageActionsRef = useRef({ send: (_text: string) => {} });
+  appMessageActionsRef.current = {
+    send: (text) => {
+      if (!activeThreadKey) return;
+      useQueuedMessageStore.getState().enqueue(activeThreadKey, {
+        prompt: text,
+        images: [],
+        files: [],
+        terminalContexts: [],
+        previewAnnotations: [],
+        reviewComments: [],
+        submissionIntent: "foreground",
+        queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
+        createdAt: new Date().toISOString(),
+      });
+    },
+  };
+  const onSendAppMessage = useCallback(
+    async (text: string) => {
+      if (activeThreadKey === null) {
+        throw new Error("Messages are not available here.");
+      }
+      appMessageActionsRef.current.send(text);
+    },
+    [activeThreadKey],
+  );
+  // The key of the app row holding the screen, so the list keeps it mounted.
+  const [mcpAppFullscreenRowKey, setMcpAppFullscreenRowKey] = useState<string | null>(null);
+  const onMcpAppFullscreenChange = useCallback((rowKey: string, fullscreen: boolean) => {
+    setMcpAppFullscreenRowKey((current) => {
+      if (fullscreen) return rowKey;
+      // Another app may have gone full screen after this one did; its pin stays.
+      return current === rowKey ? null : current;
+    });
+  }, []);
+  // A full-screen app owns the screen; composer focus (thread switch, tab-back)
+  // must not pull the keyboard away and drop the app back inline.
+  const mcpAppFullscreenRef = useRef(false);
+  mcpAppFullscreenRef.current = mcpAppFullscreenRowKey !== null;
+
   // The row handlers are read from refs at call-time so their identity stays
   // stable and does not bust TimelineRowCtx on every ChatView render.
   const queuedMessageActionsRef = useRef({
@@ -10172,6 +10216,13 @@ export default function ChatView(props: ChatViewProps) {
                   translationForMessage={threadTranslation.translationFor}
                   translationPendingFor={threadTranslation.pendingFor}
                   onTranslateMessage={threadTranslation.translateMessage}
+                  onSendAppMessage={paintOnlyDisplayedTimeline ? undefined : onSendAppMessage}
+                  mcpAppFullscreenRowKey={mcpAppFullscreenRowKey}
+                  onMcpAppFullscreenChange={onMcpAppFullscreenChange}
+                  awaitingUser={
+                    !paintOnlyDisplayedTimeline &&
+                    (activePendingApproval !== null || pendingUserInputs.length > 0)
+                  }
                 />
 
                 {/* scroll to end pill — shown when user has scrolled away from the live edge */}
