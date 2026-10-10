@@ -11,11 +11,7 @@ import * as Predicate from "effect/Predicate";
 
 export const MCP_APP_PROTOCOL_VERSION = "2026-01-26";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
-/** The MCP extension id a client declares to receive UI resources. */
-export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
 export const MCP_APP_RESOURCE_SCHEME = "ui://";
-/** Where T3 records the app reference inside a tool item's output object. */
-export const MCP_APP_OUTPUT_KEY = "t3McpApp";
 
 const MCP_APP_MIN_HEIGHT = 80;
 export const MCP_APP_DEFAULT_HEIGHT = 320;
@@ -161,15 +157,6 @@ export function mcpAppFromActivity(activity: {
   return app !== undefined && item?.server === app.server && item.tool === app.tool
     ? app
     : undefined;
-}
-
-export function mcpAppReferencesEqual(left: McpAppReference, right: McpAppReference): boolean {
-  return (
-    left.attachmentId === right.attachmentId &&
-    left.server === right.server &&
-    left.tool === right.tool &&
-    left.resourceUri === right.resourceUri
-  );
 }
 
 /** The tool's `_meta.ui.resourceUri` (or the deprecated flat key), if it names a UI resource. */
