@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { ApprovalRequestId, ThreadId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 
+import { foldUserInputActivities } from "./work-log/userInput.ts";
 import {
   deriveSecretRequestCards,
   isSecretRequestActivity,
@@ -95,6 +96,14 @@ describe("deriveSecretRequestCards", () => {
     ]);
     expect(cards).toHaveLength(1);
     expect(cards[0]?.display.kind).toBe("answered");
+  });
+
+  it("the work-log fold leaves a secret request and its resolution untouched", () => {
+    const folded = foldUserInputActivities([requestedActivity(), resolvedActivity("saved")]);
+    expect(folded.map((activity) => activity.kind)).toEqual([
+      "user-input.requested",
+      "user-input.resolved",
+    ]);
   });
 });
 

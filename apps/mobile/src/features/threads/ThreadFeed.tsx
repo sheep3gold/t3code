@@ -152,9 +152,11 @@ import {
   deriveThreadFeedPresentation,
   deriveUnsettledTurnId,
   isContextCompactionActivityGroup,
+  isSecretRequestActivityGroup,
   type ThreadFeedEntry,
   type ThreadFeedLatestTurn,
 } from "../../lib/threadActivity";
+import { SecretRequestCard } from "./SecretRequestCard";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
   resolveThreadFeedLiveFollow,
@@ -1430,6 +1432,7 @@ function renderFeedEntry(
   props: Pick<
     ThreadFeedProps,
     | "environmentId"
+    | "threadId"
     | "onUseArtifactTemplate"
     | "skills"
     | "dispatchingMessageId"
@@ -1532,6 +1535,40 @@ function renderFeedEntry(
         hasFailure={entry.hasFailure}
         shimmer={entry.shimmer}
         onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id)}
+      />
+    );
+  }
+
+  if (entry.type === "activity-group" && isSecretRequestActivityGroup(entry)) {
+    const activity = entry.activities[0]!;
+    const card = activity.workEntry.secretCard;
+    if (!card) {
+      // Answered: a quiet row, like the web timeline's.
+      return (
+        <View className="mb-3 min-h-9 flex-row items-center gap-2 px-1">
+          <SymbolView
+            name={{ ios: "lock", android: "lock" }}
+            size={13}
+            tintColor={iconSubtleColor}
+            type="monochrome"
+          />
+          <Text className="flex-1 font-sans text-sm text-foreground-muted" numberOfLines={2}>
+            {activity.summary}
+          </Text>
+        </View>
+      );
+    }
+    return (
+      <SecretRequestCard
+        environmentId={props.environmentId}
+        card={{
+          requestId: card.requestId,
+          threadId: props.threadId,
+          createdAt: activity.createdAt,
+          label: card.label,
+          reason: card.reason,
+          ...(card.placeholder ? { placeholder: card.placeholder } : {}),
+        }}
       />
     );
   }
@@ -2889,6 +2926,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         <ThreadMediaVisibility>
           {renderFeedEntry(info, {
             environmentId: props.environmentId,
+            threadId: props.threadId,
             dispatchingMessageId: props.dispatchingMessageId,
             onEditPendingMessage: props.onEditPendingMessage,
             copiedRowId,

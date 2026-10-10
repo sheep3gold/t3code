@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/pending-requests";
 import { UserInputAttachmentAnswerPayload, isToolLifecycleItemType } from "@t3tools/contracts";
 import type {
+  ApprovalRequestId,
   OrchestrationLatestTurn,
   OrchestrationThread,
   OrchestrationThreadActivity,
@@ -83,6 +84,15 @@ export interface ThreadFeedActivity {
 
 export interface WorkLogEntry {
   readonly questionAnswer?: UserInputAttachmentAnswerPayload;
+  /** The row shows only a lock icon and the label; the payload never renders. */
+  secretRequest?: boolean;
+  /** Set on a pending secret request row: what the card needs to render. */
+  secretCard?: {
+    readonly requestId: ApprovalRequestId;
+    readonly label: string;
+    readonly reason: string;
+    readonly placeholder?: string;
+  };
   id: string;
   createdAt: string;
   turnId: TurnId | null;
@@ -279,6 +289,10 @@ export function isContextCompactionActivityGroup(
   );
 }
 
+export function isSecretRequestActivityGroup(entry: ThreadFeedActivityGroup): boolean {
+  return entry.activities.length === 1 && entry.activities[0]?.workEntry.secretRequest === true;
+}
+
 function isUserInputActivityGroup(entry: ThreadFeedActivityGroup): boolean {
   return entry.activities.some((activity) => activity.workEntry.questionAnswer !== undefined);
 }
@@ -424,6 +438,17 @@ function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): DerivedWorkLogEntry[] {
   const ordered = Arr.sort(activities, activityOrder);
+  // A secret request whose resolution already landed renders as the answered
+  // row (label + verb); the card form is only for the still-pending one.
+  const answeredSecretRequestIds = new Set<string>();
+  for (const activity of ordered) {
+    if (activity.kind !== "user-input.resolved") continue;
+    const payload = asRecord(activity.payload);
+    if (payload?.responseMode === "message" && typeof payload?.secretStatus === "string") {
+      const requestId = asTrimmedString(payload.requestId);
+      if (requestId) answeredSecretRequestIds.add(requestId);
+    }
+  }
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of foldUserInputActivities(ordered)) {
     // The setup card owns its snapshot, including failed and cancelled outcomes.
@@ -445,9 +470,31 @@ function deriveWorkLogEntries(
     if (isNoContentRuntimeWarning(activity)) continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    const requestId = secretRequestIdOf(activity);
+    if (
+      entry.secretRequest === true &&
+      activity.kind === "user-input.requested" &&
+      requestId !== null &&
+      !answeredSecretRequestIds.has(requestId)
+    ) {
+      const payload = asRecord(activity.payload);
+      entry.secretCard = {
+        requestId: requestId as ApprovalRequestId,
+        label: asTrimmedString(payload?.label) ?? "Secret requested",
+        reason: asTrimmedString(payload?.reason) ?? "",
+        ...(asTrimmedString(payload?.placeholder)
+          ? { placeholder: asTrimmedString(payload?.placeholder)! }
+          : {}),
+      };
+    }
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries);
+}
+
+function secretRequestIdOf(activity: OrchestrationThreadActivity): string | null {
+  return asTrimmedString(asRecord(activity.payload)?.requestId);
 }
 
 /** Adapters forward unknown wire-only SDK messages (background_tasks_changed,
@@ -526,6 +573,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       return Option.isSome(answer) ? { questionAnswer: answer.value } : {};
     })(),
   };
+  if (
+    (activity.kind === "user-input.requested" || activity.kind === "user-input.resolved") &&
+    payload?.responseMode === "message" &&
+    (payload?.secretRequest === true || typeof payload?.secretStatus === "string")
+  ) {
+    entry.secretRequest = true;
+  }
   const toolCallId =
     asTrimmedString(payload?.toolCallId) ?? asTrimmedString(asRecord(payload?.data)?.toolCallId);
   if (toolCallId) {
@@ -565,7 +619,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
         toolName: data?.toolName,
         data,
       });
-    if (detail && detail !== title && !repeatsCommand) entry.detail = detail;
+    if (detail && detail !== title && !repeatsCommand && !entry.secretRequest) {
+      entry.detail = detail;
+    }
+  }
+  // The card owns the reason and the field; the standalone row is the label
+  // plus the outcome verb ("Secret saved securely").
+  if (entry.secretRequest && activity.kind === "user-input.requested") {
+    const label = asTrimmedString(payload?.label);
+    if (label) entry.label = label;
   }
   if (isTaskActivity && typeof payload?.error === "string" && payload.error.trim()) {
     entry.detail = payload.error;
@@ -960,6 +1022,7 @@ function workEntryStatus(entry: WorkLogEntry): ThreadFeedActivity["status"] {
 
 function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   if (entry.agentSpawn) return "agent";
+  if (entry.secretRequest) return "lock";
   if (
     entry.questionAnswer ||
     entry.sourceActivityKind === "user-input.requested" ||
@@ -1584,6 +1647,8 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
 
     const isStandalone =
       entry.activity.workEntry.sourceActivityKind === "context-compaction" ||
+      // A secret request/answered pair stands alone so the card can own it.
+      entry.activity.workEntry.secretRequest === true ||
       entry.activity.workEntry.questionAnswer !== undefined;
     if (isStandalone || firstActivityEntry?.turnId !== entry.turnId) {
       flushGroup();
@@ -1711,7 +1776,9 @@ function deriveThreadFeedTurnFolds(
           (entry) =>
             entry.id !== firstAssistantMessageId &&
             entry.id !== terminalAssistantMessageId &&
-            !(entry.type === "activity-group" && isUserInputActivityGroup(entry)),
+            !(entry.type === "activity-group" && isUserInputActivityGroup(entry)) &&
+            // A secret card must stay reachable even when its turn folds.
+            !(entry.type === "activity-group" && isSecretRequestActivityGroup(entry)),
         )
         .map((entry) => entry.id),
     );
@@ -1902,6 +1969,8 @@ function activityRunTurnId(entry: ThreadFeedEntry): TurnId | null {
   if (
     entry.type === "activity-group" &&
     !isContextCompactionActivityGroup(entry) &&
+    // A secret card is its own surface; it never merges into a tool run.
+    !isSecretRequestActivityGroup(entry) &&
     !isUserInputActivityGroup(entry) &&
     entry.activities.every(
       (activity) => !activity.workEntry.agentSpawn && activity.workEntry.tone !== "error",
@@ -2069,7 +2138,11 @@ function appendPresentedFeedEntry(
     result.push(entry);
     return;
   }
-  if (isContextCompactionActivityGroup(entry) || isUserInputActivityGroup(entry)) {
+  if (
+    isContextCompactionActivityGroup(entry) ||
+    isSecretRequestActivityGroup(entry) ||
+    isUserInputActivityGroup(entry)
+  ) {
     result.push(entry);
     return;
   }

@@ -86,9 +86,11 @@ export function foldUserInputActivities(
     )
       continue;
     // A secret request renders as its own card; folding would rewrite the
-    // pair into an answer row whose "answer" the request never produced.
-    if (record(activity.payload)?.secretRequest === true) continue;
-    const requestId = record(activity.payload)?.requestId;
+    // pair into an answer row whose "answer" the request never produced. The
+    // resolution carries `secretStatus` instead of the flag, so skip both.
+    const payload = record(activity.payload);
+    if (payload?.secretRequest === true || typeof payload?.secretStatus === "string") continue;
+    const requestId = payload?.requestId;
     if (typeof requestId !== "string" || !requestId) continue;
     const group = requests.get(requestId) ?? [];
     group.push(activity);
