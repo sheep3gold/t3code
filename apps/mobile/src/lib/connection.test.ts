@@ -30,6 +30,10 @@ vi.mock("react-native", () => ({
 
 vi.mock("expo-device", () => mobileDevice);
 
+vi.mock("./installAnchor", () => ({
+  getInstallAnchor: () => undefined,
+}));
+
 describe("mobile remote connection records", () => {
   afterEach(() => {
     mobilePlatform.OS = "ios";
