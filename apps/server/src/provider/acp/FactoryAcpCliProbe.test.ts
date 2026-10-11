@@ -16,6 +16,7 @@ const settings = {
   enabled: true,
   binaryPath: process.env.T3_FACTORY_BINARY ?? "droid",
   apiKeyEtcdKey: process.env.T3_FACTORY_ETCD_KEY ?? "",
+  proxyUrl: "",
   customModels: [],
 };
 
