@@ -16,6 +16,7 @@ import type {
   UserInputQuestion,
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { mcpAppFromActivity, type McpAppReference } from "@t3tools/shared/mcpApp";
 import {
   commandDetailRepeatsCommand,
   extractCommandOutputText,
@@ -112,6 +113,8 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
   toolCallId?: string;
+  /** The MCP app a completed call captured; the row hosts it as an app. */
+  mcpApp?: McpAppReference;
   /**
    * One row per workflow run or per-turn batch of direct spawns, like web's
    * "Kicked off N subagents" CTA. Mobile has no Agents sheet, so the row
@@ -291,6 +294,38 @@ export function isContextCompactionActivityGroup(
 
 export function isSecretRequestActivityGroup(entry: ThreadFeedActivityGroup): boolean {
   return entry.activities.length === 1 && entry.activities[0]?.workEntry.secretRequest === true;
+}
+
+export function isMcpAppActivityGroup(entry: ThreadFeedActivityGroup): boolean {
+  return entry.activities.length === 1 && entry.activities[0]?.workEntry.mcpApp !== undefined;
+}
+
+/**
+ * The stored call a full-screen app renders, found by its tool call id. The
+ * app is read from the thread's own activities, never from the route, so a
+ * navigation can only open an app that call really produced.
+ */
+export function findMcpAppCall(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  toolCallId: string,
+):
+  | {
+      readonly app: McpAppReference;
+      readonly toolCall: { readonly arguments: unknown; readonly result: unknown };
+    }
+  | undefined {
+  const activity = activities.find((candidate) => {
+    const payload = asRecord(candidate.payload);
+    const id =
+      asTrimmedString(payload?.toolCallId) ?? asTrimmedString(asRecord(payload?.data)?.toolCallId);
+    return id === toolCallId;
+  });
+  if (activity === undefined) return undefined;
+  const app = mcpAppFromActivity(activity);
+  if (app === undefined) return undefined;
+  const data = asRecord(asRecord(activity.payload)?.data);
+  const item = asRecord(typeof data?.toolName === "string" ? (data.item ?? data) : data?.item);
+  return { app, toolCall: { arguments: item?.arguments, result: item?.result } };
 }
 
 function isUserInputActivityGroup(entry: ThreadFeedActivityGroup): boolean {
@@ -666,6 +701,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (toolData !== undefined) {
       entry.toolData = toolData;
     }
+    // Only the completed call carries the reference, so an app appears once
+    // its document was captured, never while the call is still running.
+    const app = mcpAppFromActivity(activity);
+    if (app) entry.mcpApp = app;
   }
   if (itemType) {
     entry.itemType = itemType;
@@ -1649,6 +1688,8 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
       entry.activity.workEntry.sourceActivityKind === "context-compaction" ||
       // A secret request/answered pair stands alone so the card can own it.
       entry.activity.workEntry.secretRequest === true ||
+      // An app row hosts its own live document; it never shares a group.
+      entry.activity.workEntry.mcpApp !== undefined ||
       entry.activity.workEntry.questionAnswer !== undefined;
     if (isStandalone || firstActivityEntry?.turnId !== entry.turnId) {
       flushGroup();
@@ -1778,7 +1819,9 @@ function deriveThreadFeedTurnFolds(
             entry.id !== terminalAssistantMessageId &&
             !(entry.type === "activity-group" && isUserInputActivityGroup(entry)) &&
             // A secret card must stay reachable even when its turn folds.
-            !(entry.type === "activity-group" && isSecretRequestActivityGroup(entry)),
+            !(entry.type === "activity-group" && isSecretRequestActivityGroup(entry)) &&
+            // An app row hosts a live document; folding it away would tear it down.
+            !(entry.type === "activity-group" && isMcpAppActivityGroup(entry)),
         )
         .map((entry) => entry.id),
     );
@@ -1971,6 +2014,8 @@ function activityRunTurnId(entry: ThreadFeedEntry): TurnId | null {
     !isContextCompactionActivityGroup(entry) &&
     // A secret card is its own surface; it never merges into a tool run.
     !isSecretRequestActivityGroup(entry) &&
+    // An app row is its own surface too; its document must not fold.
+    !isMcpAppActivityGroup(entry) &&
     !isUserInputActivityGroup(entry) &&
     entry.activities.every(
       (activity) => !activity.workEntry.agentSpawn && activity.workEntry.tone !== "error",
@@ -2141,6 +2186,7 @@ function appendPresentedFeedEntry(
   if (
     isContextCompactionActivityGroup(entry) ||
     isSecretRequestActivityGroup(entry) ||
+    isMcpAppActivityGroup(entry) ||
     isUserInputActivityGroup(entry)
   ) {
     result.push(entry);
