@@ -274,3 +274,25 @@ export async function shareLocalAttachment(input: {
     cached.preview.dispose();
   }
 }
+
+/**
+ * Shares bytes a client feature generated (an MCP app's download), through the
+ * same cache copy as downloads. False when sharing is unavailable, so the
+ * caller can refuse the request rather than pretend it succeeded.
+ */
+export async function shareGeneratedAttachment(input: {
+  readonly bytes: Uint8Array;
+  readonly attachment: AttachmentFileMetadata;
+  readonly signal: AbortSignal;
+}): Promise<boolean> {
+  if ((await availableSharing(input.signal)) === null) return false;
+  const cached = await createCachedAttachmentFile(input.attachment);
+  try {
+    if (input.signal.aborted) return false;
+    cached.file.write(input.bytes);
+    if (!input.signal.aborted) await cached.preview.share(input.signal);
+    return true;
+  } finally {
+    cached.preview.dispose();
+  }
+}

@@ -18,6 +18,8 @@ import {
   buildPendingUserInputAnswers,
   buildThreadFeed,
   deriveThreadFeedPresentation,
+  findMcpAppCall,
+  isMcpAppActivityGroup,
   isPendingUserInputOptionSelected,
   isSecretRequestActivityGroup,
   setPendingUserInputCustomAnswer,
@@ -3844,5 +3846,135 @@ describe("secret request activities", () => {
       expect(group.activities[0]?.workEntry.secretCard).toBeUndefined();
       expect(group.activities[0]?.workEntry.detail).toBeUndefined();
     }
+  });
+});
+
+describe("mcp app activities", () => {
+  const appPayload = (overrides?: Record<string, unknown>) => ({
+    itemType: "mcp_tool_call",
+    status: "completed",
+    toolCallId: "call-1",
+    mcpApp: {
+      attachmentId: "attach-1",
+      server: "demo",
+      tool: "render_chart",
+      resourceUri: "ui://demo/attach-1",
+    },
+    data: {
+      item: {
+        server: "demo",
+        tool: "render_chart",
+        arguments: { x: 1 },
+        result: { content: [{ type: "text", text: "ok" }] },
+      },
+    },
+    ...overrides,
+  });
+
+  const capturedApp = makeActivity({
+    id: EventId.make("app-call"),
+    kind: "tool.completed",
+    summary: "Rendered a chart",
+    createdAt: "2026-04-01T00:00:02.000Z",
+    turnId: TurnId.make("app-turn"),
+    payload: appPayload(),
+  });
+
+  it("a captured app is its own row, never folded into a tool run", () => {
+    const feed = buildThreadFeed(
+      makeThread({
+        id: ThreadId.make("app-thread"),
+        projectId: ProjectId.make("project-1"),
+        title: "App",
+        activities: [
+          makeActivity({
+            id: EventId.make("tool"),
+            kind: "tool.completed",
+            summary: "Read files",
+            createdAt: "2026-04-01T00:00:01.000Z",
+            turnId: TurnId.make("app-turn"),
+            payload: { itemType: "file_read", status: "completed", toolCallId: "call-0" },
+          }),
+          capturedApp,
+        ],
+      }),
+    );
+    const groups = feed.filter((entry) => entry.type === "activity-group");
+    const appGroup = groups.find((entry) => isMcpAppActivityGroup(entry));
+    expect(appGroup).toBeDefined();
+    expect(appGroup?.activities[0]?.workEntry.mcpApp).toMatchObject({
+      attachmentId: "attach-1",
+      server: "demo",
+      tool: "render_chart",
+    });
+    expect(appGroup?.activities[0]?.workEntry.toolCallId).toBe("call-1");
+    expect(appGroup?.activities).toHaveLength(1);
+    // The plain tool run stays its own group; the app row never merged in.
+    expect(groups).toHaveLength(2);
+  });
+
+  it("a call that captured no app, or failed, stays an ordinary work row", () => {
+    const feed = buildThreadFeed(
+      makeThread({
+        id: ThreadId.make("app-thread"),
+        projectId: ProjectId.make("project-1"),
+        title: "App",
+        activities: [
+          makeActivity({
+            id: EventId.make("plain"),
+            kind: "tool.completed",
+            summary: "Called a tool",
+            createdAt: "2026-04-01T00:00:01.000Z",
+            turnId: TurnId.make("app-turn"),
+            payload: appPayload({ mcpApp: undefined, toolCallId: "call-2" }),
+          }),
+          makeActivity({
+            id: EventId.make("failed"),
+            kind: "tool.completed",
+            summary: "Called a tool",
+            createdAt: "2026-04-01T00:00:02.000Z",
+            turnId: TurnId.make("app-turn"),
+            payload: appPayload({ status: "failed", toolCallId: "call-3" }),
+          }),
+        ],
+      }),
+    );
+    for (const entry of feed) {
+      if (entry.type !== "activity-group") continue;
+      for (const activity of entry.activities) {
+        expect(activity.workEntry.mcpApp).toBeUndefined();
+      }
+    }
+    expect(
+      feed.some((entry) => entry.type === "activity-group" && isMcpAppActivityGroup(entry)),
+    ).toBe(false);
+  });
+
+  it("findMcpAppCall reads the stored call by id, and only for one that captured an app", () => {
+    const activities = [
+      capturedApp,
+      makeActivity({
+        id: EventId.make("failed"),
+        kind: "tool.completed",
+        summary: "Called a tool",
+        createdAt: "2026-04-01T00:00:03.000Z",
+        turnId: TurnId.make("app-turn"),
+        payload: appPayload({ status: "failed", toolCallId: "call-3" }),
+      }),
+    ];
+    expect(findMcpAppCall(activities, "call-1")).toEqual({
+      app: {
+        attachmentId: "attach-1",
+        server: "demo",
+        tool: "render_chart",
+        resourceUri: "ui://demo/attach-1",
+      },
+      toolCall: {
+        arguments: { x: 1 },
+        result: { content: [{ type: "text", text: "ok" }] },
+      },
+    });
+    expect(findMcpAppCall(activities, "call-3")).toBeUndefined();
+    expect(findMcpAppCall(activities, "missing")).toBeUndefined();
   });
 });

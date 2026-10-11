@@ -152,10 +152,12 @@ import {
   deriveThreadFeedPresentation,
   deriveUnsettledTurnId,
   isContextCompactionActivityGroup,
+  isMcpAppActivityGroup,
   isSecretRequestActivityGroup,
   type ThreadFeedEntry,
   type ThreadFeedLatestTurn,
 } from "../../lib/threadActivity";
+import { mcpAppRowHeight, ThreadMcpApp } from "./McpAppWebView";
 import { SecretRequestCard } from "./SecretRequestCard";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
@@ -1573,6 +1575,35 @@ function renderFeedEntry(
     );
   }
 
+  // The app's captured document, hosted in its own row; the completed call is
+  // its identity, and its arguments and result reach it through the host.
+  if (entry.type === "activity-group" && isMcpAppActivityGroup(entry)) {
+    const activity = entry.activities[0]!;
+    const app = activity.workEntry.mcpApp;
+    const toolCallId = activity.workEntry.toolCallId;
+    if (app === undefined || toolCallId === undefined) return null;
+    const item =
+      activity.workEntry.toolData !== null && typeof activity.workEntry.toolData === "object"
+        ? (activity.workEntry.toolData as {
+            readonly arguments?: unknown;
+            readonly result?: unknown;
+          })
+        : undefined;
+    return (
+      <ThreadMcpApp
+        environmentId={props.environmentId}
+        threadId={props.threadId}
+        conversationThreadId={props.threadId}
+        toolCallId={toolCallId}
+        toolCall={
+          item === undefined ? undefined : { arguments: item.arguments, result: item.result }
+        }
+        app={app}
+        width={props.markdownContentWidth}
+      />
+    );
+  }
+
   if (entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) {
     const label = entry.activities[0]!.summary;
     return (
@@ -2902,6 +2933,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         case "activity-group":
           if (isContextCompactionActivityGroup(entry)) {
             return undefined;
+          }
+          // An app row is a fixed WebView box, exact before it ever mounts.
+          if (isMcpAppActivityGroup(entry)) {
+            return mcpAppRowHeight();
           }
           // Expanded rows append a variable detail block — fall back to
           // measurement for those groups.
