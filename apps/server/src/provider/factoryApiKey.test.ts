@@ -108,51 +108,57 @@ describe("factory API key resolver", () => {
     expect(factoryApiKeyFingerprint({})).toBe("");
   });
 
-  it("routes every Droid request through the configured proxy, loopback excepted", async () => {
-    const resolver = makeFactoryApiKeyResolver({
-      etcdKey: "",
-      proxyUrl: " http://127.0.0.1:2080 ",
-      baseEnvironment: { A: "1", HTTPS_PROXY: "http://stale:1" },
-    });
-    const env = await Effect.runPromise(resolver.environment);
-    for (const name of ["https_proxy", "http_proxy", "HTTPS_PROXY", "HTTP_PROXY"]) {
-      expect(env[name]).toBe("http://127.0.0.1:2080");
-    }
-    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
-    expect(env.A).toBe("1");
-  });
+  it.effect("routes every Droid request through the configured proxy, loopback excepted", () =>
+    Effect.gen(function* () {
+      const resolver = makeFactoryApiKeyResolver({
+        etcdKey: "",
+        proxyUrl: " http://127.0.0.1:2080 ",
+        baseEnvironment: { A: "1", HTTPS_PROXY: "http://stale:1" },
+      });
+      const env = yield* resolver.environment;
+      for (const name of ["https_proxy", "http_proxy", "HTTPS_PROXY", "HTTP_PROXY"]) {
+        expect(env[name]).toBe("http://127.0.0.1:2080");
+      }
+      expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
+      expect(env.A).toBe("1");
+    }),
+  );
 
-  it("keeps the proxy when the key comes from etcd, and falls back to xjp without one", async () => {
-    const resolver = makeFactoryApiKeyResolver({
-      etcdKey: "/droid/appkey",
-      proxyUrl: "http://127.0.0.1:2080",
-      baseEnvironment: {},
-      bootstrapPath,
-      fetchImpl: (async () => etcdReply("key-one")) as unknown as typeof fetch,
-    });
-    const env = await Effect.runPromise(resolver.environment);
-    expect(env.FACTORY_API_KEY).toBe("key-one");
-    expect(env.https_proxy).toBe("http://127.0.0.1:2080");
-    // A provider instance that never mentions a proxy still rides xjp rather
-    // than leaving the licensed region over a direct connection.
-    for (const fallback of [
-      withFactoryProxy({ A: "1" }, ""),
-      withFactoryProxy({ A: "1" }, undefined),
-    ]) {
-      expect(fallback.HTTPS_PROXY).toBe("http://127.0.0.1:2080");
-      expect(fallback.https_proxy).toBe("http://127.0.0.1:2080");
-      expect(fallback.A).toBe("1");
-    }
-  });
+  it.effect("keeps the proxy when the key comes from etcd, and falls back to xjp without one", () =>
+    Effect.gen(function* () {
+      const resolver = makeFactoryApiKeyResolver({
+        etcdKey: "/droid/appkey",
+        proxyUrl: "http://127.0.0.1:2080",
+        baseEnvironment: {},
+        bootstrapPath,
+        fetchImpl: (async () => etcdReply("key-one")) as unknown as typeof fetch,
+      });
+      const env = yield* resolver.environment;
+      expect(env.FACTORY_API_KEY).toBe("key-one");
+      expect(env.https_proxy).toBe("http://127.0.0.1:2080");
+      // A provider instance that never mentions a proxy still rides xjp rather
+      // than leaving the licensed region over a direct connection.
+      for (const fallback of [
+        withFactoryProxy({ A: "1" }, ""),
+        withFactoryProxy({ A: "1" }, undefined),
+      ]) {
+        expect(fallback.HTTPS_PROXY).toBe("http://127.0.0.1:2080");
+        expect(fallback.https_proxy).toBe("http://127.0.0.1:2080");
+        expect(fallback.A).toBe("1");
+      }
+    }),
+  );
 
-  it("honours an explicit proxy override away from xjp", async () => {
-    const resolver = makeFactoryApiKeyResolver({
-      etcdKey: "",
-      proxyUrl: "http://127.0.0.1:9999",
-      baseEnvironment: {},
-    });
-    const env = await Effect.runPromise(resolver.environment);
-    expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:9999");
-    expect(env.http_proxy).toBe("http://127.0.0.1:9999");
-  });
+  it.effect("honours an explicit proxy override away from xjp", () =>
+    Effect.gen(function* () {
+      const resolver = makeFactoryApiKeyResolver({
+        etcdKey: "",
+        proxyUrl: "http://127.0.0.1:9999",
+        baseEnvironment: {},
+      });
+      const env = yield* resolver.environment;
+      expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:9999");
+      expect(env.http_proxy).toBe("http://127.0.0.1:9999");
+    }),
+  );
 });
