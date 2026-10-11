@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   createAppUpdateDeferral,
@@ -69,6 +69,14 @@ function makeAvailableUpdateClient(overrides: Partial<AppUpdateClient> = {}): Ap
     ...overrides,
   });
 }
+
+beforeEach(() => {
+  vi.stubGlobal("__DEV__", false);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("runAppUpdateCheck", () => {
   it("does nothing while running from the Metro development server", async () => {

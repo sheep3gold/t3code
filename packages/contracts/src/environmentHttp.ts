@@ -54,6 +54,12 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
+import {
+  EnvironmentTranslatePayload,
+  EnvironmentTranslateResult,
+  EnvironmentTranslateUnavailableError,
+  EnvironmentTranslateUpstreamError,
+} from "./translate.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -608,7 +614,7 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
+class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
   .add(
     HttpApiEndpoint.get("list", "/api/artifacts", {
       headers: OptionalBearerHeaders,
@@ -700,7 +706,7 @@ const EnvironmentScheduleCreatePayload = Schema.Struct({
   skipDates: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 
-export class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")
+class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")
   .add(
     HttpApiEndpoint.get("list", "/api/schedules", {
       headers: OptionalBearerHeaders,
@@ -793,7 +799,7 @@ const EnvironmentWorkflowRestartPayload = Schema.Struct({
   fromStep: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
 });
 
-export class EnvironmentWorkflowsHttpApi extends HttpApiGroup.make("workflows")
+class EnvironmentWorkflowsHttpApi extends HttpApiGroup.make("workflows")
   .add(
     HttpApiEndpoint.get("list", "/api/workflows", {
       headers: OptionalBearerHeaders,
@@ -934,7 +940,7 @@ const EnvironmentLedgerUpdatePayload = Schema.Struct({
   event: Schema.optional(TrimmedNonEmptyString),
 });
 
-export class EnvironmentMemoryLedgerHttpApi extends HttpApiGroup.make("memoryLedger")
+class EnvironmentMemoryLedgerHttpApi extends HttpApiGroup.make("memoryLedger")
   .add(
     HttpApiEndpoint.get("listMemories", "/api/memories", {
       headers: OptionalBearerHeaders,
@@ -1014,6 +1020,29 @@ class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").a
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
+/**
+ * Chat translation proxy. Declared without the shared auth middleware on
+ * purpose: the desktop shell cannot send Authorization headers cross-origin
+ * from the t3code:// page origin, so the handler authenticates with the same
+ * `wsTicket` query-parameter fallback the /ws upgrade uses, on top of the
+ * bearer/DPoP/cookie credentials the middleware would have accepted.
+ */
+class EnvironmentTranslateHttpApi extends HttpApiGroup.make("translate").add(
+  HttpApiEndpoint.post("translate", "/api/translate", {
+    headers: OptionalBearerHeaders,
+    payload: EnvironmentTranslatePayload,
+    success: EnvironmentTranslateResult,
+    error: [
+      EnvironmentRequestInvalidError,
+      EnvironmentAuthInvalidError,
+      EnvironmentScopeRequiredError,
+      EnvironmentInternalError,
+      EnvironmentTranslateUnavailableError,
+      EnvironmentTranslateUpstreamError,
+    ],
+  }),
+) {}
+
 class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
     HttpApiEndpoint.post("linkProof", "/api/connect/link-proof", {
@@ -1084,4 +1113,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentWorkflowsHttpApi)
   .add(EnvironmentMemoryLedgerHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
+  .add(EnvironmentTranslateHttpApi)
   .add(EnvironmentConnectHttpApi) {}

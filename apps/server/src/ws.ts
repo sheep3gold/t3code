@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  DEFAULT_SERVER_SETTINGS,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
@@ -43,6 +44,7 @@ import {
   type OrchestrationShellStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
+  OrchestrationSearchThreadError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
@@ -60,8 +62,10 @@ import {
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   ServerSelfUpdateError,
+  ServerSkillFileError,
   type ServerSelfUpdateProgressEvent,
   type ServerLifecycleStreamEvent,
+  type ServerProvider,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -102,6 +106,8 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -117,6 +123,10 @@ import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
+import { deriveProviderInstanceConfigMap } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { disabledSkillNameSet, filterProviderDisabledSkills } from "./provider/sharedSkills.ts";
+import { deleteSkill, readSkill, upsertSkill } from "./provider/skillFiles.ts";
+import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -149,6 +159,10 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import {
+  publishMobileReinstallNotification,
+  shouldNotifyMobileReinstall,
+} from "./notifications/MsgHubMobileReinstall.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -427,6 +441,21 @@ const isClientWebDeployment = Schema.is(ClientWebDeployment);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
 const MAX_CLIENT_BROWSER_LENGTH = 64;
 const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
+const MAX_CLIENT_INSTALLED_AT_LENGTH = 64;
+
+// Mobile install anchor announced on the /ws upgrade URL. Same lenient contract
+// as the other client identity params: absent or malformed degrades to undefined
+// so a connection never fails over attribution metadata.
+function readClientInstalledAt(request: HttpServerRequest.HttpServerRequest): string | undefined {
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url)) {
+    return undefined;
+  }
+  const installedAt = url.value.searchParams.get("clientInstalledAt")?.trim() ?? "";
+  return installedAt !== "" && installedAt.length <= MAX_CLIENT_INSTALLED_AT_LENGTH
+    ? installedAt
+    : undefined;
+}
 
 // Optional client identity announced on the /ws upgrade URL next to wsTicket.
 // Lenient by design: absent or malformed values degrade to {} so a connection
@@ -517,6 +546,8 @@ const makeWsRpcLayer = (
               Effect.orElseSucceed(() => null),
             );
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const secretRequests = yield* SecretRequests.SecretRequests;
+      const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const threadDeletionReactor = yield* ThreadDeletionReactor;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
@@ -578,6 +609,83 @@ const makeWsRpcLayer = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+
+      /**
+       * Resolve the Claude home path from the same effective config map used
+       * to build provider instances (including synthesized legacy defaults).
+       * Non-Claude drivers have no supported writable skill directory.
+       */
+      const claudeHomePathForInstance = Effect.fn("claudeHomePathForInstance")(function* (
+        instanceId: string,
+        operation: "read" | "upsert" | "delete",
+        skillName: string,
+      ) {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSkillFileError({
+                operation,
+                instanceId: instanceId as ServerSkillFileError["instanceId"],
+                skillName,
+                reason: "Could not load server settings.",
+                cause,
+              }),
+          ),
+        );
+        const entries = deriveProviderInstanceConfigMap(settings);
+        const entry = entries[instanceId as keyof typeof entries];
+        if (!entry) {
+          return yield* new ServerSkillFileError({
+            operation,
+            instanceId: instanceId as ServerSkillFileError["instanceId"],
+            skillName,
+            reason: "Provider instance not found.",
+          });
+        }
+        if (entry.driver !== "claudeAgent") {
+          return yield* new ServerSkillFileError({
+            operation,
+            instanceId: instanceId as ServerSkillFileError["instanceId"],
+            skillName,
+            reason: `Skill file editing is only supported for Claude instances (this instance uses the "${entry.driver}" driver).`,
+          });
+        }
+        const config = (entry.config ?? {}) as { readonly homePath?: unknown };
+        return {
+          homePath: typeof config.homePath === "string" ? config.homePath : "",
+          environment: mergeProviderInstanceEnvironment(entry.environment),
+        };
+      });
+      const refreshSkillSnapshots = Effect.fn("refreshSkillSnapshots")(function* (
+        instanceId: ServerSkillFileError["instanceId"],
+        operation: "upsert" | "delete",
+        skillName: string,
+      ) {
+        const refreshError = (cause: unknown) =>
+          new ServerSkillFileError({
+            operation,
+            instanceId,
+            skillName,
+            reason: "The skill changed on disk, but its provider snapshot could not refresh.",
+            cause,
+          });
+        const providers = yield* providerRegistry
+          .refreshInstance(instanceId)
+          .pipe(Effect.mapError(refreshError));
+        // Composer prefers cached cwd snapshots over the instance-wide list.
+        const cwds =
+          providers
+            .find((provider) => provider.instanceId === instanceId)
+            ?.workspaceSnapshots?.map((snapshot) => snapshot.cwd) ?? [];
+        yield* Effect.forEach(
+          cwds,
+          (cwd) =>
+            providerRegistry
+              .refreshWorkspaceSnapshot({ instanceId, cwd, force: true })
+              .pipe(Effect.mapError(refreshError)),
+          { concurrency: 2, discard: true },
+        );
+      });
       const canReplayPersistedRange = Effect.fnUntraced(function* (
         afterSequence: number,
         headSequence: number,
@@ -1806,18 +1914,33 @@ const makeWsRpcLayer = (
           );
       };
 
+      // Skills the user disabled never leave the server: snapshots and update
+      // streams alike pass through this filter so every client surface — the
+      // `$` menu, settings, third-party consumers — sees the same list.
+      const withDisabledSkillsFiltered = (
+        providers: ReadonlyArray<ServerProvider>,
+        disabledSkills: ReadonlyArray<string>,
+      ): ReadonlyArray<ServerProvider> => {
+        const disabled = disabledSkillNameSet(disabledSkills);
+        if (disabled.size === 0) return providers;
+        return providers.map((provider) => filterProviderDisabledSkills(provider, disabled));
+      };
+
       // Only clients that answer /usage-limits themselves see it in the catalogs;
       // an older client would send the injected command to the provider.
       const loadServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
         Effect.gen(function* () {
           const keybindingsConfig = yield* keybindings.loadConfigState;
-          const currentProviders = yield* providerRegistry.getProviders;
-          const providers = options.usageLimitsCommand
-            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
-            : currentProviders;
           const settings = ServerSettings.redactServerSettingsForClient(
             yield* serverSettings.getSettings,
           );
+          const currentProviders = withDisabledSkillsFiltered(
+            yield* providerRegistry.getProviders,
+            settings.disabledSkills,
+          );
+          const providers = options.usageLimitsCommand
+            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
+            : currentProviders;
           const environment = yield* serverEnvironment.getDescriptor;
           const auth = yield* serverAuth.getDescriptor();
           const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
@@ -1868,6 +1991,7 @@ const makeWsRpcLayer = (
             threadResumeCompletionMarker: true,
             threadSnapshotPagination: true,
             reasoningMessages: true,
+            threadFind: true,
           };
         });
 
@@ -2012,6 +2136,30 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.searchThread]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.searchThread,
+            projectionSnapshotQuery.searchThread(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationSearchThreadError({
+                    message: "Failed to search this thread",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.answerSecretRequest]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.answerSecretRequest,
+            secretRequests.answer(input),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
+        [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
+        [WS_METHODS.mcpAppsReadResource]: (input) => mcpAppRequests.readResource(input),
+        [WS_METHODS.mcpAppsUpdateModelContext]: (input) => mcpAppRequests.updateModelContext(input),
         [ORCHESTRATION_WS_METHODS.subscribeShell]: (input) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
@@ -2430,7 +2578,16 @@ const makeWsRpcLayer = (
                   providers = yield* providerRegistry.refreshInstance(instance.instanceId);
                 }
               }
-              return { providers };
+              return {
+                // A settings-read failure must not fail the refresh: the
+                // caller then just sees the unfiltered list.
+                providers: withDisabledSkillsFiltered(
+                  providers,
+                  (yield* serverSettings.getSettings.pipe(
+                    Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+                  )).disabledSkills,
+                ),
+              };
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -2630,6 +2787,69 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverSkillRead]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillRead,
+            Effect.gen(function* () {
+              const { homePath, environment } = yield* claudeHomePathForInstance(
+                input.instanceId,
+                "read",
+                input.name,
+              );
+              return yield* readSkill({
+                instanceId: input.instanceId,
+                homePath,
+                environment,
+                name: input.name,
+              });
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSkillUpsert]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillUpsert,
+            Effect.gen(function* () {
+              const { homePath, environment } = yield* claudeHomePathForInstance(
+                input.instanceId,
+                "upsert",
+                input.name,
+              );
+              const document = yield* upsertSkill({
+                instanceId: input.instanceId,
+                homePath,
+                environment,
+                name: input.name,
+                description: input.description,
+                body: input.body,
+                ...(input.previousName !== undefined ? { previousName: input.previousName } : {}),
+              });
+              yield* refreshSkillSnapshots(input.instanceId, "upsert", input.name);
+              return document;
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSkillDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillDelete,
+            Effect.gen(function* () {
+              const { homePath, environment } = yield* claudeHomePathForInstance(
+                input.instanceId,
+                "delete",
+                input.name,
+              );
+              const result = yield* deleteSkill({
+                instanceId: input.instanceId,
+                homePath,
+                environment,
+                name: input.name,
+              });
+              if (result.deleted) {
+                yield* refreshSkillSnapshots(input.instanceId, "delete", input.name);
+              }
+              return result;
+            }),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
@@ -3623,10 +3843,29 @@ const makeWsRpcLayer = (
               const providerStatuses = Stream.zipLatestWith(
                 // The registry stream carries changes only. Seed it with the current
                 // providers so a source refresh that lands before any provider change
-                // still pairs up and reaches the client.
-                Stream.concat(
-                  Stream.fromEffect(providerRegistry.getProviders),
-                  providerRegistry.streamChanges,
+                // still pairs up and reaches the client. Zipping with the settings
+                // stream means a `disabledSkills` toggle republishes the filtered
+                // list even though the registry itself never saw a probe change.
+                Stream.zipLatest(
+                  Stream.concat(
+                    Stream.fromEffect(providerRegistry.getProviders),
+                    providerRegistry.streamChanges,
+                  ),
+                  // The live settings stream is change-only, same as the
+                  // registry stream above. Without the current-settings seed
+                  // the zip never pairs, so provider statuses would not
+                  // stream to clients until the first settings edit.
+                  Stream.concat(
+                    Stream.fromEffect(serverSettings.getSettings),
+                    serverSettings.streamChanges,
+                  ),
+                ).pipe(
+                  Stream.map(([providers, settings]) =>
+                    withDisabledSkillsFiltered(providers, settings.disabledSkills),
+                  ),
+                  Stream.changesWith(
+                    (previous, next) => JSON.stringify(previous) === JSON.stringify(next),
+                  ),
                 ),
                 usageLimitSources.streamChanges.pipe(
                   // Quota updates already have their own stream. Republish the model
@@ -3839,7 +4078,32 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         );
         const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);
-        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+        const clientInstalledAt = readClientInstalledAt(request);
+        const connectionRecord = yield* sessions.recordClientConnection(session.sessionId, {
+          ...clientOrigin,
+          ...(clientInstalledAt !== undefined ? { installedAt: clientInstalledAt } : {}),
+        });
+        if (
+          clientOrigin.surface === "mobile" &&
+          clientInstalledAt !== undefined &&
+          shouldNotifyMobileReinstall({
+            surface: clientOrigin.surface,
+            installedAt: clientInstalledAt,
+            previousInstalledAt: connectionRecord.previousInstalledAt,
+          })
+        ) {
+          // Fire-and-forget: the reinstall notification must never affect the connect path.
+          void publishMobileReinstallNotification({
+            installedAt: clientInstalledAt,
+            ...(clientAnalyticsProps.deviceModel
+              ? { deviceModel: clientAnalyticsProps.deviceModel }
+              : {}),
+            ...(clientAnalyticsProps.clientOs ? { os: clientAnalyticsProps.clientOs } : {}),
+            ...(clientAnalyticsProps.appVersion
+              ? { appVersion: clientAnalyticsProps.appVersion }
+              : {}),
+          });
+        }
         yield* analytics.record("client.connected", clientAnalyticsProps);
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;

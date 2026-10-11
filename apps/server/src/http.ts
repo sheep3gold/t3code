@@ -55,6 +55,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { readInstanceUsageLimits } from "./usage/usageQuotaProbe.ts";
+import { dayInZone, foldDailyUsage, isDay, shiftDay } from "./usage/usageHistory.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
@@ -62,6 +63,19 @@ const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
 const PROVIDER_MODELS_PATH = "/api/provider-models";
 /** Trailing window the usage summary attributes to each configured instance. */
 const PROVIDER_USAGE_SUMMARY_DAYS = 7;
+/**
+ * The usage history rows bucket into this reporting zone, so a turn lands on
+ * the day the page's readers experienced it. Fixed rather than client-supplied:
+ * every caller of this endpoint shares one chart, and mixing zones would make
+ * its days incomparable.
+ */
+const PROVIDER_USAGE_HISTORY_TIME_ZONE = "Asia/Shanghai";
+/**
+ * Longest history window offered. Must stay at or below the scan cache
+ * retention (`CACHE_RETENTION_DAYS` in UsageService): beyond it every request
+ * re-parses the whole window's transcripts cold.
+ */
+const PROVIDER_USAGE_HISTORY_MAX_DAYS = 90;
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -423,6 +437,139 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
     const providers = yield* providerRegistry.getProviders;
     const usageLimitSourceSnapshots = yield* usageLimitSources.current;
     const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+
+    // Lazy-loading modes for the model-usage page and the mini program:
+    // `scope=index` answers with identities only (no scans, no probes) so the
+    // client can paint cards at once; `instance=<id>` computes just that card,
+    // and `refresh=1` additionally skips the quota-probe cache.
+    const requestUrl = HttpServerRequest.toURL(request);
+    const params = Option.isSome(requestUrl)
+      ? requestUrl.value.searchParams
+      : new URLSearchParams();
+    const scope = params.get("scope");
+    const instanceParam = params.get("instance");
+    const refresh = params.get("refresh") === "1";
+    const accountEntries = usageLimitSourceSnapshots.flatMap((source) =>
+      source.accounts.map((account) => ({
+        id: `${source.id}:${account.id}`,
+        driver: account.driver,
+        displayName: account.plan ?? source.label,
+        modelCount: 0,
+        state: "ready" as const,
+        usageLimits: account.usageLimits,
+      })),
+    );
+    const providerIdentity = (provider: (typeof providers)[number]) => ({
+      id: provider.instanceId,
+      driver: provider.driver,
+      displayName: provider.displayName ?? provider.driver,
+      modelCount: provider.models.length,
+      state: provider.status,
+    });
+    if (scope === "index") {
+      return HttpServerResponse.jsonUnsafe({
+        providers: [
+          ...providers.map(providerIdentity),
+          ...accountEntries.map((entry) => ({
+            id: entry.id,
+            driver: entry.driver,
+            displayName: entry.displayName,
+            modelCount: entry.modelCount,
+            state: entry.state,
+          })),
+        ],
+        readAt: DateTime.formatIso(yield* DateTime.now),
+      });
+    }
+    if (scope === "history") {
+      // Daily rows for the model-usage page's chart: one entry per calendar
+      // day, zero-filled, folded from the same transcript scan the usage page
+      // reads. Unlike the quota probes this is a local, warm-cached scan, so
+      // the page may poll it without hammering any upstream.
+      const daysParam = Number.parseInt(params.get("days") ?? "", 10);
+      const days = Number.isFinite(daysParam)
+        ? Math.min(PROVIDER_USAGE_HISTORY_MAX_DAYS, Math.max(1, daysParam))
+        : PROVIDER_USAGE_HISTORY_MAX_DAYS;
+      const untilParam = params.get("untilDay");
+      if (untilParam !== null && !isDay(untilParam)) {
+        return HttpServerResponse.jsonUnsafe({ error: "invalid untilDay" }, { status: 400 });
+      }
+      // `untilDay` defaults to today in the reporting zone; an explicit value
+      // is the caller's own window (a future day simply yields zero rows).
+      const untilDay =
+        untilParam ??
+        dayInZone(DateTime.toEpochMillis(yield* DateTime.now), PROVIDER_USAGE_HISTORY_TIME_ZONE);
+      const sinceDay = shiftDay(untilDay, -(days - 1));
+      const scanned = yield* usageService
+        .readSummary({
+          sinceDay,
+          untilDay,
+          timeZone: PROVIDER_USAGE_HISTORY_TIME_ZONE,
+          resolution: "day",
+        })
+        .pipe(
+          Effect.catch((error: UsageReadError) =>
+            Effect.logWarning("Provider usage history scan failed", {
+              detail: error.detail,
+            }).pipe(Effect.as(null)),
+          ),
+        );
+      return HttpServerResponse.jsonUnsafe({
+        timeZone: PROVIDER_USAGE_HISTORY_TIME_ZONE,
+        sinceDay,
+        untilDay,
+        days: foldDailyUsage(scanned?.buckets ?? [], sinceDay, untilDay),
+        available: scanned !== null,
+        readAt: scanned?.readAt ?? DateTime.formatIso(yield* DateTime.now),
+      });
+    }
+    if (instanceParam !== null) {
+      const provider = providers.find((candidate) => candidate.instanceId === instanceParam);
+      const account = accountEntries.find((entry) => entry.id === instanceParam);
+      if (provider === undefined && account === undefined) {
+        return HttpServerResponse.jsonUnsafe({ error: "unknown instance" }, { status: 404 });
+      }
+      const readAtNow = DateTime.formatIso(yield* DateTime.now);
+      if (provider === undefined || account !== undefined) {
+        // A limit-source account carries its windows already and has no
+        // transcript home to attribute usage to.
+        return HttpServerResponse.jsonUnsafe({
+          provider: { ...account, usage: { available: false } },
+          readAt: readAtNow,
+        });
+      }
+      const scanned = yield* usageService.readInstances({ days: PROVIDER_USAGE_SUMMARY_DAYS }).pipe(
+        Effect.catch((error: UsageReadError) =>
+          Effect.logWarning("Provider usage attribution scan failed", {
+            detail: error.detail,
+          }).pipe(Effect.as(null)),
+        ),
+      );
+      const usage = scanned?.instances.find(
+        (instance) => instance.instanceId === provider.instanceId,
+      )?.usage;
+      const limits =
+        settings === null
+          ? undefined
+          : yield* readInstanceUsageLimits(settings, provider.instanceId, {
+              refresh,
+              stateDir,
+            }).pipe(Effect.orElseSucceed(() => undefined));
+      return HttpServerResponse.jsonUnsafe({
+        provider: {
+          ...providerIdentity(provider),
+          usage: usage ?? { available: false },
+          usageLimits: limits ??
+            provider.usageLimits ?? {
+              checkedAt: scanned?.readAt ?? readAtNow,
+              windows: [],
+              unavailable: { reason: "unsupported" },
+            },
+        },
+        readAt: scanned?.readAt ?? readAtNow,
+      });
+    }
 
     // Attribution is best-effort: a scan failure must not blank the provider
     // state and usage-limits data the caller can still use.
@@ -453,7 +600,7 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
         (provider) =>
           settings === null
             ? Effect.succeed([provider.instanceId, undefined] as const)
-            : readInstanceUsageLimits(settings, provider.instanceId).pipe(
+            : readInstanceUsageLimits(settings, provider.instanceId, { stateDir }).pipe(
                 Effect.map((limits) => [provider.instanceId, limits] as const),
                 Effect.orElseSucceed(() => [provider.instanceId, undefined] as const),
               ),

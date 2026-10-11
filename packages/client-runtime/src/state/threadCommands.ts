@@ -1,4 +1,5 @@
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/unstable/reactivity";
 import {
   WS_METHODS,
@@ -29,6 +30,8 @@ import {
   type PinThreadInput,
   type ReorderPinnedThreadInput,
   type ReorderActiveThreadInput,
+  type MarkThreadReadInput,
+  type MarkThreadUnreadInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
   type StartThreadTurnInput,
@@ -53,6 +56,8 @@ import {
   pinThread,
   reorderPinnedThread,
   reorderActiveThread,
+  markThreadRead,
+  markThreadUnread,
   settleThread,
   snoozeThread,
   startThreadTurn,
@@ -81,6 +86,8 @@ export type {
   PinThreadInput,
   ReorderPinnedThreadInput,
   ReorderActiveThreadInput,
+  MarkThreadReadInput,
+  MarkThreadUnreadInput,
   SettleThreadInput,
   SnoozeThreadInput,
   StartThreadTurnInput,
@@ -173,6 +180,18 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:reorder-active",
       execute: (input: ReorderActiveThreadInput) => reorderActiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    markRead: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:mark-read",
+      execute: (input: MarkThreadReadInput) => markThreadRead(input),
+      scheduler,
+      concurrency,
+    }),
+    markUnread: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:mark-unread",
+      execute: (input: MarkThreadUnreadInput) => markThreadUnread(input),
       scheduler,
       concurrency,
     }),
@@ -329,5 +348,19 @@ export function createThreadEnvironmentAtoms<R, E>(
       ...thread,
       activeOrderKey: input.orderKey,
     })),
+    // Mirrors the decider: reads only move forward, unread rewinds to just
+    // before the latest completion.
+    markRead: optimistic.wrap(commands.markRead, (thread, input) => {
+      const currentMs = Date.parse(thread.lastReadAt ?? "");
+      return Number.isFinite(currentMs) && currentMs >= Date.parse(input.readAt)
+        ? thread
+        : { ...thread, lastReadAt: input.readAt };
+    }),
+    markUnread: optimistic.wrap(commands.markUnread, (thread) => {
+      const completedMs = Date.parse(thread.latestTurn?.completedAt ?? "");
+      return Number.isFinite(completedMs)
+        ? { ...thread, lastReadAt: DateTime.formatIso(DateTime.makeUnsafe(completedMs - 1)) }
+        : thread;
+    }),
   };
 }

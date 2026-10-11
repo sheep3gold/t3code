@@ -1,4 +1,10 @@
 import { ArrowUpIcon, ClockIcon } from "lucide-react";
+import { McpAppFrame } from "./McpAppFrame";
+import { ThreadFindTimelineContext } from "./ThreadFindProvider";
+import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
+import { type ThreadFindMatch, type ThreadFindPositionReader } from "./threadFind";
+import { useThreadFindNavigation } from "./useThreadFindNavigation";
+import { readThreadFindPosition } from "./threadFindPosition";
 import { ReadOnlySourcePreview } from "../files/AttachmentFilePreview";
 import { useRightPanelStore } from "~/rightPanelStore";
 import {
@@ -47,6 +53,9 @@ import {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
+const NOOP_TRANSLATION_FOR_MESSAGE = (_messageId: string) => undefined;
+const NOOP_TRANSLATION_PENDING_FOR = (_messageId: string) => false;
+const NOOP_TRANSLATE_MESSAGE = (_messageId: string) => {};
 const NOOP_OPEN_AGENTS = () => {};
 const EMPTY_QUEUED_MESSAGES: ReadonlyArray<QueuedComposerMessage> = [];
 const NOOP_QUEUED_MESSAGE_ACTION = (_id: string) => {};
@@ -62,6 +71,7 @@ import {
   memo,
   use,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -120,6 +130,7 @@ import {
   EyeIcon,
   GlobeIcon,
   HammerIcon,
+  LanguagesIcon,
   MessageCircleIcon,
   Minimize2Icon,
   MousePointerClickIcon,
@@ -279,6 +290,7 @@ interface TimelineRowSharedState {
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  findActive: boolean;
   onFileOpen: (attachment: ChatFileAttachment) => void;
   onFileDownload: (attachment: ChatFileAttachment) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
@@ -299,6 +311,17 @@ interface TimelineRowSharedState {
   onSteerQueuedMessage: (id: string) => void;
   steerQueuedMessageShortcutLabel: string | null;
   onRemoveQueuedMessage: (id: string) => void;
+  translationAvailable: boolean;
+  translationForMessage: (messageId: string) => string | undefined;
+  translationPendingFor: (messageId: string) => boolean;
+  onTranslateMessage: (messageId: string) => void;
+  /** Queues a message from an MCP app, exactly like a queued follow-up. */
+  onSendAppMessage?: ((text: string) => Promise<void>) | undefined;
+  /** A full-screen MCP app row is pinned outside virtualization. */
+  mcpAppFullscreenRowKey: string | null;
+  onMcpAppFullscreenChange: ((rowKey: string, fullscreen: boolean) => void) | undefined;
+  /** The agent waits on the user, in a panel a full-screen app would cover. */
+  awaitingUser: boolean | undefined;
 }
 
 interface TimelineRowActivityState {
@@ -464,13 +487,47 @@ interface MessagesTimelineProps {
   onSteerQueuedMessage?: (id: string) => void;
   steerQueuedMessageShortcutLabel?: string | null;
   onRemoveQueuedMessage?: (id: string) => void;
+  /** Per-message translation into Chinese; each row renders its own translate button. */
+  translationAvailable?: boolean;
+  translationForMessage?: (messageId: string) => string | undefined;
+  translationPendingFor?: (messageId: string) => boolean;
+  onTranslateMessage?: (messageId: string) => void;
+  /** Queues a message from an MCP app, exactly like a queued follow-up. */
+  onSendAppMessage?: ((text: string) => Promise<void>) | undefined;
+  /** A full-screen MCP app row is pinned outside virtualization. */
+  mcpAppFullscreenRowKey?: string | null;
+  onMcpAppFullscreenChange?: ((rowKey: string, fullscreen: boolean) => void) | undefined;
+  /** The agent waits on the user, in a panel a full-screen app would cover. */
+  awaitingUser?: boolean | undefined;
+  findOpen?: boolean;
+  findPositionReaderRef?: React.RefObject<ThreadFindPositionReader | null>;
+  findExpanded?: boolean;
+  findQuery?: string;
+  activeFindMatch?: ThreadFindMatch | null;
+  findNavigationId?: number;
 }
 
 // ---------------------------------------------------------------------------
 // MessagesTimeline — list owner
 // ---------------------------------------------------------------------------
 
-export const MessagesTimeline = memo(function MessagesTimeline({
+export function MessagesTimeline(props: MessagesTimelineProps) {
+  const find = useContext(ThreadFindTimelineContext);
+  const findOpen = find?.findOpen ?? props.findOpen ?? false;
+  const { onManualNavigation } = props;
+  useEffect(() => {
+    if (findOpen) onManualNavigation();
+  }, [findOpen, onManualNavigation]);
+  return (
+    <ConversationTimeline
+      {...props}
+      {...find}
+      liveFollowEnabled={!findOpen && props.liveFollowEnabled}
+    />
+  );
+}
+
+const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistoryLoading = false,
   onCiteAssistantText,
@@ -486,6 +543,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAgents = NOOP_OPEN_AGENTS,
   listRef,
   timelineEntries,
+  findExpanded = false,
+  findQuery = "",
+  activeFindMatch = null,
+  findNavigationId = 0,
+  findPositionReaderRef,
   latestTurn,
   runningTurnId,
   turnDiffSummaries,
@@ -521,6 +583,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
   steerQueuedMessageShortcutLabel = null,
   onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
+  translationAvailable = true,
+  translationForMessage,
+  translationPendingFor,
+  onTranslateMessage,
+  onSendAppMessage,
+  mcpAppFullscreenRowKey = null,
+  onMcpAppFullscreenChange,
+  awaitingUser,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -598,6 +668,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
+  const normalizedFindQuery = findQuery.trim();
+  const findActive = findExpanded;
   useEffect(() => {
     return () => {
       if (disclosureSettleFrameRef.current !== null) {
@@ -950,8 +1022,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onExpandTurn: expandCitedTurn,
     onManualNavigation,
   });
+  const [findListReady, setFindListReady] = useState(false);
+  const handleListLoad = useCallback(() => {
+    onCitationListLoad();
+    setFindListReady(true);
+  }, [onCitationListLoad]);
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
-  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender;
+  // A full-screen app's row stays mounted even while the list is recycling;
+  // unmounting the frame would drop the app's session.
+  const mcpAppAlwaysRender = useMemo(
+    () => (mcpAppFullscreenRowKey !== null ? { keys: [mcpAppFullscreenRowKey] } : undefined),
+    [mcpAppFullscreenRowKey],
+  );
+  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender ?? mcpAppAlwaysRender;
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const [minimapCurrentIndex, setMinimapCurrentIndex] = useState<number | null>(null);
   const handleAnchorReady = useCallback(
@@ -975,6 +1058,49 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => <TimelineListFooter composerInset={anchoredEndSpace ? 0 : contentInsetEndAdjustment} />,
     [anchoredEndSpace, contentInsetEndAdjustment],
   );
+
+  // Fork rows map one-to-one to entries by id, so both the position reader and
+  // the navigation hook resolve matches straight from the row id.
+  useLayoutEffect(() => {
+    if (!findPositionReaderRef || !timelineViewportElement) return;
+    const read: ThreadFindPositionReader = (query) => {
+      const entryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
+      return readThreadFindPosition(
+        timelineViewportElement,
+        query,
+        (rowId) => {
+          const entry = entryById.get(rowId);
+          return entry && (entry.kind === "message" || entry.kind === "proposed-plan")
+            ? entry.id
+            : undefined;
+        },
+        contentInsetEndAdjustment,
+      );
+    };
+    findPositionReaderRef.current = read;
+    return () => {
+      if (findPositionReaderRef.current === read) findPositionReaderRef.current = null;
+    };
+  }, [contentInsetEndAdjustment, findPositionReaderRef, timelineEntries, timelineViewportElement]);
+
+  useThreadFindNavigation({
+    listReady: findListReady,
+    historyControls: loadEarlier
+      ? {
+          hasMoreHistory: true,
+          loading: loadEarlier.loading,
+          onLoadEarlier: loadEarlier.onLoadEarlier,
+        }
+      : undefined,
+    entries: timelineEntries,
+    container: timelineViewportElement,
+    query: normalizedFindQuery,
+    match: activeFindMatch,
+    navigationId: findNavigationId,
+    rowIndex: activeFindMatch ? rows.findIndex((row) => row.id === activeFindMatch.entryId) : -1,
+    listRef,
+    contentInsetEndAdjustment,
+  });
 
   const measureContentOverflow = useCallback(
     () =>
@@ -1140,6 +1266,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertToTurnCount,
       onUseArtifactTemplate,
       onImageExpand,
+      findActive,
       onFileOpen,
       onFileDownload,
       openPullRequest,
@@ -1160,6 +1287,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
+      translationAvailable,
+      translationForMessage: translationForMessage ?? NOOP_TRANSLATION_FOR_MESSAGE,
+      translationPendingFor: translationPendingFor ?? NOOP_TRANSLATION_PENDING_FOR,
+      onTranslateMessage: onTranslateMessage ?? NOOP_TRANSLATE_MESSAGE,
+      onSendAppMessage,
+      mcpAppFullscreenRowKey,
+      onMcpAppFullscreenChange,
+      awaitingUser,
     }),
     [
       readyCitationRequest,
@@ -1175,6 +1310,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertToTurnCount,
       onUseArtifactTemplate,
       onImageExpand,
+      findActive,
       onFileOpen,
       onFileDownload,
       openPullRequest,
@@ -1195,6 +1331,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
+      translationAvailable,
+      translationForMessage,
+      translationPendingFor,
+      onTranslateMessage,
+      onSendAppMessage,
+      mcpAppFullscreenRowKey,
+      onMcpAppFullscreenChange,
+      awaitingUser,
     ],
   );
   const backgroundWorktreeSetup =
@@ -1256,92 +1400,97 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <TimelineRowCtx value={sharedState}>
-      <TimelineRowActivityCtx value={activityState}>
-        <div
-          ref={setTimelineViewportElement}
-          className="relative h-full min-h-0"
-          data-assistant-citation-viewport="true"
-        >
-          {onCiteAssistantText && citationThreadRef ? (
-            <AssistantSelectionToolbar
-              viewport={timelineViewportElement}
-              threadRef={citationThreadRef}
-              onCite={onCiteAssistantText}
+    <MarkdownFindContext value={findActive}>
+      <TimelineRowCtx value={sharedState}>
+        <TimelineRowActivityCtx value={activityState}>
+          <div
+            ref={setTimelineViewportElement}
+            className="relative h-full min-h-0"
+            data-assistant-citation-viewport="true"
+          >
+            {onCiteAssistantText && citationThreadRef ? (
+              <AssistantSelectionToolbar
+                viewport={timelineViewportElement}
+                threadRef={citationThreadRef}
+                onCite={onCiteAssistantText}
+              />
+            ) : null}
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              extraData={`${listIdentityKey}:${rows.length}`}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd={
+                !findActive && citationRequest === null && rememberedPosition?.atEnd !== false
+              }
+              // Legend needs a data refresh to mount new pins without a scroll event.
+              dataVersion={readyCitationRequest?.key ?? listIdentityKey}
+              {...(alwaysRender ? { alwaysRender } : {})}
+              onLoad={handleListLoad}
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
+              maintainScrollAtEnd={
+                citationPositioning ||
+                (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
+                anchoredEndSpace ||
+                !liveFollowEnabled ||
+                disclosureToggleSettling
+                  ? false
+                  : isWorking && !prefersReducedMotion && settlingListIdentity === null
+                    ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
+                    : TIMELINE_MAINTAIN_SCROLL_AT_END
+              }
+              maintainVisibleContentPosition={
+                findActive ||
+                citationPositioning ||
+                (restoringThreadPosition && rememberedPosition?.atEnd === false)
+                  ? false
+                  : maintainVisibleContentPosition
+              }
+              maintainScrollAtEndThreshold={1}
+              onScroll={handleScroll}
+              onItemSizeChanged={reportContentOverflow}
+              className={cn(
+                "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                topFadeEnabled && "topbar-scroll-fade",
+              )}
+              ListHeaderComponent={
+                loadEarlier !== null ? (
+                  <TimelineLoadEarlierHeader
+                    loading={loadEarlier.loading}
+                    onLoadEarlier={loadEarlier.onLoadEarlier}
+                    fade={topFadeEnabled}
+                  />
+                ) : topFadeEnabled ? (
+                  TIMELINE_LIST_FADE_HEADER
+                ) : (
+                  TIMELINE_LIST_HEADER
+                )
+              }
+              ListFooterComponent={timelineListFooter}
             />
-          ) : null}
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            extraData={`${listIdentityKey}:${rows.length}`}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd={citationRequest === null && rememberedPosition?.atEnd !== false}
-            // Legend needs a data refresh to mount new pins without a scroll event.
-            dataVersion={readyCitationRequest?.key ?? listIdentityKey}
-            {...(alwaysRender ? { alwaysRender } : {})}
-            onLoad={onCitationListLoad}
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
-            maintainScrollAtEnd={
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
-              anchoredEndSpace ||
-              !liveFollowEnabled ||
-              disclosureToggleSettling
-                ? false
-                : isWorking && !prefersReducedMotion && settlingListIdentity === null
-                  ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
-                  : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false)
-                ? false
-                : maintainVisibleContentPosition
-            }
-            maintainScrollAtEndThreshold={1}
-            onScroll={handleScroll}
-            onItemSizeChanged={reportContentOverflow}
-            className={cn(
-              "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "topbar-scroll-fade",
-            )}
-            ListHeaderComponent={
-              loadEarlier !== null ? (
-                <TimelineLoadEarlierHeader
-                  loading={loadEarlier.loading}
-                  onLoadEarlier={loadEarlier.onLoadEarlier}
-                  fade={topFadeEnabled}
-                />
-              ) : topFadeEnabled ? (
-                TIMELINE_LIST_FADE_HEADER
-              ) : (
-                TIMELINE_LIST_HEADER
-              )
-            }
-            ListFooterComponent={timelineListFooter}
-          />
-          <TimelineMinimap
-            items={minimapItems}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            currentIndex={minimapCurrentIndex}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
-        </div>
-      </TimelineRowActivityCtx>
-    </TimelineRowCtx>
+            <TimelineMinimap
+              items={minimapItems}
+              hasPersistentGutter={minimapHasPersistentGutter}
+              hitStripWidth={minimapHitStripWidth}
+              currentIndex={minimapCurrentIndex}
+              stripMap={minimapStripMap}
+              onSelect={(item) => {
+                onManualNavigation();
+                void listRef.current?.scrollToIndex({
+                  index: item.rowIndex,
+                  animated: true,
+                  viewOffset: 24,
+                });
+              }}
+            />
+          </div>
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>
+    </MarkdownFindContext>
   );
 });
 
@@ -1702,6 +1851,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
           displayLabel={row.displayLabel}
         />
       ) : null}
+      {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
       {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
       {row.kind === "activity-group" ? <ActivityGroupTimelineRow row={row} /> : null}
       {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
@@ -1723,6 +1873,43 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
+
+/**
+ * The row an app-producing tool call leaves behind. The entry's tool data
+ * carries the call's arguments and result, which the app receives at
+ * initialize as the call it was created by.
+ */
+function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mcp-app" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const { entry } = row;
+  const app = entry.mcpApp;
+  const threadId = ctx.threadRef?.threadId;
+  const toolCall = useMemo(() => {
+    const item =
+      entry.toolData !== null && typeof entry.toolData === "object"
+        ? (entry.toolData as { readonly arguments?: unknown; readonly result?: unknown })
+        : undefined;
+    return item === undefined ? undefined : { arguments: item.arguments, result: item.result };
+  }, [entry.toolData]);
+  if (app === undefined || threadId === undefined || entry.toolCallId === undefined) return null;
+  return (
+    <McpAppFrame
+      environmentId={ctx.activeThreadEnvironmentId}
+      threadId={threadId}
+      conversationThreadId={threadId}
+      toolCallId={entry.toolCallId}
+      toolCall={toolCall}
+      app={app}
+      onSendMessage={ctx.onSendAppMessage}
+      awaitingUser={ctx.awaitingUser}
+      onFullscreenChange={
+        ctx.onMcpAppFullscreenChange === undefined
+          ? undefined
+          : (fullscreen) => ctx.onMcpAppFullscreenChange?.(row.id, fullscreen)
+      }
+    />
+  );
+}
 
 function WorktreeSetupTimelineRow({
   row,
@@ -1923,6 +2110,75 @@ function MessageAuthorHeading({ children }: { children: string }) {
   return <h3 className="sr-only select-none">{children}</h3>;
 }
 
+// Translation into Chinese, requested per message via the 译 button in the
+// row's action area. The translation renders under the source text; failures
+// leave the row without a translation rather than showing an error.
+function MessageTranslationBlock({
+  messageId,
+  align,
+}: {
+  messageId: string;
+  align: "start" | "end";
+}) {
+  const ctx = use(TimelineRowCtx);
+  const translation = ctx.translationForMessage(messageId);
+  if (!translation) return null;
+  return (
+    <div
+      className={cn(
+        "mt-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1.5 text-sm text-muted-foreground",
+        align === "end" ? "w-full max-w-[80%] self-end text-start" : undefined,
+      )}
+      data-message-translation={messageId}
+    >
+      <ChatMarkdown
+        text={translation}
+        cwd={ctx.markdownCwd}
+        threadRef={ctx.threadRef ?? undefined}
+        isStreaming={false}
+        lineBreaks={false}
+        skills={ctx.skills}
+        headingLevelOffset={MESSAGE_HEADING_LEVEL}
+        onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+        onImageExpand={ctx.onImageExpand}
+      />
+    </div>
+  );
+}
+
+// Per-message translate trigger. Hidden once the translation landed or while
+// the server has no translation upstream; spins while its request is in
+// flight. Rendered in the same hover-revealed action row as copy/revert.
+function MessageTranslateButton({ messageId }: { messageId: string }) {
+  const ctx = use(TimelineRowCtx);
+  if (!ctx.translationAvailable) return null;
+  if (ctx.translationForMessage(messageId) !== undefined) return null;
+  const pending = ctx.translationPendingFor(messageId);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => ctx.onTranslateMessage(messageId)}
+            aria-label="翻译为中文"
+          />
+        }
+      >
+        {pending ? (
+          <Spinner className="size-3" aria-hidden />
+        ) : (
+          <LanguagesIcon className="size-3" aria-hidden />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">翻译为中文</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const { onImageExpand, onFileOpen } = ctx;
@@ -2050,21 +2306,23 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             ? (userFiles.find((file) => file.id === record.attachmentId) ?? null)
             : null;
       return (
-        <UserMessageContextReferenceChip
-          reference={reference}
-          record={record}
-          annotationImage={annotationImage}
-          attachment={attachment}
-          onExpandImage={(image) => {
-            const preview = buildExpandedImagePreview(userImages, image.id);
-            if (preview) onImageExpand(preview);
-          }}
-          onOpenFile={onFileOpen}
-          onExpandVideo={(file) => {
-            const preview = buildAttachmentVideoPreview(ctx.activeThreadEnvironmentId, file);
-            if (preview) onImageExpand(preview);
-          }}
-        />
+        <span data-thread-find-ignore>
+          <UserMessageContextReferenceChip
+            reference={reference}
+            record={record}
+            annotationImage={annotationImage}
+            attachment={attachment}
+            onExpandImage={(image) => {
+              const preview = buildExpandedImagePreview(userImages, image.id);
+              if (preview) onImageExpand(preview);
+            }}
+            onOpenFile={onFileOpen}
+            onExpandVideo={(file) => {
+              const preview = buildAttachmentVideoPreview(ctx.activeThreadEnvironmentId, file);
+              if (preview) onImageExpand(preview);
+            }}
+          />
+        </span>
       );
     },
     [
@@ -2193,6 +2451,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             markdownCwd={ctx.markdownCwd}
           />
         </div>
+        <MessageTranslationBlock messageId={row.message.id} align="end" />
       </div>
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
@@ -2207,6 +2466,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <div className="flex items-center gap-0.5">
             {typeof revertTurnCount === "number" && (
               <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+            )}
+            {resolvedContext.text && !row.message.streaming && (
+              <MessageTranslateButton messageId={row.message.id} />
             )}
             {resolvedContext.text && (
               <MessageCopyButton
@@ -2362,25 +2624,28 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     <>
       <div className="relative min-w-0 px-1 py-0.5">
         <MessageAuthorHeading>T3 Code</MessageAuthorHeading>
-        <AssistantCitationSource
-          messageId={row.message.id}
-          {...(ctx.threadRef ? { threadRef: ctx.threadRef } : {})}
-          itemKey={row.id}
-          request={ctx.citationRequest}
-          listRef={ctx.listRef}
-        >
-          <ChatMarkdown
-            text={messageText}
-            cwd={ctx.markdownCwd}
-            threadRef={ctx.threadRef ?? undefined}
-            isStreaming={Boolean(row.message.streaming)}
-            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-            skills={ctx.skills}
-            headingLevelOffset={MESSAGE_HEADING_LEVEL}
-            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-            onImageExpand={ctx.onImageExpand}
-          />
-        </AssistantCitationSource>
+        <div data-thread-find-text="true">
+          <AssistantCitationSource
+            messageId={row.message.id}
+            {...(ctx.threadRef ? { threadRef: ctx.threadRef } : {})}
+            itemKey={row.id}
+            request={ctx.citationRequest}
+            listRef={ctx.listRef}
+          >
+            <ChatMarkdown
+              text={messageText}
+              cwd={ctx.markdownCwd}
+              threadRef={ctx.threadRef ?? undefined}
+              isStreaming={Boolean(row.message.streaming)}
+              lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+              skills={ctx.skills}
+              headingLevelOffset={MESSAGE_HEADING_LEVEL}
+              onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+              onImageExpand={ctx.onImageExpand}
+            />
+          </AssistantCitationSource>
+        </div>
+        <MessageTranslationBlock messageId={row.message.id} align="start" />
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}
@@ -2448,6 +2713,9 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
+      {!message.streaming && message.text.trim().length > 0 && (
+        <MessageTranslateButton messageId={message.id} />
+      )}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -2499,6 +2767,7 @@ function ProposedPlanTimelineRow({
         threadRef={ctx.threadRef ?? undefined}
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
+        findActive={ctx.findActive}
       />
     </div>
   );
@@ -3920,6 +4189,9 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   footer?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Find opens the body only when it selects a match in the clipped part.
+  const revealForFind = useCallback(() => setExpanded(true), []);
+  const findRevealRef = useFindRevealRef(revealForFind);
   const hasVisibleBody = props.text.trim().length > 0;
   const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
   const isCollapsed = canCollapse && !expanded;
@@ -3928,8 +4200,11 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
     <div>
       {hasVisibleBody ? (
         <div
+          ref={findRevealRef}
           className={cn("relative", isCollapsed && "max-h-44 overflow-hidden")}
           data-user-message-body="true"
+          data-thread-find-text="true"
+          data-thread-find-fold={isCollapsed ? "" : undefined}
           data-user-message-collapsed={isCollapsed ? "true" : "false"}
           data-user-message-collapsible={canCollapse ? "true" : "false"}
           data-user-message-fade={isCollapsed ? "true" : "false"}

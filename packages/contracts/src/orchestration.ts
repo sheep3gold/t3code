@@ -38,9 +38,11 @@ export const ORCHESTRATION_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
+  searchThread: "orchestration.searchThread",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  answerSecretRequest: "orchestration.answerSecretRequest",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -840,6 +842,11 @@ export const OrchestrationThread = Schema.Struct({
   // Manual Active placement. Keyless threads retain their creation/re-entry
   // order above the arranged run. Settling clears this slot.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Read state shared by every client of this server: the latest turn
+  // completion the user has seen, on any device. Null means no visit was
+  // recorded, which clients treat as read. Optional so payloads from
+  // pre-read-sync servers still decode (clients fall back to local stamps).
+  lastReadAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -910,6 +917,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // See OrchestrationThread.lastReadAt: cross-device read state.
+  lastReadAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -1227,6 +1236,24 @@ const ThreadActiveReorderCommand = Schema.Struct({
   orderKey: TrimmedNonEmptyString,
 });
 
+// Records that the user saw the thread up to readAt (the completion time of
+// the turn on screen, not wall-clock now). Forward-only: a stale client
+// re-sending an older stamp never rewinds a newer read from another device.
+const ThreadReadMarkCommand = Schema.Struct({
+  type: Schema.Literal("thread.read.mark"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  readAt: IsoDateTime,
+});
+
+// Explicit "Mark unread": the server rewinds lastReadAt to just before the
+// latest completion so the thread reads as unseen on every device.
+const ThreadUnreadMarkCommand = Schema.Struct({
+  type: Schema.Literal("thread.unread.mark"),
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
 const ThreadMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
@@ -1429,6 +1456,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadActiveReorderCommand,
+  ThreadReadMarkCommand,
+  ThreadUnreadMarkCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
@@ -1462,6 +1491,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadActiveReorderCommand,
+  ThreadReadMarkCommand,
+  ThreadUnreadMarkCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
@@ -1832,6 +1863,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // Order updates use this existing event so older clients can ignore the
   // new field while continuing to decode the event stream.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Read-state updates ride the same event for the same reason.
+  lastReadAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   title: Schema.optional(TrimmedNonEmptyString),
   /** Intent marker consumed by the title-generation reactor. Keeping this on
       the existing event lets older clients safely ignore the new field. */
@@ -2290,6 +2323,44 @@ export const OrchestrationSearchThreadsResult = Schema.Struct({
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
+/**
+ * Find within one thread: user/assistant messages and proposed plans, ordered
+ * as rendered. `index` is absolute; `start`+`offset` navigate relative to an
+ * entry identity so edits before it do not shift the selection.
+ */
+export const OrchestrationSearchThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  query: TrimmedString.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+  index: Schema.optionalKey(NonNegativeInt),
+  offset: Schema.optionalKey(Schema.Int),
+  start: Schema.optionalKey(
+    Schema.Struct({ entryId: TrimmedNonEmptyString, occurrence: NonNegativeInt }),
+  ),
+});
+export type OrchestrationSearchThreadInput = typeof OrchestrationSearchThreadInput.Type;
+
+export const OrchestrationThreadFindMatch = Schema.Struct({
+  /** messageId for messages, planId for proposed plans. */
+  entryId: TrimmedNonEmptyString,
+  occurrence: NonNegativeInt,
+});
+export type OrchestrationThreadFindMatch = typeof OrchestrationThreadFindMatch.Type;
+
+export const OrchestrationSearchThreadResult = Schema.Struct({
+  totalMatches: NonNegativeInt,
+  activeIndex: NonNegativeInt,
+  match: Schema.NullOr(OrchestrationThreadFindMatch),
+  /** Counts and identities around the selection let clients step without another round trip. */
+  navigation: Schema.Array(
+    Schema.Struct({
+      entryId: TrimmedNonEmptyString,
+      startIndex: NonNegativeInt,
+      count: NonNegativeInt,
+    }),
+  ).check(Schema.isMaxLength(64)),
+});
+export type OrchestrationSearchThreadResult = typeof OrchestrationSearchThreadResult.Type;
+
 export const OrchestrationGetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   /** Absolute path from the workflow's runHandles.scriptPath. The server
@@ -2359,6 +2430,10 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationSearchThreadsInput,
     output: OrchestrationSearchThreadsResult,
   },
+  searchThread: {
+    input: OrchestrationSearchThreadInput,
+    output: OrchestrationSearchThreadResult,
+  },
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationShellSnapshot,
@@ -2408,6 +2483,14 @@ export class OrchestrationGetFullThreadDiffError extends Schema.TaggedError<Orch
 
 export class OrchestrationSearchThreadsError extends Schema.TaggedError<OrchestrationSearchThreadsError>()(
   "OrchestrationSearchThreadsError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationSearchThreadError extends Schema.TaggedError<OrchestrationSearchThreadError>()(
+  "OrchestrationSearchThreadError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),

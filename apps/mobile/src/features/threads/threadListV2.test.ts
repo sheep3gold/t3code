@@ -803,6 +803,117 @@ describe("buildThreadListV2Items", () => {
     expect(items.map((item) => item.thread.id)).toEqual(["content-match"]);
   });
 
+  it("lifts unseen completions to the top of the active block", () => {
+    const { items } = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("seen-newer"),
+          title: "Seen",
+          createdAt: "2026-06-01T12:00:00.000Z",
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "completed",
+            requestedAt: "2026-06-01T12:00:00.000Z",
+            startedAt: "2026-06-01T12:00:01.000Z",
+            completedAt: "2026-06-01T12:30:00.000Z",
+          } as EnvironmentThreadShell["latestTurn"],
+        }),
+        makeThread({
+          id: ThreadId.make("unseen-older"),
+          title: "Unseen",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestTurn: {
+            turnId: TurnId.make("turn-2"),
+            state: "completed",
+            requestedAt: "2026-06-01T08:00:00.000Z",
+            startedAt: "2026-06-01T08:00:01.000Z",
+            completedAt: "2026-06-01T08:30:00.000Z",
+          } as EnvironmentThreadShell["latestTurn"],
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      threadLastVisitedAtById: {
+        [`${environmentId}:seen-newer`]: "2026-06-01T13:00:00.000Z",
+        [`${environmentId}:unseen-older`]: "2026-06-01T08:00:00.000Z",
+      },
+    });
+
+    expect(items.map((item) => item.thread.id)).toEqual(["unseen-older", "seen-newer"]);
+  });
+
+  it("a completion read on another device no longer leads the list", () => {
+    const completedTurn = {
+      turnId: TurnId.make("turn-1"),
+      state: "completed",
+      requestedAt: "2026-06-01T08:00:00.000Z",
+      startedAt: "2026-06-01T08:00:01.000Z",
+      completedAt: "2026-06-01T08:30:00.000Z",
+    } as EnvironmentThreadShell["latestTurn"];
+    const build = (lastReadAt: string | null) =>
+      buildThreadListV2Items({
+        threads: [
+          makeThread({
+            id: ThreadId.make("read-on-desktop"),
+            title: "Read on desktop",
+            createdAt: "2026-06-01T08:00:00.000Z",
+            latestTurn: completedTurn,
+            lastReadAt,
+          }),
+          makeThread({
+            id: ThreadId.make("newer-created"),
+            title: "Newer",
+            createdAt: "2026-06-01T12:00:00.000Z",
+          }),
+        ],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+        // This phone last opened the thread before the turn completed.
+        threadLastVisitedAtById: {
+          [`${environmentId}:read-on-desktop`]: "2026-06-01T08:00:00.000Z",
+        },
+      }).items.map((item) => item.thread.id);
+
+    // Without a server stamp the stale local visit still lifts it.
+    expect(build(null)).toEqual(["read-on-desktop", "newer-created"]);
+    // The server says another device saw this completion.
+    expect(build("2026-06-01T08:30:00.000Z")).toEqual(["newer-created", "read-on-desktop"]);
+    // Mark unread elsewhere rewinds the server stamp and lifts it again.
+    expect(build("2026-06-01T08:29:59.999Z")).toEqual(["read-on-desktop", "newer-created"]);
+  });
+
+  it("never-visited threads count as read, like web", () => {
+    const { items } = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("older-created"),
+          title: "Older",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "completed",
+            requestedAt: "2026-06-01T08:00:00.000Z",
+            startedAt: "2026-06-01T08:00:01.000Z",
+            completedAt: "2026-06-01T08:30:00.000Z",
+          } as EnvironmentThreadShell["latestTurn"],
+        }),
+        makeThread({
+          id: ThreadId.make("newer-created"),
+          title: "Newer",
+          createdAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      threadLastVisitedAtById: {},
+    });
+
+    expect(items.map((item) => item.thread.id)).toEqual(["newer-created", "older-created"]);
+  });
+
   it("scopes the flat list to one project", () => {
     const otherProjectId = ProjectId.make("project-2");
     const { items } = buildThreadListV2Items({
@@ -1871,6 +1982,73 @@ describe("thread list v2 minute tick invalidation", () => {
       expect(oneHourRow.type).toBe("v2-thread");
       expect(oneHourRow.type === "v2-thread" && oneHourRow.snoozeWakeLabelText).toBe("59m");
       expect(threadListV2ListItemsAreEqual(wakeRow(stillTwoHours), wakeRow(oneHour))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("thread list v2 active row labels", () => {
+  const completedTurn = (requestedMs: number, completedMs: number) =>
+    ({
+      turnId: TurnId.make(`turn-${completedMs}`),
+      state: "completed",
+      requestedAt: isoAt(requestedMs),
+      startedAt: isoAt(requestedMs),
+      completedAt: isoAt(completedMs),
+    }) as EnvironmentThreadShell["latestTurn"];
+
+  it("labels rows with the activity stamp they sort by and marks unseen completions Done", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(BASE_MS);
+      // Asked earlier but finished later: sorts first, so its label must too.
+      const finishedLater = makeThread({
+        id: ThreadId.make("finished-later"),
+        title: "finished later",
+        createdAt: isoAt(BASE_MS - 120 * MINUTE_MS),
+        latestUserMessageAt: isoAt(BASE_MS - 55 * MINUTE_MS),
+        latestTurn: completedTurn(BASE_MS - 55 * MINUTE_MS, BASE_MS - 52 * MINUTE_MS),
+        lastReadAt: isoAt(BASE_MS - 52 * MINUTE_MS),
+      });
+      const finishedEarlier = makeThread({
+        id: ThreadId.make("finished-earlier"),
+        title: "finished earlier",
+        createdAt: isoAt(BASE_MS - 120 * MINUTE_MS),
+        latestUserMessageAt: isoAt(BASE_MS - 54 * MINUTE_MS),
+        latestTurn: completedTurn(BASE_MS - 54 * MINUTE_MS, BASE_MS - 53 * MINUTE_MS),
+        lastReadAt: isoAt(BASE_MS - 53 * MINUTE_MS),
+      });
+      const unseen = makeThread({
+        id: ThreadId.make("unseen"),
+        title: "unseen",
+        createdAt: isoAt(BASE_MS - 120 * MINUTE_MS),
+        latestUserMessageAt: isoAt(BASE_MS - 90 * MINUTE_MS),
+        latestTurn: completedTurn(BASE_MS - 90 * MINUTE_MS, BASE_MS - 80 * MINUTE_MS),
+        lastReadAt: isoAt(BASE_MS - 100 * MINUTE_MS),
+      });
+      const { items } = buildThreadListV2Items({
+        threads: [finishedEarlier, unseen, finishedLater],
+        environmentId: null,
+        searchQuery: "",
+        now: isoAt(BASE_MS),
+      });
+      const rows = buildThreadListV2ListItems({ items, pendingTasks: [] }).flatMap((row) =>
+        row.type === "v2-thread"
+          ? [
+              {
+                id: row.item.thread.id,
+                timeLabel: row.timeLabel,
+                status: resolveThreadListV2Status(row.item.thread, row.item),
+              },
+            ]
+          : [],
+      );
+      expect(rows).toEqual([
+        { id: "unseen", timeLabel: "", status: "done" },
+        { id: "finished-later", timeLabel: "52m", status: "ready" },
+        { id: "finished-earlier", timeLabel: "53m", status: "ready" },
+      ]);
     } finally {
       vi.useRealTimers();
     }

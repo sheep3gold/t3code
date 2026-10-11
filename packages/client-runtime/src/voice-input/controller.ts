@@ -1,3 +1,5 @@
+// @effect-diagnostics globalTimers:off - This imperative controller runs on
+// raw Promises/AbortController and session tokens, without an Effect runtime.
 import { replaceTextRange } from "@t3tools/shared/composerTrigger";
 
 import type { PreparedVoiceTranscription, VoiceTranscriber } from "./transcription.ts";
@@ -286,7 +288,7 @@ export class VoiceInputController {
       } catch (error) {
         // Swallow preparation failures from invalidated (e.g. lock-stolen)
         // sessions; the newer session now owns the slot and drives the UI.
-        if (this.isCurrent(operationToken) && this.state.phase === "preparing") {
+        if (this.isCurrent(operationToken) && this.currentPhase() === "preparing") {
           this.setError(preparationErrorMessage(error), "retry");
         }
         return;
@@ -434,7 +436,7 @@ export class VoiceInputController {
           transcription.transcribe(recordingUri, { signal }),
         );
       } catch (error) {
-        if (this.isCurrent(operationToken) && this.state.phase === "transcribing") {
+        if (this.isCurrent(operationToken) && this.currentPhase() === "transcribing") {
           this.setError(transcriptionErrorMessage(error), "retry");
         }
         return;
@@ -529,6 +531,14 @@ export class VoiceInputController {
 
   private isCurrent(operationToken: number): boolean {
     return operationToken === this.operationToken;
+  }
+
+  /**
+   * Await 之后的 phase 判断必须绕开 TS 对 `this.state` 的流窄化：会话可能已被
+   * 更新的操作接管（lock-stolen），窄化出的字面量并集在这个时点不可信。
+   */
+  private currentPhase(): VoiceInputState["phase"] {
+    return this.state.phase;
   }
 
   private setError(error: string, errorAction: VoiceInputState["errorAction"]): void {

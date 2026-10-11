@@ -25,7 +25,7 @@ import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
-import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
+import React, { Fragment, useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   DndContext,
@@ -44,6 +44,7 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
   type ContextMenuItem,
+  EnvironmentId,
   ProjectId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
@@ -99,6 +100,7 @@ import {
   resolveProjectExpanded,
   useUiStateStore,
 } from "../uiStateStore";
+import { useThreadReadState } from "../hooks/useThreadReadState";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -232,6 +234,7 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   repository: "Group by repository",
   repository_path: "Group by repository path",
   separate: "Keep separate",
+  environment: "Group by environment",
 };
 const SIDEBAR_ICON_ACTION_BUTTON_CLASS =
   "inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-[calc(--spacing(1)-1px)] text-icon-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
@@ -269,6 +272,26 @@ function projectExpansionPreferenceKeys(project: SidebarProjectSnapshot): string
   ];
 }
 
+const ENVIRONMENT_PROJECT_KEY_PREFIX = "environment:";
+
+/**
+ * Splits an environment-mode project key into its environment id and the
+ * per-project key used by the sortable list. Returns null for keys from
+ * other grouping modes.
+ */
+function splitEnvironmentProjectKey(
+  projectKey: string,
+): { environmentId: string; rowKey: string } | null {
+  if (!projectKey.startsWith(ENVIRONMENT_PROJECT_KEY_PREFIX)) return null;
+  const remainder = projectKey.slice(ENVIRONMENT_PROJECT_KEY_PREFIX.length);
+  const separatorIndex = remainder.indexOf(":");
+  if (separatorIndex <= 0) return null;
+  return {
+    environmentId: remainder.slice(0, separatorIndex),
+    rowKey: remainder.slice(separatorIndex + 1),
+  };
+}
+
 function projectGroupingModeDescription(mode: SidebarProjectGroupingMode): string {
   switch (mode) {
     case "repository":
@@ -277,6 +300,8 @@ function projectGroupingModeDescription(mode: SidebarProjectGroupingMode): strin
       return "Projects group only when both the repository and repo-relative path match.";
     case "separate":
       return "Every project path gets its own sidebar row.";
+    case "environment":
+      return "Projects are listed in one section per server.";
   }
 }
 
@@ -1192,7 +1217,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const { isMobile, setOpenMobile } = useSidebar();
-  const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
+  const { markThreadUnread } = useThreadReadState();
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -2570,7 +2595,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                     value === "inherit" ||
                     value === "repository" ||
                     value === "repository_path" ||
-                    value === "separate"
+                    value === "separate" ||
+                    value === "environment"
                   ) {
                     setProjectGroupingSelection(value);
                   }
@@ -2596,6 +2622,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   <SelectItem hideIndicator value="separate">
                     {PROJECT_GROUPING_MODE_LABELS.separate}
                   </SelectItem>
+                  <SelectItem hideIndicator value="environment">
+                    {PROJECT_GROUPING_MODE_LABELS.environment}
+                  </SelectItem>
                 </SelectPopup>
               </Select>
             </div>
@@ -2614,14 +2643,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         </DialogPopup>
       </Dialog>
     </>
-  );
-});
-
-const SidebarProjectListRow = memo(function SidebarProjectListRow(props: SidebarProjectItemProps) {
-  return (
-    <SidebarMenuItem>
-      <SidebarProjectItem {...props} />
-    </SidebarMenuItem>
   );
 });
 
@@ -2892,6 +2913,10 @@ interface SidebarProjectsContentProps {
   suppressProjectClickForContextMenuRef: React.RefObject<boolean>;
   attachProjectListAutoAnimateRef: (node: HTMLElement | null) => void;
   projectsLength: number;
+  environmentSectionByProjectKey: ReadonlyMap<
+    string,
+    { environmentId: string; rowKey: string; label: string }
+  > | null;
 }
 
 const SidebarProjectsContent = memo(function SidebarProjectsContent(
@@ -2934,6 +2959,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     suppressProjectClickForContextMenuRef,
     attachProjectListAutoAnimateRef,
     projectsLength,
+    environmentSectionByProjectKey,
   } = props;
 
   const handleProjectSortOrderChange = useCallback(
@@ -2953,6 +2979,65 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       updateSettings({ sidebarThreadPreviewCount: count });
     },
     [updateSettings],
+  );
+
+  // Environment grouping renders one section per server. sortedProjects is
+  // already section-contiguous (sorted within each environment upstream).
+  const projectSections = useMemo(() => {
+    if (!environmentSectionByProjectKey) {
+      return [
+        {
+          sectionKey: null as string | null,
+          label: null as string | null,
+          projects: sortedProjects,
+        },
+      ];
+    }
+    const sections: Array<{
+      sectionKey: string;
+      label: string;
+      projects: SidebarProjectSnapshot[];
+    }> = [];
+    for (const project of sortedProjects) {
+      const section = environmentSectionByProjectKey.get(project.projectKey);
+      const sectionKey = section?.environmentId ?? "unknown";
+      const last = sections[sections.length - 1];
+      if (last && last.sectionKey === sectionKey) {
+        last.projects.push(project);
+      } else {
+        sections.push({
+          sectionKey,
+          label: section?.label ?? sectionKey,
+          projects: [project],
+        });
+      }
+    }
+    return sections;
+  }, [environmentSectionByProjectKey, sortedProjects]);
+
+  const renderProjectItem = (
+    project: SidebarProjectSnapshot,
+    dragHandleProps: SortableProjectHandleProps | null,
+  ) => (
+    <SidebarProjectItem
+      project={project}
+      isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
+      activeRouteThreadKey={activeRouteProjectKey === project.projectKey ? routeThreadKey : null}
+      openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+      newThreadShortcutLabel={newThreadShortcutLabel}
+      handleNewThread={handleNewThread}
+      archiveThread={archiveThread}
+      deleteThread={deleteThread}
+      threadJumpLabelByKey={threadJumpLabelByKey}
+      attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+      expandThreadListForProject={expandThreadListForProject}
+      collapseThreadListForProject={collapseThreadListForProject}
+      dragInProgressRef={dragInProgressRef}
+      suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+      suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+      isManualProjectSorting={isManualProjectSorting}
+      dragHandleProps={dragHandleProps}
+    />
   );
 
   return (
@@ -3030,80 +3115,60 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </div>
         </div>
 
-        {isManualProjectSorting ? (
-          <DndContext
-            sensors={projectDnDSensors}
-            collisionDetection={projectCollisionDetection}
-            modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-            onDragStart={handleProjectDragStart}
-            onDragEnd={handleProjectDragEnd}
-            onDragCancel={handleProjectDragCancel}
-          >
-            <SidebarMenu>
-              <SortableContext
-                items={sortedProjects.map((project) => project.projectKey)}
-                strategy={verticalListSortingStrategy}
+        {projectSections.map((section) => (
+          <Fragment key={section.sectionKey ?? "all"}>
+            {section.label !== null ? (
+              <div
+                className="mt-2 mb-1 pl-2 text-xs font-medium text-sidebar-muted-foreground/80 first:mt-0"
+                data-testid="sidebar-environment-section"
               >
-                {sortedProjects.map((project) => (
-                  <SortableProjectItem key={project.projectKey} projectId={project.projectKey}>
-                    {(dragHandleProps) => (
-                      <SidebarProjectItem
-                        project={project}
-                        isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
-                        activeRouteThreadKey={
-                          activeRouteProjectKey === project.projectKey ? routeThreadKey : null
-                        }
-                        openPullRequestsInRightPanel={openPullRequestsInRightPanel}
-                        newThreadShortcutLabel={newThreadShortcutLabel}
-                        handleNewThread={handleNewThread}
-                        archiveThread={archiveThread}
-                        deleteThread={deleteThread}
-                        threadJumpLabelByKey={threadJumpLabelByKey}
-                        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                        expandThreadListForProject={expandThreadListForProject}
-                        collapseThreadListForProject={collapseThreadListForProject}
-                        dragInProgressRef={dragInProgressRef}
-                        suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                        suppressProjectClickForContextMenuRef={
-                          suppressProjectClickForContextMenuRef
-                        }
-                        isManualProjectSorting={isManualProjectSorting}
-                        dragHandleProps={dragHandleProps}
-                      />
+                {section.label}
+              </div>
+            ) : null}
+            {isManualProjectSorting ? (
+              <DndContext
+                sensors={projectDnDSensors}
+                collisionDetection={projectCollisionDetection}
+                modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                onDragStart={handleProjectDragStart}
+                onDragEnd={handleProjectDragEnd}
+                onDragCancel={handleProjectDragCancel}
+              >
+                <SidebarMenu>
+                  <SortableContext
+                    items={section.projects.map(
+                      (project) =>
+                        environmentSectionByProjectKey?.get(project.projectKey)?.rowKey ??
+                        project.projectKey,
                     )}
-                  </SortableProjectItem>
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {section.projects.map((project) => {
+                      const rowKey =
+                        environmentSectionByProjectKey?.get(project.projectKey)?.rowKey ??
+                        project.projectKey;
+                      return (
+                        <SortableProjectItem key={rowKey} projectId={rowKey}>
+                          {(dragHandleProps) => renderProjectItem(project, dragHandleProps)}
+                        </SortableProjectItem>
+                      );
+                    })}
+                  </SortableContext>
+                </SidebarMenu>
+              </DndContext>
+            ) : (
+              <SidebarMenu
+                ref={section.sectionKey === null ? attachProjectListAutoAnimateRef : undefined}
+              >
+                {section.projects.map((project) => (
+                  <SidebarMenuItem key={project.projectKey}>
+                    {renderProjectItem(project, null)}
+                  </SidebarMenuItem>
                 ))}
-              </SortableContext>
-            </SidebarMenu>
-          </DndContext>
-        ) : (
-          <SidebarMenu ref={attachProjectListAutoAnimateRef}>
-            {sortedProjects.map((project) => (
-              <SidebarProjectListRow
-                key={project.projectKey}
-                project={project}
-                isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
-                activeRouteThreadKey={
-                  activeRouteProjectKey === project.projectKey ? routeThreadKey : null
-                }
-                openPullRequestsInRightPanel={openPullRequestsInRightPanel}
-                newThreadShortcutLabel={newThreadShortcutLabel}
-                handleNewThread={handleNewThread}
-                archiveThread={archiveThread}
-                deleteThread={deleteThread}
-                threadJumpLabelByKey={threadJumpLabelByKey}
-                attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                expandThreadListForProject={expandThreadListForProject}
-                collapseThreadListForProject={collapseThreadListForProject}
-                dragInProgressRef={dragInProgressRef}
-                suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-                isManualProjectSorting={isManualProjectSorting}
-                dragHandleProps={null}
-              />
-            ))}
-          </SidebarMenu>
-        )}
+              </SidebarMenu>
+            )}
+          </Fragment>
+        ))}
 
         {projectsLength === 0 && (
           <div className="px-2 pt-4 text-center text-secondary-label text-xs">No projects yet</div>
@@ -3352,8 +3417,12 @@ export default function LegacySidebar() {
       dragInProgressRef.current = false;
       const { active, over } = event;
       if (!over || active.id === over.id) return;
-      const activeProject = sidebarProjects.find((project) => project.projectKey === active.id);
-      const overProject = sidebarProjects.find((project) => project.projectKey === over.id);
+      // Environment-mode sortable ids are section-relative row keys, so match
+      // against the stripped key as well as the full project key.
+      const matchesDragId = (project: SidebarProjectSnapshot, id: string | number) =>
+        project.projectKey === id || splitEnvironmentProjectKey(project.projectKey)?.rowKey === id;
+      const activeProject = sidebarProjects.find((project) => matchesDragId(project, active.id));
+      const overProject = sidebarProjects.find((project) => matchesDragId(project, over.id));
       if (!activeProject || !overProject) return;
       const activeMemberKeys = activeProject.memberProjects.map(
         (member) => member.physicalProjectKey,
@@ -3401,6 +3470,8 @@ export default function LegacySidebar() {
     () => sidebarThreads.filter((thread) => thread.archivedAt === null),
     [sidebarThreads],
   );
+  const environmentSectionedProjects =
+    projectGroupingSettings.sidebarProjectGroupingMode === "environment";
   const sortedProjects = useMemo(() => {
     const sortableProjects = sidebarProjects.map((project) => ({
       ...project,
@@ -3416,6 +3487,32 @@ export default function LegacySidebar() {
         projectId: (physicalToLogicalKey.get(physicalKey) ?? physicalKey) as ProjectId,
       };
     });
+    if (environmentSectionedProjects) {
+      // Environment mode renders one section per server. Sorting happens
+      // inside each section; manual order falls back to the section-agnostic
+      // saved order per section.
+      const projectsByEnvironment = new Map<string, typeof sortableProjects>();
+      for (const project of sortableProjects) {
+        const section = splitEnvironmentProjectKey(project.projectKey);
+        const environmentId = section?.environmentId ?? project.environmentId;
+        const existing = projectsByEnvironment.get(environmentId);
+        if (existing) {
+          existing.push(project);
+        } else {
+          projectsByEnvironment.set(environmentId, [project]);
+        }
+      }
+      return Array.from(projectsByEnvironment.values()).flatMap((environmentProjects) =>
+        sortProjectsForSidebar(
+          environmentProjects,
+          sortableThreads,
+          sidebarProjectSortOrder,
+        ).flatMap((project) => {
+          const resolvedProject = sidebarProjectByKey.get(project.id);
+          return resolvedProject ? [resolvedProject] : [];
+        }),
+      );
+    }
     return sortProjectsForSidebar(
       sortableProjects,
       sortableThreads,
@@ -3425,6 +3522,7 @@ export default function LegacySidebar() {
       return resolvedProject ? [resolvedProject] : [];
     });
   }, [
+    environmentSectionedProjects,
     sidebarProjectSortOrder,
     physicalToLogicalKey,
     projectPhysicalKeyByScopedRef,
@@ -3432,6 +3530,23 @@ export default function LegacySidebar() {
     sidebarProjects,
     visibleThreads,
   ]);
+  const environmentSectionByProjectKey = useMemo(() => {
+    if (!environmentSectionedProjects) return null;
+    return new Map(
+      sortedProjects.map((project) => {
+        const section = splitEnvironmentProjectKey(project.projectKey);
+        const environmentId = section?.environmentId ?? project.environmentId;
+        return [
+          project.projectKey,
+          {
+            environmentId,
+            rowKey: section?.rowKey ?? project.projectKey,
+            label: environmentLabelById.get(EnvironmentId.make(environmentId)) ?? environmentId,
+          },
+        ] as const;
+      }),
+    );
+  }, [environmentSectionedProjects, environmentLabelById, sortedProjects]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   const visibleSidebarThreadKeys = useMemo(
     () =>
@@ -3794,6 +3909,7 @@ export default function LegacySidebar() {
         suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
         attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
         projectsLength={projects.length}
+        environmentSectionByProjectKey={environmentSectionByProjectKey}
       />
       <SidebarChromeFooter />
     </>

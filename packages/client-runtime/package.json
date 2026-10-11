@@ -27,6 +27,10 @@
       "types": "./src/pendingRequests.ts",
       "default": "./src/pendingRequests.ts"
     },
+    "./secret-request": {
+      "types": "./src/secretRequest.ts",
+      "default": "./src/secretRequest.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"
@@ -118,6 +122,10 @@
     "./state/schedules": {
       "types": "./src/state/scheduleHttp.ts",
       "default": "./src/state/scheduleHttp.ts"
+    },
+    "./state/translate": {
+      "types": "./src/state/translateHttp.ts",
+      "default": "./src/state/translateHttp.ts"
     },
     "./state/memory-ledger": {
       "types": "./src/state/memoryLedgerHttp.ts",
@@ -282,6 +290,14 @@
     "./file-preview": {
       "types": "./src/filePreview.ts",
       "default": "./src/filePreview.ts"
+    },
+    "./mcp-apps": {
+      "types": "./src/mcpApps/host.ts",
+      "default": "./src/mcpApps/host.ts"
+    },
+    "./state/mcp-apps": {
+      "types": "./src/state/mcpApps.ts",
+      "default": "./src/state/mcpApps.ts"
     }
   },
   "scripts": {

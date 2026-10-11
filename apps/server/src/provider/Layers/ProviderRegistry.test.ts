@@ -562,7 +562,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
 
           yield* Effect.yieldNow;
-          yield* TestClock.adjust("11 seconds");
+          yield* TestClock.adjust("21 seconds");
           yield* Effect.yieldNow;
 
           const status = yield* Fiber.join(statusFiber);
@@ -573,6 +573,29 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
           assert.strictEqual(yield* Ref.get(killCalls), 1);
         }),
+      );
+
+      it.effect(
+        "keeps account and models but marks quota probeFailed when the rateLimits read fails",
+        () =>
+          Effect.gen(function* () {
+            const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+              Effect.succeed(
+                makeCodexProbeSnapshot({
+                  rateLimits: { failure: "Codex did not answer the usage request." },
+                }),
+              ),
+            );
+
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.auth.status, "authenticated");
+            assert.strictEqual(status.models.length, 1);
+            assert.strictEqual(status.usageLimits?.unavailable?.reason, "probeFailed");
+            assert.strictEqual(
+              status.usageLimits?.unavailable?.message,
+              "Codex did not answer the usage request.",
+            );
+          }),
       );
     });
 
@@ -1436,7 +1459,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
-      it.effect("deduplicates cwd probes and clears snapshots when an instance rebuilds", () =>
+      it.effect("deduplicates cwd probes, replaces forced snapshots, and clears on rebuild", () =>
         Effect.gen(function* () {
           const driver = ProviderDriverKind.make("codex");
           const instanceId = ProviderInstanceId.make("codex");
@@ -1465,8 +1488,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             installed: false,
             slashCommands: [],
           } as const satisfies ServerProvider;
+          const refreshedScopedProvider = {
+            ...scopedProvider,
+            skills: [
+              ...scopedProvider.skills,
+              { name: "new-skill", path: "/workspace/new/SKILL.md", enabled: true },
+            ],
+          } satisfies ServerProvider;
           const snapshotCalls = yield* Ref.make(0);
           const returnPendingSnapshot = yield* Ref.make(true);
+          const useRefreshedSnapshot = yield* Ref.make(false);
           const probeStarted = yield* Deferred.make<void>();
           const releaseProbe = yield* Deferred.make<void>();
           const makeInstance = (
@@ -1504,7 +1535,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               if (yield* Ref.get(returnPendingSnapshot)) return pendingScopedProvider;
               yield* Deferred.succeed(probeStarted, undefined);
               yield* Deferred.await(releaseProbe);
-              return scopedProvider;
+              return (yield* Ref.get(useRefreshedSnapshot))
+                ? refreshedScopedProvider
+                : scopedProvider;
             }),
           );
           const rebuiltProvider = {
@@ -1578,12 +1611,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               providers[0]?.workspaceSnapshots?.[0]?.skills,
               scopedProvider.skills,
             );
+            yield* Ref.set(useRefreshedSnapshot, true);
+            yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+            assert.strictEqual(yield* Ref.get(snapshotCalls), 2);
             yield* registry.refreshWorkspaceSnapshot({
               instanceId,
               cwd: "/workspace",
               force: true,
             });
             assert.strictEqual(yield* Ref.get(snapshotCalls), 3);
+            assert.deepStrictEqual(
+              (yield* registry.getProviders)[0]?.workspaceSnapshots?.[0]?.skills,
+              refreshedScopedProvider.skills,
+            );
 
             yield* Ref.set(instancesRef, [rebuiltInstance]);
             yield* PubSub.publish(registryChanges, undefined);
@@ -2650,6 +2690,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 "codex",
                 "cursor",
                 "grok",
+                "kiro",
                 "opencode",
               ]);
               assert.strictEqual(cursorProvider?.enabled, false);

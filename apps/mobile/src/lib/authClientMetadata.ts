@@ -2,9 +2,12 @@ import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
 
+import { getInstallAnchor } from "./installAnchor";
+
 export function authClientMetadata(appVersion?: string): AuthClientPresentationMetadata {
   const osMajorVersion = Number.parseInt(Device.osVersion?.split(".")[0] ?? "", 10);
   const deviceModel = Device.modelName?.trim();
+  const installedAt = getInstallAnchor();
 
   return {
     label: "T3 Code Mobile",
@@ -19,5 +22,6 @@ export function authClientMetadata(appVersion?: string): AuthClientPresentationM
     ...(deviceModel ? { deviceModel } : {}),
     surface: "mobile",
     ...(appVersion ? { appVersion } : {}),
+    ...(installedAt ? { installedAt } : {}),
   };
 }

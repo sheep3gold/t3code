@@ -5,7 +5,11 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import type { ProviderInstanceId, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import {
+  UsageProviderKind,
+  type ProviderInstanceId,
+  type SidebarProjectGroupingMode,
+} from "@t3tools/contracts";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
@@ -40,9 +44,38 @@ export interface Preferences {
     readonly provider: ProviderInstanceId;
     readonly model: string;
   }>;
+  readonly hiddenUsageProviders?: readonly UsageProviderKind[];
   /** Fresh keys reset both shelves to collapsed when users update. */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
+  /** Device-local read state (`environmentId:threadId` → visit stamp), the
+      counterpart of web's uiStateStore. The stamp is the completed turn's
+      own time, so a completion that lands later still reads as unseen. */
+  readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
+}
+
+/** The transform half of a "read thread" stamp. Visits only move forward —
+    an older completion must not erase a newer one the user already saw —
+    and a malformed stamp is a no-op rather than a reset to unread. */
+export function markThreadVisitedPreferences(
+  current: Preferences,
+  input: { readonly threadKey: string; readonly visitedAt: string },
+): Partial<Preferences> {
+  const visitedAtMs = Date.parse(input.visitedAt);
+  if (!Number.isFinite(visitedAtMs) || input.threadKey.length === 0) {
+    return {};
+  }
+  const previous = current.threadLastVisitedAtById?.[input.threadKey];
+  const previousMs = previous ? Date.parse(previous) : Number.NaN;
+  if (Number.isFinite(previousMs) && previousMs >= visitedAtMs) {
+    return {};
+  }
+  return {
+    threadLastVisitedAtById: {
+      ...current.threadLastVisitedAtById,
+      [input.threadKey]: input.visitedAt,
+    },
+  };
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -101,8 +134,10 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingMode?: SidebarProjectGroupingMode;
     planModeEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
+    hiddenUsageProviders?: Preferences["hiddenUsageProviders"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
+    threadLastVisitedAtById?: Readonly<Record<string, string>>;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -163,7 +198,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (
     parsed.projectGroupingMode === "repository" ||
     parsed.projectGroupingMode === "repository_path" ||
-    parsed.projectGroupingMode === "separate"
+    parsed.projectGroupingMode === "separate" ||
+    parsed.projectGroupingMode === "environment"
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
@@ -181,11 +217,31 @@ function sanitizePreferences(parsed: Preferences): Preferences {
         favorite.model.trim().length > 0,
     );
   }
+  if (Array.isArray(parsed.hiddenUsageProviders)) {
+    preferences.hiddenUsageProviders = parsed.hiddenUsageProviders.filter(
+      Schema.is(UsageProviderKind),
+    );
+  }
   if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
     preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;
   }
   if (typeof parsed.threadListSnoozedShelfExpanded === "boolean") {
     preferences.threadListSnoozedShelfExpanded = parsed.threadListSnoozedShelfExpanded;
+  }
+  if (
+    typeof parsed.threadLastVisitedAtById === "object" &&
+    parsed.threadLastVisitedAtById !== null &&
+    !Array.isArray(parsed.threadLastVisitedAtById)
+  ) {
+    // Malformed stamps are kept, not dropped: hasUnseenThreadCompletion
+    // treats them as unseen, so corrupt local data cannot eat the signal.
+    const stamps: Record<string, string> = {};
+    for (const [key, stamp] of Object.entries(parsed.threadLastVisitedAtById)) {
+      if (key.length > 0 && typeof stamp === "string") {
+        stamps[key] = stamp;
+      }
+    }
+    preferences.threadLastVisitedAtById = stamps;
   }
   return preferences;
 }

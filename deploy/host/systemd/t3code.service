@@ -30,8 +30,12 @@ KillMode=mixed
 OOMPolicy=continue
 Restart=always
 RestartSec=5
-StandardOutput=append:/home/ubuntu/.t3/userdata/logs/boot-service.log
-StandardError=append:/home/ubuntu/.t3/userdata/logs/boot-service.log
+# stdout/stderr 只进 journal（重复的 StandardOutput= 不是双写，后者静默覆盖
+# 前者，systemd 255 实测）。boot-service.log 由服务端进程自己镜像写入
+# （T3CODE_PRETTY_LOG_FILE），CLI 的 Logs: 提示与无 journal 访问的排查不受影响。
+Environment=T3CODE_PRETTY_LOG_FILE=/home/ubuntu/.t3/userdata/logs/boot-service.log
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target

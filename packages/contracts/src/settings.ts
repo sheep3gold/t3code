@@ -66,6 +66,7 @@ export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
   "separate",
+  "environment",
 ]);
 export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
 const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
@@ -867,7 +868,7 @@ export const FactorySettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Proxy URL",
         description:
-          "HTTP proxy that every Droid request to Factory (chat, model listing, status probes) is sent through. Empty connects directly.",
+          "HTTP proxy that every Droid request to Factory (chat, model listing, status probes) is sent through. Empty uses the default xjp node.",
         providerSettingsForm: { placeholder: "http://127.0.0.1:2080", clearWhenEmpty: "omit" },
       }),
     ),
@@ -1416,6 +1417,15 @@ export const ServerSettings = Schema.Struct({
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * Skills the user has turned off. Matching is by skill name (case-insensitive)
+   * and global across every provider instance: a disabled skill is filtered out
+   * of provider snapshots, hidden from the composer's `$` menu, and never
+   * dispatched — a hand-typed `$name` mention stays literal text.
+   */
+  disabledSkills: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1689,6 +1699,8 @@ export const ServerSettingsPatch = Schema.Struct({
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
   ),
+  /** Whole-list replacement: the web UI sends the full disabled set each edit. */
+  disabledSkills: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

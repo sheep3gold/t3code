@@ -18,6 +18,7 @@ import {
   collectLimitPools,
   elapsedShare,
   formatResetsIn,
+  filterLimitPresentations,
   limitsNotice,
   paceOf,
   providersWithLimits,
@@ -123,6 +124,98 @@ describe("providersWithLimits", () => {
         }),
       ]),
     ).toEqual([codex]);
+  });
+});
+
+describe("provider limits visibility", () => {
+  it("filters every native instance and hub account by driver without hiding fork-only drivers", () => {
+    const checkedAt = "2026-09-03T11:00:00.000Z";
+    const limits = { checkedAt, windows: [window] };
+    const codex = provider({ usageLimits: limits });
+    const claude = provider({
+      instanceId: ProviderInstanceId.make("claude-personal"),
+      driver: ProviderDriverKind.make("claudeAgent"),
+      usageLimits: limits,
+    });
+    const minimax = provider({
+      instanceId: ProviderInstanceId.make("minimax"),
+      driver: ProviderDriverKind.make("minimax"),
+      usageLimits: limits,
+    });
+    const input = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          entry: { target: { label: "Laptop" } },
+          serverConfig: {
+            providers: [codex, claude, minimax],
+            usageLimitSources: [
+              {
+                id: UsageLimitSourceId.make("hub"),
+                kind: "cliproxy" as const,
+                label: "hub",
+                checkedAt,
+                accounts: [
+                  { id: "codex", driver: codex.driver, usageLimits: limits },
+                  { id: "claude", driver: claude.driver, usageLimits: limits },
+                ],
+              },
+              {
+                id: UsageLimitSourceId.make("claude-hub"),
+                kind: "cliproxy" as const,
+                label: "Claude hub",
+                checkedAt,
+                error: "Unavailable",
+                accounts: [{ id: "claude", driver: claude.driver, usageLimits: limits }],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const selected = filterLimitPresentations(input, new Set(["claude"]));
+    expect(collectLimitAccounts(selected).map((account) => account.driver)).toEqual([
+      codex.driver,
+      minimax.driver,
+      codex.driver,
+    ]);
+    expect(collectLimitNotices(selected)).toEqual([]);
+    expect(input.get(EnvironmentId.make("env-a"))?.serverConfig.providers).toHaveLength(3);
+    expect(filterLimitPresentations(input, new Set())).toBe(input);
+
+    const onlyOtherDrivers = filterLimitPresentations(input, new Set(["claude", "codex"]));
+    expect(collectLimitAccounts(onlyOtherDrivers).map((account) => account.driver)).toEqual([
+      minimax.driver,
+    ]);
+    expect(collectLimitNotices(onlyOtherDrivers)).toEqual([]);
+  });
+
+  it("hides Grok native instances and hub accounts", () => {
+    const limits = { checkedAt: "2026-09-03T11:00:00.000Z", windows: [window] };
+    const grok = provider({ driver: ProviderDriverKind.make("grok"), usageLimits: limits });
+    const input = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          entry: { target: { label: "Laptop" } },
+          serverConfig: {
+            providers: [grok],
+            usageLimitSources: [
+              {
+                id: UsageLimitSourceId.make("hub"),
+                kind: "cliproxy" as const,
+                label: "hub",
+                checkedAt: limits.checkedAt,
+                accounts: [{ id: "grok", driver: grok.driver, usageLimits: limits }],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const selected = filterLimitPresentations(input, new Set(["grok"]));
+    expect(collectLimitAccounts(selected)).toEqual([]);
+    expect(collectLimitNotices(selected)).toEqual([]);
   });
 });
 

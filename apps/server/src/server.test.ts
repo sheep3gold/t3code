@@ -37,12 +37,14 @@ import {
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
+  type ServerProvider,
   type ServerProviderUsageWindow,
   type ServerLifecycleStreamEvent,
   ThreadId,
   TurnId,
   UsageLimitSourceId,
   UsageReadError,
+  type UsageSummary,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -91,6 +93,8 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as NetAddress from "effect/unstable/net/NetAddress";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
+
+import { discoverClaudeSkills } from "./provider/Drivers/ClaudeSkills.ts";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const SUCCESSFUL_GIT_EXECUTION = {
@@ -184,6 +188,8 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
@@ -1038,6 +1044,8 @@ const buildAppUnderTest = (options?: {
               updatedAt: "1970-01-01T00:00:00.000Z",
             }),
           searchThreads: () => Effect.succeed({ matches: [] }),
+          searchThread: () =>
+            Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
@@ -1086,7 +1094,23 @@ const buildAppUnderTest = (options?: {
     ).pipe(Layer.provide(SqlitePersistenceMemory));
 
     const appLayer = servedRoutesLayer.pipe(
-      Layer.provide(Layer.mergeAll(threadRepositoriesLayer, resourceTelemetryLayer)),
+      Layer.provide(
+        Layer.mergeAll(
+          threadRepositoriesLayer,
+          resourceTelemetryLayer,
+          Layer.mock(SecretRequests.SecretRequests)({
+            answer: () => Effect.die("unused SecretRequests.answer"),
+            savedRef: () => Effect.succeed(Option.none()),
+            consume: () => Effect.die("unused SecretRequests.consume"),
+          }),
+          Layer.mock(McpAppRequests.McpAppRequests)({
+            callTool: () => Effect.die("unused McpAppRequests.callTool"),
+            toolInfo: () => Effect.die("unused McpAppRequests.toolInfo"),
+            readResource: () => Effect.die("unused McpAppRequests.readResource"),
+            updateModelContext: () => Effect.die("unused McpAppRequests.updateModelContext"),
+          }),
+        ),
+      ),
       Layer.provide(
         options?.layers?.usageService === undefined
           ? UsageService.layerTest
@@ -2319,6 +2343,94 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves a scan-free index and per-instance cards for lazy clients", () =>
+    Effect.gen(function* () {
+      const makeProvider = (instanceId: string, displayName: string) => ({
+        instanceId: ProviderInstanceId.make(instanceId),
+        driver: ProviderDriverKind.make("codex"),
+        displayName,
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      });
+      let scans = 0;
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: {
+            getProviders: Effect.succeed([
+              makeProvider("codex-a", "Codex A"),
+              makeProvider("codex-b", "Codex B"),
+            ]),
+          },
+          usageService: {
+            readInstances: () =>
+              Effect.sync(() => {
+                scans += 1;
+                return {
+                  readAt: "2026-10-03T08:00:00.000Z",
+                  instances: [
+                    {
+                      instanceId: ProviderInstanceId.make("codex-b"),
+                      usage: {
+                        available: true as const,
+                        totalTokens: 900,
+                        costUsd: 0.1,
+                        unpricedRecords: 0,
+                        models: [],
+                      },
+                    },
+                  ],
+                  pricing: {
+                    status: "cached" as const,
+                    source: "test",
+                    fetchedAt: "2026-10-02T00:00:00.000Z",
+                    knownModels: 1,
+                  },
+                  scanDurationMs: 1,
+                };
+              }),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const index = yield* responseJsonEffect<{
+        providers: Array<Record<string, unknown>>;
+      }>(yield* fetchEffect(`${url}?scope=index`, { headers }));
+      assert.deepEqual(
+        index.providers.map((entry) => [entry.id, entry.displayName, "usage" in entry]),
+        [
+          ["codex-a", "Codex A", false],
+          ["codex-b", "Codex B", false],
+        ],
+      );
+      assert.equal(scans, 0);
+
+      const card = yield* responseJsonEffect<{
+        provider: { id: string; usage: { totalTokens?: number }; usageLimits: unknown };
+      }>(yield* fetchEffect(`${url}?instance=codex-b&refresh=1`, { headers }));
+      assert.equal(card.provider.id, "codex-b");
+      assert.equal(card.provider.usage.totalTokens, 900);
+      assert.isDefined(card.provider.usageLimits);
+
+      const other = yield* responseJsonEffect<{
+        provider: { id: string; usage: { available: boolean } };
+      }>(yield* fetchEffect(`${url}?instance=codex-a`, { headers }));
+      assert.equal(other.provider.id, "codex-a");
+      assert.equal(other.provider.usage.available, false);
+
+      const missing = yield* fetchEffect(`${url}?instance=nope`, { headers });
+      assert.equal(missing.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("keeps provider state usable when the usage scan fails", () =>
     Effect.gen(function* () {
       const provider = {
@@ -2393,6 +2505,185 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 200);
       assert.equal(summary.providers[0]?.id, "codex-xjp");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  const historyBucket = (
+    day: string,
+    totalTokens: number,
+    costUsd: number,
+  ): UsageSummary["buckets"][number] => ({
+    day: day as UsageSummary["buckets"][number]["day"],
+    provider: "claude",
+    model: "model-x",
+    totals: {
+      uncachedInputTokens: totalTokens,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    },
+    costUsd,
+    cacheSavingsUsd: 0,
+    costSource: "modelPriced",
+    records: 1,
+    unpricedRecords: 0,
+    sessions: 1,
+  });
+
+  it.effect("serves zero-filled daily usage history rows for the chart", () =>
+    Effect.gen(function* () {
+      const windows: Array<{
+        sinceDay: string;
+        untilDay: string;
+        timeZone: string;
+        resolution?: string | undefined;
+      }> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([]) },
+          usageService: {
+            readSummary: (input) =>
+              Effect.sync(() => {
+                windows.push(input);
+                return {
+                  contractVersion: 1,
+                  readAt: "2026-10-03T08:00:00.000Z",
+                  timeZone: input.timeZone,
+                  sinceDay: input.sinceDay,
+                  untilDay: input.untilDay,
+                  buckets: [
+                    historyBucket("2026-10-01", 100, 0.5),
+                    historyBucket("2026-10-01", 24, 0.25),
+                    historyBucket("2026-10-03", 10, 0.1),
+                    historyBucket("2026-10-05", 7, 0), // Outside the window.
+                  ],
+                  sources: [],
+                  pricing: {
+                    status: "cached",
+                    source: "test",
+                    fetchedAt: null,
+                    knownModels: 0,
+                  },
+                  scanDurationMs: 1,
+                } satisfies UsageSummary;
+              }),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const history = yield* responseJsonEffect<{
+        timeZone: string;
+        sinceDay: string;
+        untilDay: string;
+        days: Array<{ day: string; totalTokens: number; costUsd: number }>;
+        available: boolean;
+        readAt: string;
+      }>(yield* fetchEffect(`${url}?scope=history&days=3&untilDay=2026-10-03`, { headers }));
+
+      assert.deepEqual(history, {
+        timeZone: "Asia/Shanghai",
+        sinceDay: "2026-10-01",
+        untilDay: "2026-10-03",
+        days: [
+          { day: "2026-10-01", totalTokens: 124, costUsd: 0.75 },
+          { day: "2026-10-02", totalTokens: 0, costUsd: 0 },
+          { day: "2026-10-03", totalTokens: 10, costUsd: 0.1 },
+        ],
+        available: true,
+        readAt: "2026-10-03T08:00:00.000Z",
+      });
+      // The window is derived server-side so every client shares one chart.
+      assert.deepEqual(windows, [
+        {
+          sinceDay: "2026-10-01",
+          untilDay: "2026-10-03",
+          timeZone: "Asia/Shanghai",
+          resolution: "day",
+        },
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("degrades history to zero rows when the scan fails", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([]) },
+          usageService: {
+            readSummary: () =>
+              Effect.fail(
+                new UsageReadError({ reason: "scanFailed", detail: "transcripts unreadable" }),
+              ),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const response = yield* fetchEffect(`${url}?scope=history&days=2&untilDay=2026-10-02`, {
+        headers,
+      });
+      const history = yield* responseJsonEffect<{
+        days: Array<{ day: string; totalTokens: number; costUsd: number }>;
+        available: boolean;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(history.available, false);
+      assert.deepEqual(history.days, [
+        { day: "2026-10-01", totalTokens: 0, costUsd: 0 },
+        { day: "2026-10-02", totalTokens: 0, costUsd: 0 },
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("validates history window params", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([]) },
+          usageService: {
+            readSummary: (input) =>
+              Effect.succeed({
+                contractVersion: 1,
+                readAt: "2026-10-03T08:00:00.000Z",
+                timeZone: input.timeZone,
+                sinceDay: input.sinceDay,
+                untilDay: input.untilDay,
+                buckets: [],
+                sources: [],
+                pricing: {
+                  status: "cached",
+                  source: "test",
+                  fetchedAt: null,
+                  knownModels: 0,
+                },
+                scanDurationMs: 0,
+              } satisfies UsageSummary),
+          },
+        },
+      });
+      const url = yield* getHttpServerUrl("/api/provider-usage-summary");
+      const headers = { cookie: yield* getAuthenticatedSessionCookieHeader() };
+
+      const badDay = yield* fetchEffect(`${url}?scope=history&untilDay=10/04/2026`, { headers });
+      assert.equal(badDay.status, 400);
+
+      // `days` is clamped to the 90-day cache retention, counting back from today.
+      const clamped = yield* responseJsonEffect<{
+        sinceDay: string;
+        untilDay: string;
+        days: Array<{ day: string }>;
+      }>(yield* fetchEffect(`${url}?scope=history&days=999`, { headers }));
+      assert.equal(clamped.days.length, 90);
+      assert.equal(clamped.untilDay, clamped.days[clamped.days.length - 1]?.day);
+      assert.equal(
+        Date.parse(`${clamped.sinceDay}T00:00:00Z`),
+        Date.parse(`${clamped.untilDay}T00:00:00Z`) - 89 * 24 * 60 * 60 * 1000,
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4464,6 +4755,237 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isTrue(wsTicketBody.ticket.length > 0);
       assert.equal(typeof wsTicketBody.expiresAt, "string");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("answers 503 from /api/translate when the upstream key is not configured", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "");
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          "content-type": "application/json",
+        },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+      const body = yield* responseJsonEffect<{ readonly _tag: string }>(response);
+
+      assert.equal(response.status, 503);
+      assert.equal(body._tag, "EnvironmentTranslateUnavailableError");
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  it.effect("rejects unauthenticated /api/translate requests", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      yield* buildAppUnderTest();
+
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+
+      assert.equal(response.status, 401);
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  it.effect("authenticates /api/translate via the wsTicket query parameter", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "");
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const wsTicketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const wsTicketResponse = yield* fetchEffect(wsTicketUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}` },
+      });
+      const wsTicketBody = yield* responseJsonEffect<{ readonly ticket: string }>(wsTicketResponse);
+      assert.equal(wsTicketResponse.status, 200);
+
+      // 503 (not 401) proves the ticket authenticated; the upstream key is
+      // deliberately unset so the request stops before any network call.
+      const translateUrl = yield* getHttpServerUrl(
+        `/api/translate?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`,
+      );
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+
+      assert.equal(response.status, 503);
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  // The real upstream occasionally emits one malformed JSON escape deep inside a
+  // long completion while answering a translation batch (observed as a 200 whose
+  // content fails json parsing). One re-ask usually returns a usable array, so
+  // the route absorbs that first malformed answer instead of failing the client.
+  it.effect("retries one malformed /api/translate upstream answer and still translates", () =>
+    Effect.gen(function* () {
+      const upstreamBodies: Array<string> = [];
+      const upstream = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const NodeHttp = await import("node:http");
+          return await new Promise<{ readonly close: () => Promise<void>; readonly url: string }>(
+            (resolve, reject) => {
+              const contents = [
+                // One valid JSON array with a broken escape inside the string.
+                '["你好\\u4e2d，世界x"]'.replace("x", "\\q"),
+                '["你好，世界"]',
+              ];
+              let served = 0;
+              const server = NodeHttp.createServer((request, response) => {
+                const chunks: Buffer[] = [];
+                request.on("data", (chunk) => {
+                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                });
+                request.on("end", () => {
+                  upstreamBodies.push(Buffer.concat(chunks).toString("utf8"));
+                  const content = contents[Math.min(served, contents.length - 1)]!;
+                  served += 1;
+                  response.statusCode = 200;
+                  response.setHeader("content-type", "application/json");
+                  response.end(
+                    JSON.stringify({
+                      choices: [{ message: { content }, finish_reason: "stop" }],
+                    }),
+                  );
+                });
+              });
+              server.on("error", reject);
+              server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address !== "object") {
+                  reject(new Error("Expected upstream listener address"));
+                  return;
+                }
+                resolve({
+                  url: `http://127.0.0.1:${address.port}/v1`,
+                  close: () =>
+                    new Promise<void>((resolveClose) => {
+                      server.close(() => resolveClose());
+                    }),
+                });
+              });
+            },
+          );
+        }),
+        ({ close }) => Effect.promise(close),
+      );
+
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", upstream.url);
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}`, "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+      const body = yield* responseJsonEffect<{ readonly translations?: ReadonlyArray<string> }>(
+        response,
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body.translations, ["你好，世界"]);
+      assert.equal(upstreamBodies.length, 2);
+      assert.isTrue(upstreamBodies.every((upstreamBody) => upstreamBody.includes("hello")));
+      // Thinking dominated latency; every upstream call must switch it off.
+      assert.isTrue(
+        upstreamBodies.every((upstreamBody) =>
+          upstreamBody.includes('"thinking":{"type":"disabled"}'),
+        ),
+      );
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  it.effect("answers 502 from /api/translate when both upstream answers are malformed", () =>
+    Effect.gen(function* () {
+      const upstreamRequests: Array<string> = [];
+      const upstream = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const NodeHttp = await import("node:http");
+          return await new Promise<{ readonly close: () => Promise<void>; readonly url: string }>(
+            (resolve, reject) => {
+              const server = NodeHttp.createServer((request, response) => {
+                const chunks: Buffer[] = [];
+                request.on("data", (chunk) => {
+                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                });
+                request.on("end", () => {
+                  upstreamRequests.push(Buffer.concat(chunks).toString("utf8"));
+                  response.statusCode = 200;
+                  response.setHeader("content-type", "application/json");
+                  response.end(
+                    JSON.stringify({
+                      choices: [{ message: { content: '["你好\\q世界"]', finish_reason: "stop" } }],
+                    }),
+                  );
+                });
+              });
+              server.on("error", reject);
+              server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address !== "object") {
+                  reject(new Error("Expected upstream listener address"));
+                  return;
+                }
+                resolve({
+                  url: `http://127.0.0.1:${address.port}/v1`,
+                  close: () =>
+                    new Promise<void>((resolveClose) => {
+                      server.close(() => resolveClose());
+                    }),
+                });
+              });
+            },
+          );
+        }),
+        ({ close }) => Effect.promise(close),
+      );
+
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", upstream.url);
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}`, "content-type": "application/json" },
+        body: jsonRequestBody({ texts: ["hello"] }),
+      });
+
+      const body = yield* responseJsonEffect<{ readonly _tag?: string | null }>(response);
+      assert.equal(response.status, 502);
+      assert.equal(body?._tag, "EnvironmentTranslateUpstreamError");
+      assert.equal(upstreamRequests.length, 2);
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
   );
 
   it.effect("does not allow management-only access tokens to operate the environment", () =>
@@ -6645,6 +7167,225 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+
+  for (const instanceMode of ["legacy-default", "custom-environment"] as const) {
+    it.effect(
+      `skill RPCs persist Claude files, refresh discovery and enforce scopes (${instanceMode})`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "t3-skill-rpc-" });
+          const instanceId = ProviderInstanceId.make(
+            instanceMode === "legacy-default" ? "claudeAgent" : "claude-custom",
+          );
+          const cwd = path.join(homePath, "workspace");
+          const refreshes: string[] = [];
+          let providers: ServerProvider[] = [
+            {
+              instanceId,
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+              status: "ready",
+              installed: true,
+              auth: { status: "authenticated" },
+              checkedAt: "2026-10-07T00:00:00.000Z",
+              version: "1.0.0",
+              models: [],
+              slashCommands: [],
+              skills: [],
+              workspaceSnapshots: [
+                { cwd, checkedAt: "2026-10-07T00:00:00.000Z", slashCommands: [], skills: [] },
+              ],
+            },
+          ];
+          yield* buildAppUnderTest({
+            layers: {
+              serverSettings: {
+                getSettings: Effect.succeed({
+                  ...DEFAULT_SERVER_SETTINGS,
+                  ...(instanceMode === "legacy-default"
+                    ? {
+                        providers: {
+                          ...DEFAULT_SERVER_SETTINGS.providers,
+                          claudeAgent: {
+                            ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+                            homePath,
+                          },
+                        },
+                      }
+                    : {
+                        providerInstances: {
+                          [instanceId]: {
+                            driver: ProviderDriverKind.make("claudeAgent"),
+                            config: { homePath: "" },
+                            environment: [
+                              { name: "CLAUDE_CONFIG_DIR", value: homePath, sensitive: false },
+                            ],
+                          },
+                        },
+                      }),
+                }),
+              },
+              providerRegistry: {
+                getProviders: Effect.sync(() => providers),
+                refreshInstance: (id) =>
+                  Effect.gen(function* () {
+                    assert.equal(id, instanceId);
+                    refreshes.push("instance");
+                    const skills = yield* discoverClaudeSkills({ homePath }).pipe(
+                      Effect.provide(NodeServices.layer),
+                      Effect.orDie,
+                    );
+                    providers = providers.map((provider) => ({ ...provider, skills }));
+                    return providers;
+                  }),
+                refreshWorkspaceSnapshot: (input) =>
+                  Effect.gen(function* () {
+                    assert.deepEqual(input, { instanceId, cwd, force: true });
+                    refreshes.push("workspace");
+                    const skills = yield* discoverClaudeSkills({ homePath }, cwd).pipe(
+                      Effect.provide(NodeServices.layer),
+                      Effect.orDie,
+                    );
+                    providers = providers.map((provider) => ({
+                      ...provider,
+                      workspaceSnapshots: [
+                        { cwd, checkedAt: provider.checkedAt, slashCommands: [], skills },
+                      ],
+                    }));
+                    return providers;
+                  }),
+              },
+            },
+          });
+          const wsUrl = yield* getWsServerUrl("/ws");
+          yield* Effect.scoped(
+            withWsRpcClient(wsUrl, (client) =>
+              Effect.gen(function* () {
+                const created = yield* client[WS_METHODS.serverSkillUpsert]({
+                  instanceId,
+                  name: "draft",
+                  description: "Review: carefully",
+                  body: "Original instructions.\n",
+                });
+                assert.equal(created.path, path.join(homePath, "skills", "draft", "SKILL.md"));
+                assert.include(yield* fs.readFileString(created.path), "Original instructions.");
+                const read = yield* client[WS_METHODS.serverSkillRead]({
+                  instanceId,
+                  name: "draft",
+                });
+                assert.equal(read.description, "Review: carefully");
+                assert.equal(read.body, "Original instructions.\n");
+                assert.equal(
+                  (yield* client[WS_METHODS.serverGetConfig]({})).providers[0]?.skills[0]?.name,
+                  "draft",
+                );
+
+                const reader = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+                  scope: "orchestration:read",
+                });
+                assert.equal(reader.response.status, 200);
+                const ticketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+                  headers: { authorization: `Bearer ${reader.body.access_token ?? ""}` },
+                });
+                assert.equal(ticketResponse.status, 200);
+                const { ticket } = (yield* ticketResponse.json) as { ticket: string };
+                const readerUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+                yield* withWsRpcClient(readerUrl, (readOnly) =>
+                  Effect.gen(function* () {
+                    assert.equal(
+                      (yield* readOnly[WS_METHODS.serverSkillRead]({ instanceId, name: "draft" }))
+                        .body,
+                      read.body,
+                    );
+                    const writeError = yield* Effect.flip(
+                      readOnly[WS_METHODS.serverSkillUpsert]({
+                        instanceId,
+                        name: "draft",
+                        previousName: "draft",
+                        body: "Unauthorized change",
+                      }),
+                    );
+                    assert.equal(writeError._tag, "EnvironmentAuthorizationError");
+                    const deleteError = yield* Effect.flip(
+                      readOnly[WS_METHODS.serverSkillDelete]({ instanceId, name: "draft" }),
+                    );
+                    assert.equal(deleteError._tag, "EnvironmentAuthorizationError");
+                  }),
+                );
+                assert.include(yield* fs.readFileString(created.path), "Original instructions.");
+
+                const unsupported = yield* Effect.flip(
+                  client[WS_METHODS.serverSkillRead]({
+                    instanceId: ProviderInstanceId.make("codex"),
+                    name: "draft",
+                  }),
+                );
+                assert.equal(unsupported._tag, "ServerSkillFileError");
+                const collision = yield* Effect.flip(
+                  client[WS_METHODS.serverSkillUpsert]({
+                    instanceId,
+                    name: "draft",
+                    body: "Should not overwrite",
+                  }),
+                );
+                assert.equal(collision._tag, "ServerSkillFileError");
+                yield* client[WS_METHODS.serverSkillUpsert]({
+                  instanceId,
+                  name: "published",
+                  previousName: "draft",
+                  description: "Updated",
+                  body: "New instructions.\n",
+                });
+                assert.isFalse(yield* fs.exists(path.dirname(created.path)));
+                assert.equal(
+                  (yield* client[WS_METHODS.serverSkillRead]({ instanceId, name: "published" }))
+                    .body,
+                  "New instructions.\n",
+                );
+                const renamed = (yield* client[WS_METHODS.serverGetConfig]({})).providers[0];
+                assert.deepEqual(
+                  renamed?.skills.map((skill) => skill.name),
+                  ["published"],
+                );
+                assert.deepEqual(
+                  renamed?.workspaceSnapshots?.[0]?.skills.map((skill) => skill.name),
+                  ["published"],
+                );
+                assert.deepEqual(
+                  yield* client[WS_METHODS.serverSkillDelete]({ instanceId, name: "published" }),
+                  { deleted: true },
+                );
+                assert.deepEqual(
+                  (yield* client[WS_METHODS.serverGetConfig]({})).providers[0]?.skills,
+                  [],
+                );
+                assert.deepEqual(
+                  yield* discoverClaudeSkills({ homePath }).pipe(
+                    Effect.provide(NodeServices.layer),
+                    Effect.orDie,
+                  ),
+                  [],
+                );
+                assert.deepEqual(refreshes, [
+                  "instance",
+                  "workspace",
+                  "instance",
+                  "workspace",
+                  "instance",
+                  "workspace",
+                ]);
+                assert.equal(
+                  (yield* fs.readDirectory(path.join(homePath, ".t3-skill-backups"))).length,
+                  2,
+                );
+              }),
+            ),
+          );
+        }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+  }
 
   for (const mode of ["all", "targeted", "background"] as const) {
     it.effect(`provider refresh invalidates T3 caches before probing (${mode})`, () => {

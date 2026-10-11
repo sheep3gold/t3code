@@ -317,8 +317,135 @@ export function sortPinnedThreadsByOrderKey<
   return [...keyed, ...keyless];
 }
 
-/** New and reopened threads lead the active list. Arranged threads follow
-    their saved keys; activity leaves both groups in place. */
+/**
+ * Working tier of the active list. A thread reads as working while its
+ * session is running/starting or native background work outlives the turn
+ * (see backgroundLiveness). Resolved per-call because callers (the client
+ * shell subscription) hand back frozen shells whose liveness changes with
+ * every server push.
+ */
+export type ActiveThreadWorkingInput = {
+  readonly session?: { readonly status: string } | null | undefined;
+  readonly backgroundLiveness?: "working" | "monitoring" | null | undefined;
+};
+
+function activeThreadWorkingPriority(thread: ActiveThreadWorkingInput): 0 | 1 {
+  const status = thread.session?.status;
+  if (status === "running" || status === "starting") return 1;
+  return thread.backgroundLiveness === "working" ? 1 : 0;
+}
+
+/** Activity stamps for the rest of the active list. updatedAt is
+    deliberately NOT one of them: the server bumps it on any metadata write
+    (pin, rename, order keys), which would reorder rows for housekeeping
+    work the user never sees. All optional so minimal fixtures and shells
+    from older servers keep typechecking. */
+export type ActiveThreadActivityInput = {
+  readonly latestUserMessageAt?: string | null | undefined;
+  readonly latestTurn?:
+    | {
+        readonly requestedAt?: string | null | undefined;
+        readonly startedAt?: string | null | undefined;
+        readonly completedAt?: string | null | undefined;
+      }
+    | null
+    | undefined;
+};
+
+/** True when the latest turn completed after the user last looked at the
+    thread. A missing visit counts as read — never-visited threads must not
+    flood the top of the list on a fresh device — while a malformed visit
+    timestamp counts as unseen so corrupt local data cannot eat the signal. */
+export function hasUnseenThreadCompletion(
+  latestTurn: { readonly completedAt?: string | null | undefined } | null | undefined,
+  lastVisitedAt: string | null | undefined,
+): boolean {
+  const completedAt = latestTurn?.completedAt;
+  if (!completedAt) return false;
+  const completedMs = toSortableTimestamp(completedAt);
+  if (completedMs === null) return false;
+  if (!lastVisitedAt) return false;
+  const visitedMs = toSortableTimestamp(lastVisitedAt);
+  if (visitedMs === null) return true;
+  return completedMs > visitedMs;
+}
+
+/** Read stamp the unseen-completion signal compares against. A server that
+    stores read state is authoritative, so a read — or an explicit Mark
+    unread — on any device applies to every device. Threads the server has
+    no stamp for (null), and shells from servers that predate shared read
+    state (field absent), fall back to this device's local visit stamp. */
+export function resolveThreadLastReadAt(
+  thread: { readonly lastReadAt?: string | null | undefined },
+  localLastVisitedAt: string | null | undefined,
+): string | null {
+  return thread.lastReadAt ?? localLastVisitedAt ?? null;
+}
+
+/** True when the server should be told about a visit: it stores read state
+    and does not already have this completion (or a later one) as seen. Keeps
+    every open/re-render from dispatching a command. */
+export function shouldSyncThreadRead(
+  thread: { readonly lastReadAt?: string | null | undefined },
+  readAt: string,
+): boolean {
+  if (thread.lastReadAt === undefined) return false;
+  const readAtMs = toSortableTimestamp(readAt);
+  if (readAtMs === null) return false;
+  const currentMs = toSortableTimestamp(thread.lastReadAt ?? undefined);
+  return currentMs === null || currentMs < readAtMs;
+}
+
+/** The timestamp "rest" rows sort by inside the active block: the newest of
+    the thread's activity stamps (latest user message, latest turn) and its
+    creation/re-entry anchor, so recently handled threads lead while
+    reopened threads still surface. Malformed stamps sink to the epoch. */
+function activeThreadActivityMs(
+  thread: {
+    readonly createdAt: string;
+    readonly unsettledAt?: string | null | undefined;
+  } & ActiveThreadActivityInput,
+): number {
+  return toSortableTimestamp(resolveActiveThreadActivityTimestamp(thread) ?? undefined) ?? 0;
+}
+
+/** The stamp behind activeThreadActivityMs, for rows that label their time:
+    showing the same stamp the list sorts by keeps the labels in order. */
+export function resolveActiveThreadActivityTimestamp(
+  thread: {
+    readonly createdAt: string;
+    readonly unsettledAt?: string | null | undefined;
+  } & ActiveThreadActivityInput,
+): string | null {
+  let latest: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const candidate of [
+    thread.latestUserMessageAt,
+    thread.latestTurn?.completedAt,
+    thread.latestTurn?.startedAt,
+    thread.latestTurn?.requestedAt,
+    thread.unsettledAt,
+    thread.createdAt,
+  ]) {
+    const parsed = toSortableTimestamp(candidate ?? undefined);
+    if (candidate != null && parsed !== null && parsed > latestMs) {
+      latest = candidate;
+      latestMs = parsed;
+    }
+  }
+  return latest;
+}
+
+/**
+ * Attention tiers of the active list, one sort shared by web and mobile:
+ * completions the user has not opened yet lead, then running work. Both
+ * tiers keep the base order (creation/re-entry anchor, saved arrangement)
+ * so rows do not shuffle while the user watches. Everything else follows
+ * last activity, newest first, and manually arranged keys keep their run
+ * at the bottom of the block. Callers pass an `isUnreadCompleted` predicate
+ * (server read state via resolveThreadLastReadAt, falling back to the
+ * device's local stamp); without it nothing is unread.
+ */
 export function sortActiveThreadsByOrderKey<
   T extends {
     readonly id: string;
@@ -326,8 +453,9 @@ export function sortActiveThreadsByOrderKey<
     readonly unsettledAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
-  },
->(threads: readonly T[]): T[] {
+  } & ActiveThreadWorkingInput &
+    ActiveThreadActivityInput,
+>(threads: readonly T[], options?: { readonly isUnreadCompleted?: (thread: T) => boolean }): T[] {
   if (threads.length < 2) return [...threads];
   const timestamps = new Map<T, number>();
   for (const thread of threads) {
@@ -335,7 +463,11 @@ export function sortActiveThreadsByOrderKey<
       timestamps.set(thread, activeThreadAnchorTimestampMs(thread));
     }
   }
-  return [...threads].sort((left, right) => {
+  const identityTiebreak = (left: T, right: T) =>
+    left.id.localeCompare(right.id) ||
+    (left.environmentId ?? "").localeCompare(right.environmentId ?? "");
+  // Base order: keyless threads by creation/re-entry anchor, arranged keys below.
+  const base = [...threads].sort((left, right) => {
     const leftKey = left.activeOrderKey;
     const rightKey = right.activeOrderKey;
     if (leftKey == null && rightKey != null) return -1;
@@ -346,12 +478,31 @@ export function sortActiveThreadsByOrderKey<
     } else {
       order = timestamps.get(right)! - timestamps.get(left)!;
     }
-    return (
-      order ||
-      left.id.localeCompare(right.id) ||
-      (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
-    );
+    return order || identityTiebreak(left, right);
   });
+  // Stable partition by attention tier: running work outranks an older
+  // unseen completion on the same thread (the newer result supersedes it).
+  const unreadCompleted: T[] = [];
+  const working: T[] = [];
+  const rest: T[] = [];
+  for (const thread of base) {
+    if (activeThreadWorkingPriority(thread) === 1) {
+      working.push(thread);
+    } else if (options?.isUnreadCompleted?.(thread) === true) {
+      unreadCompleted.push(thread);
+    } else {
+      rest.push(thread);
+    }
+  }
+  const restUnkeyed = rest
+    .filter((thread) => thread.activeOrderKey == null)
+    .sort(
+      (left, right) =>
+        activeThreadActivityMs(right) - activeThreadActivityMs(left) ||
+        identityTiebreak(left, right),
+    );
+  const restKeyed = rest.filter((thread) => thread.activeOrderKey != null);
+  return [...unreadCompleted, ...working, ...restUnkeyed, ...restKeyed];
 }
 
 /**

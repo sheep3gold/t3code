@@ -211,7 +211,10 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
 
 const config: ExpoConfig = {
   name: variant.appName,
-  slug: "t3-code",
+  // Must match the EAS project's own slug: eas-cli aborts `env:pull` (and every
+  // later build/update command) when extra.eas.projectId resolves to a
+  // different slug than this field.
+  slug: "t3code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: "1.3.1",
@@ -226,7 +229,7 @@ const config: ExpoConfig = {
   userInterfaceStyle: "automatic",
   updates: {
     enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+    url: "https://u.expo.dev/86638492-2c76-4195-831b-3b1d44a40d65",
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
   },
@@ -458,10 +461,10 @@ const config: ExpoConfig = {
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
     eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+      projectId: "86638492-2c76-4195-831b-3b1d44a40d65",
     },
   },
-  owner: "pingdotgg",
+  owner: "yxyxyyxxhhh",
 };
 
 export default config;

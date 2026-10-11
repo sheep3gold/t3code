@@ -25,6 +25,17 @@ import {
   ClientActivityReportInput,
   HostPowerSnapshot,
 } from "./background.ts";
+import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
+import {
+  McpAppCallToolInput,
+  McpAppCallToolResult,
+  McpAppReadResourceInput,
+  McpAppReadResourceResult,
+  McpAppRequestError,
+  McpAppToolInfo,
+  McpAppToolInfoInput,
+  McpAppUpdateModelContextInput,
+} from "./mcpApps.ts";
 import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
@@ -94,6 +105,8 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetSnapshotError,
+  OrchestrationSearchThreadError,
+  OrchestrationSearchThreadInput,
   OrchestrationSearchThreadsError,
   OrchestrationSearchThreadsInput,
   OrchestrationGetTurnDiffError,
@@ -227,6 +240,7 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
+  ServerSkillFileError,
   ServerSelfUpdateError,
   ServerSelfUpdateInput,
   ServerSelfUpdateProgressEvent,
@@ -295,6 +309,12 @@ export const WS_METHODS = {
   assetsCreateUrl: "assets.createUrl",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
+
+  // MCP Apps methods
+  mcpAppsCallTool: "mcpApps.callTool",
+  mcpAppsToolInfo: "mcpApps.toolInfo",
+  mcpAppsReadResource: "mcpApps.readResource",
+  mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
@@ -372,6 +392,9 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverSkillRead: "server.skillRead",
+  serverSkillUpsert: "server.skillUpsert",
+  serverSkillDelete: "server.skillDelete",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -593,6 +616,53 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const ServerSkillReadInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  name: TrimmedNonEmptyString,
+});
+
+const ServerSkillDocument = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  /** Markdown body below the frontmatter. */
+  body: Schema.String,
+  /** Absolute SKILL.md path on the server's filesystem. */
+  path: TrimmedNonEmptyString,
+});
+
+const ServerSkillUpsertInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  /** Directory name under <configDir>/skills; lowercase slug. */
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  body: Schema.String,
+  /** Set when renaming: the previous directory to remove after writing. */
+  previousName: Schema.optional(TrimmedNonEmptyString),
+});
+
+const ServerSkillDeleteInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  name: TrimmedNonEmptyString,
+});
+
+const WsServerSkillReadRpc = Rpc.make(WS_METHODS.serverSkillRead, {
+  payload: ServerSkillReadInput,
+  success: ServerSkillDocument,
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSkillUpsertRpc = Rpc.make(WS_METHODS.serverSkillUpsert, {
+  payload: ServerSkillUpsertInput,
+  success: ServerSkillDocument,
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSkillDeleteRpc = Rpc.make(WS_METHODS.serverSkillDelete, {
+  payload: ServerSkillDeleteInput,
+  success: Schema.Struct({ deleted: Schema.Boolean }),
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1303,6 +1373,40 @@ const WsOrchestrationSearchThreadsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.search
   error: Schema.Union([OrchestrationSearchThreadsError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationSearchThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.searchThread, {
+  payload: OrchestrationSearchThreadInput,
+  success: OrchestrationRpcSchemas.searchThread.output,
+  error: Schema.Union([OrchestrationSearchThreadError, EnvironmentAuthorizationError]),
+});
+
+const WsMcpAppsCallToolRpc = Rpc.make(WS_METHODS.mcpAppsCallTool, {
+  payload: McpAppCallToolInput,
+  success: McpAppCallToolResult,
+  error: Schema.Union([McpAppRequestError, EnvironmentAuthorizationError]),
+});
+const WsMcpAppsToolInfoRpc = Rpc.make(WS_METHODS.mcpAppsToolInfo, {
+  payload: McpAppToolInfoInput,
+  success: McpAppToolInfo,
+  error: Schema.Union([McpAppRequestError, EnvironmentAuthorizationError]),
+});
+const WsMcpAppsReadResourceRpc = Rpc.make(WS_METHODS.mcpAppsReadResource, {
+  payload: McpAppReadResourceInput,
+  success: McpAppReadResourceResult,
+  error: Schema.Union([McpAppRequestError, EnvironmentAuthorizationError]),
+});
+const WsMcpAppsUpdateModelContextRpc = Rpc.make(WS_METHODS.mcpAppsUpdateModelContext, {
+  payload: McpAppUpdateModelContextInput,
+  error: Schema.Union([McpAppRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsOrchestrationAnswerSecretRequestRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.answerSecretRequest,
+  {
+    payload: SecretRequestAnswerInput,
+    error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
   {
@@ -1415,6 +1519,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerSkillReadRpc,
+  WsServerSkillUpsertRpc,
+  WsServerSkillDeleteRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
@@ -1534,6 +1641,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationSearchThreadsRpc,
+  WsOrchestrationSearchThreadRpc,
+  WsMcpAppsCallToolRpc,
+  WsMcpAppsToolInfoRpc,
+  WsMcpAppsReadResourceRpc,
+  WsMcpAppsUpdateModelContextRpc,
+  WsOrchestrationAnswerSecretRequestRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,

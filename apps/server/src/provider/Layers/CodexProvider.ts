@@ -1,8 +1,10 @@
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -33,7 +35,6 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
-  AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   type ServerProviderDraft,
@@ -43,12 +44,31 @@ import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
 import {
   codexRateLimitsFailureMessage,
   codexRateLimitsToLimits,
+  isoFromEpochSeconds,
   type CodexRateLimitSnapshot,
   type CodexResetCreditsSummary,
 } from "./codexUsageLimits.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
-const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
+
+// The app-server answers `account/rateLimits/read` through the XJP proxy and
+// can take several seconds under load. The previous 3s budget turned a slow
+// answer into "Codex did not answer the usage request" (and thus empty quota
+// rows) even though the account was fine. 8s still degrades inside the overall
+// probe budget instead of reporting a phantom quota outage.
+const RATE_LIMITS_PROBE_TIMEOUT_MS = 8_000;
+
+// `model/list` is paginated and can be the slowest call in the probe. Bound it
+// so a slow model list degrades to custom models only, instead of blowing the
+// whole probe budget and losing the account and quota results too.
+const MODELS_PROBE_TIMEOUT_MS = 8_000;
+
+// Total budget for the whole Codex probe: spawn + initialize handshake +
+// account/read + the concurrent skills/models/rateLimits group. account/read
+// alone spawns a fresh app-server through the proxy and takes ~4.5s, so the
+// shared 10s auth budget is too tight for Codex. This stays under web-hub's
+// 30s proxy read timeout.
+const CODEX_PROBE_TIMEOUT_MS = 20_000;
 
 type CodexRateLimitsProbe =
   | {
@@ -63,6 +83,15 @@ type CodexRateLimitsProbe =
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 
+/**
+ * Codex stores its OAuth session in `CODEX_HOME/auth.json`. A non-empty
+ * `tokens.refresh_token` means the login is intact even while Codex reports
+ * `account:null + requiresOpenaiAuth:true` during an exhausted rate-limit
+ * window. Matched structurally, without a JSON parse, to stay lint-clean.
+ */
+const hasCodexRefreshToken = (authJson: string): boolean =>
+  /"refresh_token"\s*:\s*"[^"]+"/.test(authJson);
+
 const CODEX_PRESENTATION = {
   displayName: "Codex",
   showInteractionModeToggle: true,
@@ -72,6 +101,7 @@ const CODEX_PRESENTATION = {
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
   readonly rateLimits?: CodexRateLimitsProbe;
+  readonly hasStoredAuth?: boolean;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -362,6 +392,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
     },
     capabilities: {
       experimentalApi: true,
+      extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } },
     },
   };
 }
@@ -437,21 +468,22 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const version = versionMatch ? versionMatch[1] : undefined;
 
   const accountResponse = yield* client.request("account/read", {});
-  if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
-    return {
-      account: accountResponse,
-      version,
-      models: appendCustomCodexModels([], input.customModels ?? []),
-      skills: [],
-    } satisfies CodexAppServerProviderSnapshot;
-  }
+  const isUnauthenticated = !accountResponse.account && accountResponse.requiresOpenaiAuth;
 
-  const [skillsResponse, models, rateLimits] = yield* Effect.all(
+  // Even when unauthenticated, still probe rate limits and auth.json so we can
+  // distinguish "not logged in" from "rate-limited" (Codex returns account:null
+  // during rate-limit windows but the session is still valid).
+  const [skillsResponse, models, rateLimits, hasStoredAuth] = yield* Effect.all(
     [
-      client.request("skills/list", {
-        cwds: [input.cwd],
-      }),
-      requestAllCodexModels(client),
+      isUnauthenticated
+        ? Effect.succeed({ data: [] } as CodexSchema.V2SkillsListResponse)
+        : client.request("skills/list", { cwds: [input.cwd] }),
+      isUnauthenticated
+        ? Effect.succeed(appendCustomCodexModels([], input.customModels ?? []))
+        : requestAllCodexModels(client).pipe(
+            Effect.timeoutOption(Duration.millis(MODELS_PROBE_TIMEOUT_MS)),
+            Effect.map(Option.getOrElse((): ReadonlyArray<ServerProviderModel> => [])),
+          ),
       // Usage is an enrichment: a failure or a slow answer degrades to "no
       // usage this probe" rather than costing the account and models.
       client.request("account/rateLimits/read", undefined).pipe(
@@ -472,6 +504,20 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
           ),
         ),
       ),
+      // Check whether auth.json exists and has a non-empty refresh token.
+      // A missing or empty token means truly unauthenticated; a present token
+      // means the session is valid but currently rate-limited.
+      isUnauthenticated && input.homePath
+        ? Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const path = yield* Path.Path;
+            const authPath = path.join(input.homePath!, "auth.json");
+            return yield* fs.readFileString(authPath).pipe(
+              Effect.map((raw) => hasCodexRefreshToken(raw)),
+              Effect.catch(() => Effect.succeed(false)),
+            );
+          })
+        : Effect.succeed(false),
     ],
     { concurrency: "unbounded" },
   );
@@ -479,6 +525,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   return {
     account: accountResponse,
     rateLimits,
+    hasStoredAuth,
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -542,7 +589,11 @@ const makePendingCodexProvider = (
     });
   });
 
-function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]): {
+function accountProbeStatus(
+  account: CodexAppServerProviderSnapshot["account"],
+  rateLimits: CodexRateLimitsProbe | undefined,
+  hasStoredAuth: boolean | undefined,
+): {
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProvider["auth"];
   readonly message?: string;
@@ -561,6 +612,34 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
   }
 
   if (account.requiresOpenaiAuth) {
+    // Codex returns account:null + requiresOpenaiAuth:true during rate-limit
+    // windows even when the session is valid. Distinguish by checking whether
+    // auth.json has a usable refresh token and whether rateLimits shows an
+    // exhausted window.
+    const primary =
+      rateLimits !== undefined && !("failure" in rateLimits)
+        ? rateLimits.snapshot.primary
+        : undefined;
+    const secondary =
+      rateLimits !== undefined && !("failure" in rateLimits)
+        ? rateLimits.snapshot.secondary
+        : undefined;
+    const isRateLimited =
+      hasStoredAuth === true && (primary?.usedPercent === 100 || secondary?.usedPercent === 100);
+
+    if (isRateLimited) {
+      const exhausted = primary?.usedPercent === 100 ? primary : secondary;
+      const resetsAtIso =
+        typeof exhausted?.resetsAt === "number" && exhausted.resetsAt > 0
+          ? isoFromEpochSeconds(exhausted.resetsAt)
+          : undefined;
+      return {
+        status: "warning",
+        auth: { status: "authenticated" },
+        message: `Codex usage limit reached${resetsAtIso ? `, resets at ${resetsAtIso}` : ""}.`,
+      };
+    }
+
     return {
       status: "error",
       auth: { status: "unauthenticated" },
@@ -583,13 +662,13 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }) => Effect.Effect<
     CodexAppServerProviderSnapshot,
     CodexErrors.CodexAppServerError,
-    ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path | Scope.Scope
   > = probeCodexAppServerProvider,
   environment?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<
   ServerProviderDraft,
   ServerSettingsError,
-  ChildProcessSpawner.ChildProcessSpawner
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
@@ -621,7 +700,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     environment: resolvedEnvironment,
   }).pipe(
     Effect.scoped,
-    Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS)),
+    Effect.timeoutOption(Duration.millis(CODEX_PROBE_TIMEOUT_MS)),
     Effect.result,
   );
 
@@ -667,7 +746,11 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }
 
   const snapshot = probeResult.success.value;
-  const accountStatus = accountProbeStatus(snapshot.account);
+  const accountStatus = accountProbeStatus(
+    snapshot.account,
+    snapshot.rateLimits,
+    snapshot.hasStoredAuth,
+  );
   const usageLimits =
     snapshot.account.account?.type === "apiKey"
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })

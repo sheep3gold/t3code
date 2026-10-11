@@ -75,8 +75,16 @@ function environment(id: string, cost: number | null, hostId = id): EnvironmentU
 let renderer: ReactTestRenderer | undefined;
 let latest: UsageView;
 
-function Probe({ selected }: { selected: ReadonlySet<EnvironmentId> | null }) {
-  const usage = useUsage(input, selected);
+const NO_HIDDEN_PROVIDERS = new Set<"codex" | "claude" | "grok">();
+
+function Probe({
+  selected,
+  hidden = NO_HIDDEN_PROVIDERS,
+}: {
+  selected: ReadonlySet<EnvironmentId> | null;
+  hidden?: ReadonlySet<"codex" | "claude" | "grok">;
+}) {
+  const usage = useUsage(input, selected, hidden);
   useLayoutEffect(() => {
     latest = usage;
   }, [usage]);
@@ -151,6 +159,17 @@ describe("usage environment selection", () => {
     await select("b");
     expect(latest.merged.costUsd).toBe(20);
     expect(latest.merged.duplicateSources).toEqual([]);
+  });
+
+  it("changes displayed totals without changing cached summaries or refresh selection", async () => {
+    await act(() => renderer?.update(<Probe selected={null} hidden={new Set(["codex"])} />));
+    expect(latest.merged.providers).toEqual([]);
+    expect(latest.merged.costUsd).toBe(0);
+    expect(latest.isPartial).toBe(true);
+    expect(latest.selectedEnvironments[0]?.summary?.buckets[0]?.provider).toBe("codex");
+
+    await act(() => renderer?.update(<Probe selected={null} />));
+    expect(latest.merged.costUsd).toBe(30);
   });
 
   it("keeps selected cached results visible during a refresh", async () => {

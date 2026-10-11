@@ -17,7 +17,10 @@ concurrency:
 jobs:
   deploy_relay:
     name: Deploy production relay
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    # Forks have no relay infrastructure (Cloudflare/PlanetScale/Axiom secrets
+    # are empty); only the upstream repo deploys the production relay.
+    if: github.repository == 'pingdotgg/t3code'
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
       name: production

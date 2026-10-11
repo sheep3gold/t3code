@@ -65,6 +65,7 @@ const STATUS_LABEL_BY_STATUS: Partial<
   input: { label: "Input", className: "text-adaptive-indigo-600-300" },
   working: { label: "Working", className: "text-adaptive-sky-600-400" },
   failed: { label: "Failed", className: "text-danger-foreground" },
+  done: { label: "Done", className: "text-adaptive-emerald-600-400" },
 };
 
 // Menus keep lifecycle and title regeneration together. Archive keeps its
@@ -453,6 +454,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       list's extraData — so the minute tick re-renders only rows whose
       displayed text moved. */
   readonly timeLabel: string;
+  /** Latest completion not seen yet (from the list item): shows Done. */
+  readonly unreadCompleted?: boolean;
   /** Parent minute tick carried on the row's list item, present only when the
       row's menu offers snooze presets, so those menus refresh while mounted
       without invalidating every other row. */
@@ -548,7 +551,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selected = props.selected === true;
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
 
-  const status = resolveThreadListV2Status(thread);
+  const status = resolveThreadListV2Status(thread, { unreadCompleted: props.unreadCompleted });
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
   // The timestamp is precomputed on the list item (same stamps the settled
   // tail sorts by) so a minute tick only re-renders rows that draw it.

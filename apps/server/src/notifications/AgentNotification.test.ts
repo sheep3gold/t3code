@@ -28,7 +28,9 @@ describe("AgentNotification", () => {
   });
 
   it("uses the restricted subject and stable dedupe key", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(new Response("{}", { status: 200 }));
     const input = {
       title: "Done",
       text: "Finished",

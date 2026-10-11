@@ -355,6 +355,7 @@ export const ChatHeader = memo(function ChatHeader({
     <>
       {activeProjectScripts && (
         <>
+          {actionsCollapsed && <MenuSeparator />}
           <ProjectScriptsControl
             onRequestMenuClose={() => setActionsOpen(false)}
             presentation={actionsCollapsed ? "menu" : "toolbar"}
@@ -500,12 +501,7 @@ export const ChatHeader = memo(function ChatHeader({
       >
         <Menu open={actionsCollapsed && actionsOpen} onOpenChange={setActionsOpen}>
           <MenuTrigger
-            className={
-              actionsCollapsed &&
-              (activeProjectScripts || showOpenInPicker || (activeProjectName && gitCwd))
-                ? undefined
-                : "hidden"
-            }
+            className={actionsCollapsed ? undefined : "hidden"}
             render={<Button size="icon-sm" variant="ghost" aria-label="More header actions" />}
           >
             <EllipsisIcon className="size-4" />

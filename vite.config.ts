@@ -54,6 +54,13 @@ const RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS = {
 };
 
 export default defineConfig({
+  // expo-modules-core (and friends) reference __DEV__ bare. In tests it isn't
+  // defined by any bundler, so default to true while allowing tests to stub it.
+  // NOTE: must live at top level, not inside `test` — InlineConfig has no
+  // `define` field and tsc fails the deploy build (TS2769, 2026-10-10).
+  define: {
+    __DEV__: "(globalThis.__DEV__ ?? true)",
+  },
   resolve: {
     alias: {
       "~": NodeURL.fileURLToPath(new URL("./apps/web/src", import.meta.url)),

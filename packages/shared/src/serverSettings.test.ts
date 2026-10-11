@@ -51,6 +51,20 @@ describe("serverSettings helpers", () => {
     expect(applyServerSettingsPatch(edited, { deviceHosts: [] }).deviceHosts).toEqual([]);
   });
 
+  it("replaces the disabled skills list as a whole", () => {
+    expect(DEFAULT_SERVER_SETTINGS.disabledSkills).toEqual([]);
+    const saved = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      disabledSkills: ["review", "release"],
+    });
+    expect(saved.disabledSkills).toEqual(["review", "release"]);
+    // A later edit replaces the list outright rather than merging entries.
+    const edited = applyServerSettingsPatch(saved, { disabledSkills: ["release"] });
+    expect(edited.disabledSkills).toEqual(["release"]);
+    expect(applyServerSettingsPatch(edited, { disabledSkills: [] }).disabledSkills).toEqual([]);
+    // Omitting the key leaves the stored list alone.
+    expect(applyServerSettingsPatch(saved, {}).disabledSkills).toEqual(["review", "release"]);
+  });
+
   it("inherits actions, preserves existing actions, and supports empty overrides and reset", () => {
     const project = { id: ProjectId.make("project-actions"), scripts: [] };
     const action = {

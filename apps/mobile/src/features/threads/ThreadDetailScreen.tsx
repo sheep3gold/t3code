@@ -79,6 +79,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { useThreadVisitedState } from "./use-thread-visited-state";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -324,6 +325,35 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + IOS_NAV_BAR_HEIGHT;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  // Reading a finished thread clears its unseen-completion lift in the list.
+  // The visit is stamped at the turn's completion time — not now — so it
+  // clears exactly the completion on screen (markThreadVisitedPreferences
+  // never moves the stamp backwards).
+  const { markThreadVisited } = useThreadVisitedState();
+  const latestTurnCompletedAt = props.selectedThread.latestTurn?.completedAt ?? null;
+  const selectedThreadId = props.selectedThread.id;
+  const selectedThreadLastReadAt = props.selectedThread.lastReadAt;
+  useEffect(() => {
+    if (latestTurnCompletedAt === null) return;
+    // The server stamp is shared with web/desktop, so reading here clears
+    // the completion everywhere (and vice versa).
+    markThreadVisited({
+      threadKey: selectedThreadKey,
+      visitedAt: latestTurnCompletedAt,
+      thread: {
+        environmentId: props.environmentId,
+        threadId: selectedThreadId,
+        lastReadAt: selectedThreadLastReadAt,
+      },
+    });
+  }, [
+    markThreadVisited,
+    selectedThreadKey,
+    latestTurnCompletedAt,
+    props.environmentId,
+    selectedThreadId,
+    selectedThreadLastReadAt,
+  ]);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const draftMessageRef = useRef(props.draftMessage);
   draftMessageRef.current = props.draftMessage;

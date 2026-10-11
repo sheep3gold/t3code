@@ -32,6 +32,7 @@ import {
   browserApiCorsLayer,
   httpCompressionLayer,
 } from "./http.ts";
+import { translateHttpApiLayer } from "./translate/http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
@@ -121,6 +122,9 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
+import * as McpAppModelContext from "./mcpApps/McpAppModelContext.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
@@ -187,6 +191,14 @@ const ApplicationObservabilityLive = ObservabilityLive.pipe(
 );
 
 const PtyAdapterLive = NodePtyAdapter.layer;
+
+// Supply the engine and snapshot query at this boundary; without an explicit
+// provide they leak into the server's CLI Effect context. Reusing this layer
+// reference shares the engine instance with ProviderRuntimeLayerLive.
+const SecretRequestsLayerLive = SecretRequests.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(OrchestrationLayerLive),
+);
 
 const ServerSettingsLayerLive = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
@@ -296,6 +308,9 @@ const ThreadLedgerRepositoryLayerLive = ThreadLedgerPersistence.layer.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 const AgentMemoryRepositoryLayerLive = AgentMemoryPersistence.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+const McpAppModelContextLayerLive = McpAppModelContext.layer.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 const ArtifactRepositoryLayerLive = ArtifactPersistence.layer.pipe(
@@ -480,13 +495,26 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
-  // Subscribes to `account.rate-limits.updated` so usage bars track live
-  // telemetry instead of waiting for the next status probe.
-  Layer.provideMerge(ProviderUsageLimitsIngestionLive),
-  Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(OrchestrationLayerLive),
+const McpAppRequestsLayerLive = McpAppRequests.McpAppRequestsLayerLive.pipe(
+  Layer.provide(ProviderAdapterRegistryLive),
+  Layer.provide(ProviderSessionDirectoryLayerLive),
+  Layer.provide(McpAppModelContextLayerLive),
+  Layer.provide(OrchestrationLayerLive),
 );
+
+const ProviderRuntimeLayerLive = Layer.mergeAll(
+  ProviderSessionReaperLive.pipe(
+    // Subscribes to `account.rate-limits.updated` so usage bars track live
+    // telemetry instead of waiting for the next status probe.
+    Layer.provideMerge(ProviderUsageLimitsIngestionLive),
+    Layer.provideMerge(ProviderLayerLive),
+  ),
+  // Needs the engine and snapshot query; merging here (instead of into
+  // RuntimeCoreDependenciesLive) keeps those requirements satisfied by the
+  // same OrchestrationLayerLive instance instead of leaking them outward.
+  SecretRequestsLayerLive,
+  McpAppRequestsLayerLive,
+).pipe(Layer.provideMerge(OrchestrationLayerLive));
 
 const AntigravityInstallationRefreshLive = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -535,6 +563,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ThreadPullRequestMonitorRepositoryLayerLive),
   Layer.provideMerge(ThreadLedgerRepositoryLayerLive),
   Layer.provideMerge(AgentMemoryRepositoryLayerLive),
+  Layer.provideMerge(McpAppModelContextLayerLive),
   Layer.provideMerge(ArtifactRepositoryLayerLive),
   Layer.provideMerge(WorkflowRepositoryLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
@@ -617,6 +646,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(workflowsHttpApiLayer),
       Layer.provide(memoryLedgerHttpApiLayer),
       Layer.provide(pullRequestHttpApiLayer),
+      Layer.provide(translateHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),

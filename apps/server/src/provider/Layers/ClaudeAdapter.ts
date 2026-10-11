@@ -225,6 +225,7 @@ const remapClaudeForkTurnBoundaries = (
 };
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
+const EMPTY_NAME_SET: ReadonlySet<string> = new Set();
 type ClaudeTextStreamKind = Extract<
   RuntimeContentStreamKind,
   "assistant_text" | "reasoning_text" | "reasoning_summary_text"
@@ -477,6 +478,12 @@ export interface ClaudeAdapterLiveOptions {
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
   /** Scoped-bucket names the driver's status probe last saw; see `claudeUsageLimits`. */
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
+  /**
+   * Lowercased names of skills the user disabled in Settings. Read at send
+   * time so a toggle takes effect without rebuilding the adapter. A disabled
+   * skill's `$name` mention stays literal prose instead of being rewritten.
+   */
+  readonly disabledSkillNames?: Effect.Effect<ReadonlySet<string>>;
 }
 
 function isUuid(value: string): boolean {
@@ -5255,6 +5262,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
+    // The Settings-level disable joins the scan-level filters: the mention
+    // survives as literal text and the CLI never sees the rewrite.
+    const disabledSkillNames = yield* options?.disabledSkillNames ?? Effect.succeed(EMPTY_NAME_SET);
     const message = yield* buildUserMessageEffect(input, {
       fileSystem,
       attachmentsDir: serverConfig.attachmentsDir,
@@ -5262,7 +5272,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       modelCatalog,
       skillNames: new Set(
         skills
-          .filter((skill) => skill.enabled && skill.userInvocable !== false)
+          .filter(
+            (skill) =>
+              skill.enabled &&
+              skill.userInvocable !== false &&
+              !disabledSkillNames.has(skill.name.trim().toLowerCase()),
+          )
           .map((skill) => skill.name),
       ),
     });

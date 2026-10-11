@@ -17,6 +17,7 @@
  * @module components/chat/AssistantOptionChips
  */
 import { ArrowUpIcon } from "lucide-react";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** 行首到行尾恰好是一个 OPTIONS 标记。大小写不敏感，方便手写。 */
 const OPTIONS_LINE = /^\s*\[OPTIONS:\s*([^\]]+)\]\s*$/i;
@@ -67,7 +68,7 @@ export function parseAssistantOptions(text: string): ParsedAssistantOptions | nu
 }
 
 /** 输入框内容里是否已含这一条候选（按块比对，避免匹配到用户正文里的巧合子串）。 */
-export function isOptionSelected(prompt: string, label: string): boolean {
+function isOptionSelected(prompt: string, label: string): boolean {
   return prompt.split(BLOCK_SEPARATOR).some((block) => block.trim() === label);
 }
 
@@ -125,36 +126,48 @@ export function AssistantOptionChips({
               disabled ? "opacity-50" : "",
             ].join(" ")}
           >
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onToggle(label)}
-              aria-pressed={selected}
-              title={selected ? "点一下撤销" : "加入输入框"}
-              className={[
-                "max-w-[26rem] truncate px-3 py-1 text-left",
-                selected ? "text-foreground" : "text-muted-foreground",
-                disabled ? "cursor-not-allowed" : "cursor-pointer hover:text-foreground",
-              ].join(" ")}
-            >
-              {label}
-            </button>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onSend(label)}
-              title="只发送这一条"
-              aria-label={`只发送这一条：${label}`}
-              className={[
-                "flex items-center border-l px-1.5",
-                selected ? "border-primary/60" : "border-border",
-                disabled
-                  ? "cursor-not-allowed"
-                  : "cursor-pointer text-muted-foreground hover:bg-accent hover:text-foreground",
-              ].join(" ")}
-            >
-              <ArrowUpIcon size={12} strokeWidth={2.5} />
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onToggle(label)}
+                    aria-pressed={selected}
+                    className={[
+                      "max-w-[26rem] truncate px-3 py-1 text-left",
+                      selected ? "text-foreground" : "text-muted-foreground",
+                      disabled ? "cursor-not-allowed" : "cursor-pointer hover:text-foreground",
+                    ].join(" ")}
+                  >
+                    {label}
+                  </button>
+                }
+              />
+              <TooltipPopup>{selected ? "点一下撤销" : "加入输入框"}</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onSend(label)}
+                    aria-label={`只发送这一条：${label}`}
+                    className={[
+                      "flex items-center border-l px-1.5",
+                      selected ? "border-primary/60" : "border-border",
+                      disabled
+                        ? "cursor-not-allowed"
+                        : "cursor-pointer text-muted-foreground hover:bg-accent hover:text-foreground",
+                    ].join(" ")}
+                  >
+                    <ArrowUpIcon size={12} strokeWidth={2.5} />
+                  </button>
+                }
+              />
+              <TooltipPopup>只发送这一条</TooltipPopup>
+            </Tooltip>
           </div>
         );
       })}

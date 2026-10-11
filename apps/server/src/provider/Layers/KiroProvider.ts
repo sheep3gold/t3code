@@ -166,7 +166,7 @@ const humanizeKiroSlug = (slug: string): string =>
     .map((part) => (/^[a-z]/.test(part) ? part.charAt(0).toUpperCase() + part.slice(1) : part))
     .join(" ");
 
-export function parseKiroModelList(stdout: string): ReadonlyArray<ServerProviderModel> {
+function parseKiroModelList(stdout: string): ReadonlyArray<ServerProviderModel> {
   const models: ServerProviderModel[] = [];
   const seen = new Set<string>();
 

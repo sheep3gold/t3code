@@ -43,6 +43,8 @@ export type PinThreadInput = CommandInput<"thread.pin">;
 export type UnpinThreadInput = CommandInput<"thread.unpin">;
 export type ReorderPinnedThreadInput = CommandInput<"thread.pin.reorder">;
 export type ReorderActiveThreadInput = CommandInput<"thread.active.reorder">;
+export type MarkThreadReadInput = CommandInput<"thread.read.mark">;
+export type MarkThreadUnreadInput = CommandInput<"thread.unread.mark">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type LinkThreadPullRequestInput = CommandInput<"thread.pull-request.link">;
 export type UnlinkThreadPullRequestInput = CommandInput<"thread.pull-request.unlink">;
@@ -242,6 +244,26 @@ export const reorderActiveThread: (input: ReorderActiveThreadInput) => CommandEf
   return yield* dispatch({
     ...input,
     type: "thread.active.reorder",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const markThreadRead: (input: MarkThreadReadInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.markThreadRead",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.read.mark",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const markThreadUnread: (input: MarkThreadUnreadInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.markThreadUnread",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.unread.mark",
     commandId: yield* commandId(input),
   });
 });

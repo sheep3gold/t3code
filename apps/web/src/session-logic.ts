@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import { shallow } from "zustand/vanilla/shallow";
+import { mcpAppFromActivity, type McpAppReference } from "@t3tools/shared/mcpApp";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   commandDetailRepeatsCommand,
@@ -78,6 +79,8 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
+  /** A secret request card or its outcome: the row shows a lock, never the payload detail. */
+  secretRequest?: boolean;
   /** Grouping key for subagent lifecycle rows (one row per agent). */
   taskId?: string;
   /** Agent role (subagent_type) for labeled timeline rows. */
@@ -92,6 +95,12 @@ export interface WorkLogEntry {
     workflowId: string | null;
     agentTaskIds: ReadonlyArray<string>;
   };
+  /**
+   * The completed MCP tool call produced an app: the row renders its captured
+   * document instead of a tool summary. `mcpAppFromActivity` already checked
+   * the call actually belongs to the referenced server and tool.
+   */
+  mcpApp?: McpAppReference;
 }
 
 const workLogCollapseKey = Symbol();
@@ -594,10 +603,19 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const answer = decodeQuestionAttachmentAnswer(payload);
     if (Option.isSome(answer)) entry.questionAnswer = answer.value;
   }
+  if (
+    (activity.kind === "user-input.requested" || activity.kind === "user-input.resolved") &&
+    payload?.responseMode === "message" &&
+    (payload?.secretRequest === true || typeof payload?.secretStatus === "string")
+  ) {
+    entry.secretRequest = true;
+  }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   const viewedImagePath = asTrimmedString(asRecord(payload?.data)?.imagePath);
-  if (detail) {
+  // The label ("Secret requested: …" / "Secret saved securely") already says
+  // everything the row may show; the payload carries the request text.
+  if (detail && !entry.secretRequest) {
     entry.detail = detail;
   } else if (activity.kind === "runtime.error" || activity.kind === "runtime.warning") {
     const message = asTrimmedString(payload?.message);
@@ -638,6 +656,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (toolData !== undefined) {
       entry.toolData = toolData;
     }
+    // Only the completed call carries the reference, so an app appears once
+    // its document was captured, never while the call is still running.
+    const app = mcpAppFromActivity(activity);
+    if (app) entry.mcpApp = app;
   }
   if (itemType) {
     entry.itemType = itemType;

@@ -76,6 +76,7 @@ describe("CheckpointDiffQuery.layer", () => {
         Layer.provideMerge(
           Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
             getUserInputActivity: () => Effect.die("unused"),
+            getMcpAppActivity: () => Effect.die("unused"),
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
@@ -117,6 +118,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            searchThread: () =>
+              Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
           }),
         ),
       );
@@ -193,6 +196,7 @@ describe("CheckpointDiffQuery.layer", () => {
         Layer.provideMerge(
           Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
             getUserInputActivity: () => Effect.die("unused"),
+            getMcpAppActivity: () => Effect.die("unused"),
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
@@ -219,6 +223,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            searchThread: () =>
+              Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
           }),
         ),
       );
@@ -285,6 +291,7 @@ describe("CheckpointDiffQuery.layer", () => {
         Layer.provideMerge(
           Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
             getUserInputActivity: () => Effect.die("unused"),
+            getMcpAppActivity: () => Effect.die("unused"),
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
@@ -311,6 +318,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            searchThread: () =>
+              Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
           }),
         ),
       );
@@ -362,6 +371,7 @@ describe("CheckpointDiffQuery.layer", () => {
         Layer.provideMerge(
           Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
             getUserInputActivity: () => Effect.die("unused"),
+            getMcpAppActivity: () => Effect.die("unused"),
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
@@ -388,6 +398,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            searchThread: () =>
+              Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
           }),
         ),
       );
@@ -424,6 +436,7 @@ describe("CheckpointDiffQuery.layer", () => {
         Layer.provideMerge(
           Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
             getUserInputActivity: () => Effect.die("unused"),
+            getMcpAppActivity: () => Effect.die("unused"),
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
@@ -450,6 +463,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            searchThread: () =>
+              Effect.succeed({ totalMatches: 0, activeIndex: 0, match: null, navigation: [] }),
           }),
         ),
       );

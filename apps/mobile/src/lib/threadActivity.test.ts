@@ -19,6 +19,7 @@ import {
   buildThreadFeed,
   deriveThreadFeedPresentation,
   isPendingUserInputOptionSelected,
+  isSecretRequestActivityGroup,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
   workEntryRowLabel,
@@ -3747,4 +3748,101 @@ it("keeps attachment-only question answers expandable outside mobile work groups
   expect(running[0]?.type).toBe("work-toggle");
   expect(running[1]).toBe(group);
   expect(running[2]?.type).toBe("work-toggle");
+});
+
+describe("secret request activities", () => {
+  const requestedSecret = makeActivity({
+    id: EventId.make("secret-requested"),
+    kind: "user-input.requested",
+    summary: "User input requested",
+    createdAt: "2026-04-01T00:00:02.000Z",
+    turnId: TurnId.make("secret-turn"),
+    payload: {
+      requestId: "secret-request:thread-1:c1",
+      responseMode: "message",
+      secretRequest: true,
+      label: "GitHub token",
+      reason: "Used as GH_TOKEN.",
+      placeholder: "Paste the token",
+      questions: [
+        {
+          id: "secret",
+          header: "GitHub token",
+          question: "Used as GH_TOKEN.",
+          options: [],
+          allowCustomAnswer: true,
+        },
+      ],
+    },
+  });
+
+  it("a pending request renders as a standalone card row, never folded into a tool run", () => {
+    const feed = buildThreadFeed(
+      makeThread({
+        id: ThreadId.make("secret-thread"),
+        projectId: ProjectId.make("project-1"),
+        title: "Secret",
+        activities: [
+          makeActivity({
+            id: EventId.make("tool"),
+            kind: "tool.completed",
+            summary: "Read files",
+            createdAt: "2026-04-01T00:00:01.000Z",
+            turnId: TurnId.make("secret-turn"),
+            payload: { itemType: "file_read", status: "completed" },
+          }),
+          requestedSecret,
+        ],
+      }),
+    );
+    const groups = feed.filter((entry) => entry.type === "activity-group");
+    const secretGroup = groups.find((entry) => isSecretRequestActivityGroup(entry));
+    expect(secretGroup).toBeDefined();
+    expect(secretGroup?.activities[0]?.workEntry.secretRequest).toBe(true);
+    expect(secretGroup?.activities[0]?.workEntry.secretCard).toMatchObject({
+      requestId: "secret-request:thread-1:c1",
+      label: "GitHub token",
+      reason: "Used as GH_TOKEN.",
+      placeholder: "Paste the token",
+    });
+    expect(secretGroup?.activities[0]?.workEntry.detail).toBeUndefined();
+    expect(secretGroup?.activities[0]?.icon).toBe("lock");
+  });
+
+  it("an answered request leaves the label row plus its outcome row; neither carries the card or detail", () => {
+    const feed = buildThreadFeed(
+      makeThread({
+        id: ThreadId.make("secret-thread"),
+        projectId: ProjectId.make("project-1"),
+        title: "Secret",
+        activities: [
+          requestedSecret,
+          makeActivity({
+            id: EventId.make("secret-resolved"),
+            kind: "user-input.resolved",
+            summary: "Secret saved securely",
+            createdAt: "2026-04-01T00:00:03.000Z",
+            turnId: TurnId.make("secret-turn"),
+            payload: {
+              requestId: "secret-request:thread-1:c1",
+              responseMode: "message",
+              secretStatus: "saved",
+            },
+          }),
+        ],
+      }),
+    );
+    const secretGroups = feed.filter(
+      (entry): entry is Extract<typeof entry, { type: "activity-group" }> =>
+        entry.type === "activity-group" && isSecretRequestActivityGroup(entry),
+    );
+    expect(secretGroups.map((group) => group.activities[0]?.workEntry.label)).toEqual([
+      "GitHub token",
+      "Secret saved securely",
+    ]);
+    for (const group of secretGroups) {
+      expect(group.activities[0]?.workEntry.secretCard).toBeUndefined();
+      expect(group.activities[0]?.workEntry.detail).toBeUndefined();
+    }
+  });
 });

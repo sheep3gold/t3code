@@ -1,12 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off - the bootstrap file read happens inside a promise-based fetch helper
 import * as NodeCrypto from "node:crypto";
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 
 const DEFAULT_TTL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 3_000;
+/**
+ * Factory only serves the regions its account is licensed for, so droid egress
+ * rides the local xjp node unless a provider instance overrides it.
+ */
+const DEFAULT_FACTORY_PROXY = "http://127.0.0.1:2080";
 
 export interface FactoryApiKeyResolver {
   /**
@@ -22,14 +27,15 @@ const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,::1";
 
 /**
  * `environment` with every Droid-bound request sent through `proxyUrl`
- * (loopback stays direct). An empty `proxyUrl` leaves the environment alone.
+ * (loopback stays direct). Falls back to the xjp node, so a provider instance
+ * that never mentions a proxy keeps the default egress rather than leaking
+ * direct connections out of the licensed region.
  */
 export function withFactoryProxy(
   environment: NodeJS.ProcessEnv,
   proxyUrl: string | undefined,
 ): NodeJS.ProcessEnv {
-  const url = proxyUrl?.trim();
-  if (!url) return environment;
+  const url = proxyUrl?.trim() || DEFAULT_FACTORY_PROXY;
   const proxied: NodeJS.ProcessEnv = {
     ...environment,
     no_proxy: LOOPBACK_NO_PROXY,
@@ -52,7 +58,7 @@ function defaultBootstrapPath(): string {
 
 async function readBootstrap(path: string): Promise<Record<string, string>> {
   const values: Record<string, string> = {};
-  for (const line of (await NodeFS.readFile(path, "utf8")).split("\n")) {
+  for (const line of (await NodeFSP.readFile(path, "utf8")).split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
     const index = trimmed.indexOf("=");
@@ -107,6 +113,7 @@ export function makeFactoryApiKeyResolver(input: {
   readonly now?: () => number;
 }): FactoryApiKeyResolver {
   const etcdKey = input.etcdKey?.trim();
+  // Proxy first, so both the no-etcdKey path and the resolved-key path share it.
   const baseEnvironment = withFactoryProxy(input.baseEnvironment, input.proxyUrl);
   if (!etcdKey) return { environment: Effect.succeed(baseEnvironment) };
   const fetchImpl = input.fetchImpl ?? fetch;

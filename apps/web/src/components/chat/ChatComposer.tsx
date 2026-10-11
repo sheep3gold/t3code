@@ -252,6 +252,7 @@ import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
+import { SecretRequestCard } from "./SecretRequestCard";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import {
   ComposerControl,
@@ -968,6 +969,7 @@ import {
 } from "./composerPromptHistory";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
+import { type SecretRequestCard as SecretRequestCardModel } from "@t3tools/client-runtime/secret-request";
 import type { ContextWindowSnapshot } from "../../lib/contextWindow";
 import {
   formatProviderSkillDisplayName,
@@ -1364,6 +1366,7 @@ export interface ChatComposerProps {
   activePendingApproval: PendingApproval | null;
   pendingApprovals: PendingApproval[];
   pendingUserInputs: PendingUserInput[];
+  pendingSecretRequests: ReadonlyArray<SecretRequestCardModel>;
   activePendingProgress: {
     questionIndex: number;
     isLastQuestion: boolean;
@@ -1513,6 +1516,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingApproval,
     pendingApprovals,
     pendingUserInputs,
+    pendingSecretRequests,
     activePendingProgress,
     activePendingResolvedAnswers,
     activePendingIsResponding,
@@ -2245,6 +2249,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Derived: composer trigger / menu
   // ------------------------------------------------------------------
   const composerTriggerKind = composerTrigger?.kind ?? null;
+  const skillMenuRefreshKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (composerTriggerKind !== "skill") {
+      skillMenuRefreshKeyRef.current = null;
+      return;
+    }
+    if (!gitCwd || !selectedProviderEntry) return;
+    const key = `${environmentId}:${selectedProviderEntry.instanceId}:${gitCwd}`;
+    if (skillMenuRefreshKeyRef.current === key) return;
+    if (!selectedProviderStatus?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === gitCwd)) {
+      return;
+    }
+    // An installed skill can be newer than a cached workspace snapshot.
+    skillMenuRefreshKeyRef.current = key;
+    void refreshProviders({
+      environmentId,
+      input: { instanceId: selectedProviderEntry.instanceId, cwd: gitCwd, forceSkills: true },
+    });
+  }, [
+    composerTriggerKind,
+    environmentId,
+    gitCwd,
+    refreshProviders,
+    selectedProviderEntry,
+    selectedProviderStatus,
+  ]);
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const pullRequestTriggerQuery =
     composerTrigger?.kind === "pull-request" ? composerTrigger.query : "";
@@ -2529,6 +2559,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const showComposerTopDrawer =
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
+    pendingSecretRequests.length > 0 ||
     (!isComposerCollapsedMobile && showPlanFollowUpPrompt && activeProposedPlan !== null);
   const showCollapsedMobilePromptRow =
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
@@ -6212,6 +6243,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     <ComposerBanner.Icon>
                       <ShieldIcon />
                     </ComposerBanner.Icon>
+                    <ComposerBanner.Icon>
+                      <ShieldIcon />
+                    </ComposerBanner.Icon>
                     <ComposerBanner.Content>
                       <ComposerPendingApprovalPanel
                         approval={activePendingApproval}
@@ -6229,6 +6263,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       />
                     </ComposerBanner.Actions>
                   </ComposerBanner.Row>
+                ) : !isComposerCollapsedMobile && pendingSecretRequests.length > 0 ? (
+                  // The value never passes through the composer draft or the
+                  // question panel; the card owns its own masked field.
+                  <div className="flex min-w-0 flex-col gap-2 p-2">
+                    {pendingSecretRequests.map((card) => (
+                      <SecretRequestCard
+                        key={card.requestId}
+                        environmentId={environmentId}
+                        card={card}
+                      />
+                    ))}
+                  </div>
                 ) : !isComposerCollapsedMobile && pendingUserInputs.length > 0 ? (
                   <ComposerPendingUserInputPanel
                     pendingUserInputs={pendingUserInputs}

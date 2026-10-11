@@ -43,4 +43,7 @@ export * from "./previewAutomation.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
 export * from "./rpc.ts";
+export * from "./translate.ts";
 export * from "./worktreeSetup.ts";
+export * from "./secretRequest.ts";
+export * from "./mcpApps.ts";

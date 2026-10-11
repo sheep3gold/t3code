@@ -64,7 +64,43 @@ export interface ProviderThreadSnapshot {
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
 }
 
+export interface ProviderMcpAppTool {
+  readonly name: string;
+  readonly title?: string | null;
+  readonly annotations?: unknown;
+  readonly _meta?: unknown;
+  readonly inputSchema: unknown;
+}
+
+export interface ProviderMcpAppOperations<TError> {
+  readonly listTools: (
+    threadId: ThreadId,
+    server: string,
+  ) => Effect.Effect<ReadonlyArray<ProviderMcpAppTool>, TError>;
+  readonly readResource: (
+    threadId: ThreadId,
+    server: string,
+    uri: string,
+  ) => Effect.Effect<{ readonly contents: ReadonlyArray<unknown> }, TError>;
+  readonly callTool: (
+    threadId: ThreadId,
+    server: string,
+    tool: string,
+    arguments_: Record<string, unknown>,
+  ) => Effect.Effect<
+    {
+      readonly content: ReadonlyArray<unknown>;
+      readonly structuredContent?: unknown;
+      readonly isError?: boolean | null;
+      readonly _meta?: unknown;
+    },
+    TError
+  >;
+}
+
 export interface ProviderAdapterShape<TError> {
+  /** Present only for providers that can route MCP Apps through a live session. */
+  readonly mcpApps?: ProviderMcpAppOperations<TError>;
   /**
    * Provider kind implemented by this adapter.
    */

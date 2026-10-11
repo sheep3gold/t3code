@@ -231,6 +231,7 @@ const EMPTY_MERGED: MergedUsage = {
 export function mergeUsage(
   environments: readonly EnvironmentUsage[],
   expectedContractVersion: number,
+  hiddenProviders: ReadonlySet<UsageProviderKind> = new Set(),
 ): MergedUsage {
   if (environments.length === 0) return EMPTY_MERGED;
 
@@ -240,7 +241,22 @@ export function mergeUsage(
     if (
       isCompatibleUsageContractVersion(environment.summary.contractVersion, expectedContractVersion)
     ) {
-      current.push(environment);
+      current.push(
+        hiddenProviders.size === 0
+          ? environment
+          : {
+              ...environment,
+              summary: {
+                ...environment.summary,
+                buckets: environment.summary.buckets.filter(
+                  (bucket) => !hiddenProviders.has(bucket.provider),
+                ),
+                sources: environment.summary.sources.filter(
+                  (source) => !hiddenProviders.has(source.fingerprint.provider),
+                ),
+              },
+            },
+      );
     } else {
       staleEnvironments.push(environment.environmentId);
     }

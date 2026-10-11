@@ -152,9 +152,6 @@ import {
   normalizeIntervalSeconds,
   PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
   hasChangedBackgroundActivitySettings,
-  isProjectGroupingEnabled,
-  projectGroupingModeFromToggle,
-  readLastEnabledProjectGroupingMode,
   rememberEnabledProjectGroupingMode,
   resolveBackgroundActivityProfileOption,
 } from "./SettingsPanels.logic";
@@ -176,6 +173,13 @@ const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, s
   artwork: "Artwork",
   pill: "Version pill",
   none: "None",
+};
+
+const SIDEBAR_PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
+  repository: "Group by repository",
+  repository_path: "Group by repository path",
+  separate: "Keep separate",
+  environment: "Group by server",
 };
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
@@ -2120,9 +2124,6 @@ export function GeneralSettingsPanel() {
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
   const [tokenStreamingWarningOpen, setTokenStreamingWarningOpen] = useState(false);
   const mixedResponseStreamingMode = useScopedSettingsMixed(["responseStreamingMode"]);
-  const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
-    readLastEnabledProjectGroupingMode(),
-  );
   const serverProviders = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
   const supportsAutoSettlement =
     connectedEnvironments.length > 0 &&
@@ -2193,7 +2194,7 @@ export function GeneralSettingsPanel() {
       <SettingsSection id="organization" title="Organization">
         <SettingsRow
           {...searchableSetting("project-grouping")}
-          description="Combine matching repositories across environments."
+          description="Choose how projects are combined in the sidebar."
           resetAction={
             settings.sidebarProjectGroupingMode !==
             DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode ? (
@@ -2208,22 +2209,34 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <Switch
-              checked={isProjectGroupingEnabled(settings.sidebarProjectGroupingMode)}
-              onCheckedChange={(checked) => {
-                if (!checked && settings.sidebarProjectGroupingMode !== "separate") {
-                  lastEnabledProjectGroupingMode.current = settings.sidebarProjectGroupingMode;
-                  rememberEnabledProjectGroupingMode(settings.sidebarProjectGroupingMode);
-                }
-                updateSettings({
-                  sidebarProjectGroupingMode: projectGroupingModeFromToggle(
-                    checked,
-                    lastEnabledProjectGroupingMode.current,
-                  ),
-                });
+            <Select
+              value={settings.sidebarProjectGroupingMode}
+              onValueChange={(value) => {
+                const mode = value as SidebarProjectGroupingMode;
+                rememberEnabledProjectGroupingMode(mode);
+                updateSettings({ sidebarProjectGroupingMode: mode });
               }}
-              aria-label="Project grouping"
-            />
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Project grouping">
+                <SelectValue>
+                  {SIDEBAR_PROJECT_GROUPING_MODE_LABELS[settings.sidebarProjectGroupingMode]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="repository">
+                  {SIDEBAR_PROJECT_GROUPING_MODE_LABELS.repository}
+                </SelectItem>
+                <SelectItem hideIndicator value="repository_path">
+                  {SIDEBAR_PROJECT_GROUPING_MODE_LABELS.repository_path}
+                </SelectItem>
+                <SelectItem hideIndicator value="separate">
+                  {SIDEBAR_PROJECT_GROUPING_MODE_LABELS.separate}
+                </SelectItem>
+                <SelectItem hideIndicator value="environment">
+                  {SIDEBAR_PROJECT_GROUPING_MODE_LABELS.environment}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 

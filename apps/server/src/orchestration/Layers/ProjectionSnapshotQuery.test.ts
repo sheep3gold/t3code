@@ -209,6 +209,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinned_at,
           pin_order_key,
           active_order_key,
+          last_read_at,
           created_at,
           updated_at,
           deleted_at
@@ -232,6 +233,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '2026-02-24T00:00:01.000Z',
           'gm',
           'hq',
+          '2026-02-24T00:00:08.000Z',
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
           NULL
@@ -485,6 +487,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           activeOrderKey: "hq",
+          lastReadAt: "2026-02-24T00:00:08.000Z",
           titleRegeneration: null,
           titleState: null,
           deletedAt: null,
@@ -611,6 +614,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           activeOrderKey: "hq",
+          lastReadAt: "2026-02-24T00:00:08.000Z",
           titleRegeneration: null,
           titleState: null,
           session: {
@@ -2393,6 +2397,262 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         (yield* snapshotQuery.searchThreads({ query: "user needle" })).matches,
         [],
       );
+    }),
+  );
+
+  it.effect("finds matches within one thread with navigation around the selection", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-find',
+          'Project Find',
+          '/tmp/project-find',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-05-02T00:00:00.000Z',
+          '2026-05-02T00:00:01.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-find',
+          'project-find',
+          'Find Thread',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access',
+          'default',
+          'find-branch',
+          NULL,
+          'turn-find',
+          '2026-05-02T00:00:02.000Z',
+          0,
+          0,
+          0,
+          '2026-05-02T00:00:02.000Z',
+          '2026-05-02T00:00:03.000Z',
+          NULL,
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          is_streaming,
+          created_at,
+          updated_at
+        )
+        VALUES
+          (
+            'message-u1',
+            'thread-find',
+            'turn-find',
+            'user',
+            'needle one and needle two',
+            0,
+            '2026-05-02T00:00:10.000Z',
+            '2026-05-02T00:00:10.000Z'
+          ),
+          (
+            'message-a1',
+            'thread-find',
+            'turn-find',
+            'assistant',
+            'Final **needle** answer.\n\nSecond paragraph needle.',
+            0,
+            '2026-05-02T00:00:11.000Z',
+            '2026-05-02T00:00:11.000Z'
+          ),
+          (
+            'message-streaming',
+            'thread-find',
+            'turn-find',
+            'assistant',
+            'streaming needle must not be indexed',
+            1,
+            '2026-05-02T00:00:12.000Z',
+            '2026-05-02T00:00:12.000Z'
+          ),
+          (
+            'message-system',
+            'thread-find',
+            NULL,
+            'system',
+            'system needle must not be indexed',
+            0,
+            '2026-05-02T00:00:13.000Z',
+            '2026-05-02T00:00:13.000Z'
+          )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id,
+          turn_id,
+          pending_message_id,
+          assistant_message_id,
+          state,
+          requested_at,
+          started_at,
+          completed_at,
+          checkpoint_files_json
+        )
+        VALUES (
+          'thread-find',
+          'turn-find',
+          'message-u1',
+          'message-a1',
+          'completed',
+          '2026-05-02T00:00:10.000Z',
+          '2026-05-02T00:00:10.000Z',
+          '2026-05-02T00:00:11.000Z',
+          '[]'
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_proposed_plans (
+          plan_id,
+          thread_id,
+          turn_id,
+          plan_markdown,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'plan-1',
+          'thread-find',
+          'turn-find',
+          '# Plan\n\nDo the needle thing.',
+          '2026-05-02T00:00:14.000Z',
+          '2026-05-02T00:00:14.000Z'
+        )
+      `;
+
+      // Two in the user message, two in the assistant message, one in the plan.
+      const first = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        index: 0,
+      });
+      assert.equal(first.totalMatches, 5);
+      assert.equal(first.activeIndex, 0);
+      assert.deepStrictEqual(first.match, {
+        entryId: MessageId.make("message-u1"),
+        occurrence: 0,
+      });
+      assert.deepStrictEqual(
+        first.navigation.map((entry) => [entry.entryId, entry.startIndex, entry.count]),
+        [
+          [MessageId.make("message-u1"), 0, 2],
+          [MessageId.make("message-a1"), 2, 2],
+          ["plan-1", 4, 1],
+        ],
+      );
+
+      // Index into the assistant message (markdown bold markers must not split
+      // the phrase, and paragraph breaks keep the count).
+      const third = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        index: 3,
+      });
+      assert.equal(third.activeIndex, 3);
+      assert.deepStrictEqual(third.match, {
+        entryId: MessageId.make("message-a1"),
+        occurrence: 1,
+      });
+
+      // start+offset navigates relative to an entry identity and wraps.
+      const wrapped = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        start: { entryId: "plan-1", occurrence: 0 },
+        offset: 1,
+      });
+      assert.equal(wrapped.activeIndex, 0);
+      assert.deepStrictEqual(wrapped.match, {
+        entryId: MessageId.make("message-u1"),
+        occurrence: 0,
+      });
+
+      const backwards = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "needle",
+        start: { entryId: MessageId.make("message-u1"), occurrence: 0 },
+        offset: -1,
+      });
+      assert.equal(backwards.activeIndex, 4);
+      assert.deepStrictEqual(backwards.match, { entryId: "plan-1", occurrence: 0 });
+
+      // Streaming and system rows are not indexed.
+      assert.equal(
+        (yield* snapshotQuery.searchThread({
+          threadId: ThreadId.make("thread-find"),
+          query: "streaming needle",
+        })).totalMatches,
+        0,
+      );
+      assert.equal(
+        (yield* snapshotQuery.searchThread({
+          threadId: ThreadId.make("thread-find"),
+          query: "system needle",
+        })).totalMatches,
+        0,
+      );
+
+      // No match: null match, zero totals, empty navigation.
+      const none = yield* snapshotQuery.searchThread({
+        threadId: ThreadId.make("thread-find"),
+        query: "absent",
+      });
+      assert.equal(none.totalMatches, 0);
+      assert.equal(none.match, null);
+      assert.deepStrictEqual(none.navigation, []);
     }),
   );
 });

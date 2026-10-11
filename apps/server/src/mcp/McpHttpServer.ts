@@ -31,6 +31,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
+import { SecretsToolkitHandlersLive } from "./toolkits/secrets/handlers.ts";
+import { SecretsToolkit } from "./toolkits/secrets/secretTools.ts";
 import {
   ThreadWebhookToolkit,
   ThreadWebhookToolkitHandlersLive,
@@ -47,10 +49,7 @@ import {
   AgentMemoryToolkit,
   AgentMemoryToolkitHandlersLive,
 } from "../orchestration/AgentMemory.ts";
-import {
-  ArtifactToolkit,
-  ArtifactToolkitHandlersLive,
-} from "../orchestration/ArtifactLibrary.ts";
+import { ArtifactToolkit, ArtifactToolkitHandlersLive } from "../orchestration/ArtifactLibrary.ts";
 import {
   ThreadWorkflowToolkit,
   ThreadWorkflowToolkitHandlersLive,
@@ -636,33 +635,37 @@ export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequest
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
 
-export const ThreadWebhookToolkitRegistrationLive = McpServer.toolkit(
-  ThreadWebhookToolkit,
-).pipe(Layer.provide(ThreadWebhookToolkitHandlersLive));
+const SecretsToolkitRegistrationLive = McpServer.toolkit(SecretsToolkit).pipe(
+  Layer.provide(SecretsToolkitHandlersLive),
+);
 
-export const ThreadScheduleToolkitRegistrationLive = McpServer.toolkit(
-  ThreadScheduleToolkit,
-).pipe(Layer.provide(ThreadScheduleToolkitHandlersLive));
+const ThreadWebhookToolkitRegistrationLive = McpServer.toolkit(ThreadWebhookToolkit).pipe(
+  Layer.provide(ThreadWebhookToolkitHandlersLive),
+);
 
-export const ThreadLedgerToolkitRegistrationLive = McpServer.toolkit(
-  ThreadLedgerToolkit,
-).pipe(Layer.provide(ThreadLedgerToolkitHandlersLive));
+const ThreadScheduleToolkitRegistrationLive = McpServer.toolkit(ThreadScheduleToolkit).pipe(
+  Layer.provide(ThreadScheduleToolkitHandlersLive),
+);
 
-export const AgentMemoryToolkitRegistrationLive = McpServer.toolkit(
-  AgentMemoryToolkit,
-).pipe(Layer.provide(AgentMemoryToolkitHandlersLive));
+const ThreadLedgerToolkitRegistrationLive = McpServer.toolkit(ThreadLedgerToolkit).pipe(
+  Layer.provide(ThreadLedgerToolkitHandlersLive),
+);
 
-export const ArtifactToolkitRegistrationLive = McpServer.toolkit(
-  ArtifactToolkit,
-).pipe(Layer.provide(ArtifactToolkitHandlersLive));
+const AgentMemoryToolkitRegistrationLive = McpServer.toolkit(AgentMemoryToolkit).pipe(
+  Layer.provide(AgentMemoryToolkitHandlersLive),
+);
 
-export const ThreadWorkflowToolkitRegistrationLive = McpServer.toolkit(
-  ThreadWorkflowToolkit,
-).pipe(Layer.provide(ThreadWorkflowToolkitHandlersLive));
+const ArtifactToolkitRegistrationLive = McpServer.toolkit(ArtifactToolkit).pipe(
+  Layer.provide(ArtifactToolkitHandlersLive),
+);
 
-export const AgentNotificationToolkitRegistrationLive = McpServer.toolkit(
-  AgentNotificationToolkit,
-).pipe(Layer.provide(AgentNotificationToolkitHandlersLive));
+const ThreadWorkflowToolkitRegistrationLive = McpServer.toolkit(ThreadWorkflowToolkit).pipe(
+  Layer.provide(ThreadWorkflowToolkitHandlersLive),
+);
+
+const AgentNotificationToolkitRegistrationLive = McpServer.toolkit(AgentNotificationToolkit).pipe(
+  Layer.provide(AgentNotificationToolkitHandlersLive),
+);
 
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
   Layer.provide(DeviceStandardToolkitHandlersLive),
@@ -695,4 +698,5 @@ export const layer = Layer.mergeAll(
   ThreadWorkflowToolkitRegistrationLive,
   AgentNotificationToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
+  SecretsToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));
