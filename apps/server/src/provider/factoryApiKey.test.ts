@@ -4,7 +4,11 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { factoryApiKeyFingerprint, makeFactoryApiKeyResolver } from "./factoryApiKey.ts";
+import {
+  factoryApiKeyFingerprint,
+  makeFactoryApiKeyResolver,
+  withFactoryProxy,
+} from "./factoryApiKey.ts";
 
 const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "factory-key-"));
 const bootstrapPath = NodePath.join(dir, "bootstrap.env");
@@ -24,9 +28,16 @@ describe("factory API key resolver", () => {
   it.effect("passes the base environment through when no etcd key is configured", () =>
     Effect.gen(function* () {
       const resolver = makeFactoryApiKeyResolver({ etcdKey: "", baseEnvironment: { A: "1" } });
-      expect(yield* resolver.environment).toEqual({
+      const env = yield* resolver.environment;
+      // Still proxied: droid egress keeps riding xjp, only the key is absent.
+      expect(env).toEqual({
         A: "1",
+        https_proxy: "http://127.0.0.1:2080",
+        http_proxy: "http://127.0.0.1:2080",
         HTTPS_PROXY: "http://127.0.0.1:2080",
+        HTTP_PROXY: "http://127.0.0.1:2080",
+        no_proxy: "localhost,127.0.0.1,::1",
+        NO_PROXY: "localhost,127.0.0.1,::1",
       });
     }),
   );
@@ -95,5 +106,53 @@ describe("factory API key resolver", () => {
     expect(print).toMatch(/^[0-9a-f]{16}$/);
     expect(print).not.toContain("secret");
     expect(factoryApiKeyFingerprint({})).toBe("");
+  });
+
+  it("routes every Droid request through the configured proxy, loopback excepted", async () => {
+    const resolver = makeFactoryApiKeyResolver({
+      etcdKey: "",
+      proxyUrl: " http://127.0.0.1:2080 ",
+      baseEnvironment: { A: "1", HTTPS_PROXY: "http://stale:1" },
+    });
+    const env = await Effect.runPromise(resolver.environment);
+    for (const name of ["https_proxy", "http_proxy", "HTTPS_PROXY", "HTTP_PROXY"]) {
+      expect(env[name]).toBe("http://127.0.0.1:2080");
+    }
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
+    expect(env.A).toBe("1");
+  });
+
+  it("keeps the proxy when the key comes from etcd, and falls back to xjp without one", async () => {
+    const resolver = makeFactoryApiKeyResolver({
+      etcdKey: "/droid/appkey",
+      proxyUrl: "http://127.0.0.1:2080",
+      baseEnvironment: {},
+      bootstrapPath,
+      fetchImpl: (async () => etcdReply("key-one")) as unknown as typeof fetch,
+    });
+    const env = await Effect.runPromise(resolver.environment);
+    expect(env.FACTORY_API_KEY).toBe("key-one");
+    expect(env.https_proxy).toBe("http://127.0.0.1:2080");
+    // A provider instance that never mentions a proxy still rides xjp rather
+    // than leaving the licensed region over a direct connection.
+    for (const fallback of [
+      withFactoryProxy({ A: "1" }, ""),
+      withFactoryProxy({ A: "1" }, undefined),
+    ]) {
+      expect(fallback.HTTPS_PROXY).toBe("http://127.0.0.1:2080");
+      expect(fallback.https_proxy).toBe("http://127.0.0.1:2080");
+      expect(fallback.A).toBe("1");
+    }
+  });
+
+  it("honours an explicit proxy override away from xjp", async () => {
+    const resolver = makeFactoryApiKeyResolver({
+      etcdKey: "",
+      proxyUrl: "http://127.0.0.1:9999",
+      baseEnvironment: {},
+    });
+    const env = await Effect.runPromise(resolver.environment);
+    expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:9999");
+    expect(env.http_proxy).toBe("http://127.0.0.1:9999");
   });
 });
