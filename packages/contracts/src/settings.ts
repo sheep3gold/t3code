@@ -862,12 +862,21 @@ export const FactorySettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "/droid/appkey", clearWhenEmpty: "omit" },
       }),
     ),
+    proxyUrl: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Proxy URL",
+        description:
+          "HTTP proxy that every Droid request to Factory (chat, model listing, status probes) is sent through. Empty connects directly.",
+        providerSettingsForm: { placeholder: "http://127.0.0.1:2080", clearWhenEmpty: "omit" },
+      }),
+    ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
-  { order: ["binaryPath", "apiKeyEtcdKey"] },
+  { order: ["binaryPath", "apiKeyEtcdKey", "proxyUrl"] },
 );
 export type FactorySettings = typeof FactorySettings.Type;
 

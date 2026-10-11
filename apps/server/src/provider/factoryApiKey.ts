@@ -16,6 +16,29 @@ export interface FactoryApiKeyResolver {
   readonly environment: Effect.Effect<NodeJS.ProcessEnv>;
 }
 
+/** Every spelling droid or its libraries may read; the lowercase ones win in some runtimes. */
+const PROXY_ENV_NAMES = ["https_proxy", "http_proxy", "HTTPS_PROXY", "HTTP_PROXY"] as const;
+const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,::1";
+
+/**
+ * `environment` with every Droid-bound request sent through `proxyUrl`
+ * (loopback stays direct). An empty `proxyUrl` leaves the environment alone.
+ */
+export function withFactoryProxy(
+  environment: NodeJS.ProcessEnv,
+  proxyUrl: string | undefined,
+): NodeJS.ProcessEnv {
+  const url = proxyUrl?.trim();
+  if (!url) return environment;
+  const proxied: NodeJS.ProcessEnv = {
+    ...environment,
+    no_proxy: LOOPBACK_NO_PROXY,
+    NO_PROXY: LOOPBACK_NO_PROXY,
+  };
+  for (const name of PROXY_ENV_NAMES) proxied[name] = url;
+  return proxied;
+}
+
 /** Stable, non-reversible identity of a key, for "did it change" checks. */
 export function factoryApiKeyFingerprint(environment: NodeJS.ProcessEnv): string {
   const key = environment.FACTORY_API_KEY?.trim();
@@ -75,6 +98,8 @@ async function fetchEtcdValue(
  */
 export function makeFactoryApiKeyResolver(input: {
   readonly etcdKey: string | undefined;
+  /** Outbound proxy for everything Droid sends to Factory, e.g. the xjp node. */
+  readonly proxyUrl?: string;
   readonly baseEnvironment: NodeJS.ProcessEnv;
   readonly fetchImpl?: typeof fetch;
   readonly bootstrapPath?: string;
@@ -82,7 +107,8 @@ export function makeFactoryApiKeyResolver(input: {
   readonly now?: () => number;
 }): FactoryApiKeyResolver {
   const etcdKey = input.etcdKey?.trim();
-  if (!etcdKey) return { environment: Effect.succeed(input.baseEnvironment) };
+  const baseEnvironment = withFactoryProxy(input.baseEnvironment, input.proxyUrl);
+  if (!etcdKey) return { environment: Effect.succeed(baseEnvironment) };
   const fetchImpl = input.fetchImpl ?? fetch;
   const bootstrapPath = input.bootstrapPath ?? defaultBootstrapPath();
   const ttlMs = input.ttlMs ?? DEFAULT_TTL_MS;
@@ -111,9 +137,7 @@ export function makeFactoryApiKeyResolver(input: {
 
   return {
     environment: resolveKey.pipe(
-      Effect.map((key) =>
-        key ? { ...input.baseEnvironment, FACTORY_API_KEY: key } : input.baseEnvironment,
-      ),
+      Effect.map((key) => (key ? { ...baseEnvironment, FACTORY_API_KEY: key } : baseEnvironment)),
     ),
   };
 }
