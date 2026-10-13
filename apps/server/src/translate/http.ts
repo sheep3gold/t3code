@@ -65,6 +65,7 @@ const CHUNK_TARGET_LENGTH = 2_000;
 // smaller batches finish a long message sooner than a few large serial ones.
 const UPSTREAM_BATCH_LENGTH = 2_000;
 const UPSTREAM_BATCH_CONCURRENCY = 4;
+const MAX_MALFORMED_RECOVERY_DEPTH = 4;
 
 const SYSTEM_PROMPT = [
   "You are a translation engine. The user sends JSON: an array of strings.",
@@ -101,17 +102,34 @@ export const parseTranslationsJson = (content: string) => {
   return decodeTranslationsJson(withoutFence).pipe(Effect.orElseSucceed(() => null));
 };
 
+/** Reject structurally incomplete translations even when the JSON array shape is valid. */
+export const preservesTranslationStructure = (source: string, translated: string) => {
+  if (source.trim() && !translated.trim()) return false;
+  if ((source.match(/\n\n/g)?.length ?? 0) !== (translated.match(/\n\n/g)?.length ?? 0)) {
+    return false;
+  }
+  if ((source.match(/```/g)?.length ?? 0) !== (translated.match(/```/g)?.length ?? 0)) {
+    return false;
+  }
+  const protectedParts = [
+    ...(source.match(/```[\s\S]*?```/g) ?? []),
+    ...(source.match(/https?:\/\/[^\s)>\]]+/g) ?? []).map((url) => url.replace(/[.,!?;:]+$/, "")),
+    ...(source.match(/`[^`\n]+`/g) ?? []),
+  ];
+  return protectedParts.every((part) => translated.includes(part));
+};
+
 export interface TextChunks {
   readonly chunks: Array<string>;
-  /** separators[i] joins chunks[i] and chunks[i+1] ("\n\n" or "\n"). */
+  /** separators[i] joins chunks[i] and chunks[i+1] ("\n\n", "\n", or ""). */
   readonly separators: Array<string>;
 }
 
 /**
- * Split a long text at paragraph boundaries into chunks of roughly
- * `targetLength`, never splitting inside a line. A text that already fits is
- * returned as a single chunk. Joining the translated chunks back with
- * `separators` preserves the original line/paragraph structure exactly.
+ * Split at paragraph and line boundaries, then split oversized single lines
+ * at spaces (or code-point boundaries if necessary). A text that already fits
+ * is returned as a single chunk. Joining with `separators` reconstructs the
+ * source exactly.
  */
 export const chunkText = (text: string, targetLength = CHUNK_TARGET_LENGTH): TextChunks => {
   if (text.length <= targetLength) return { chunks: [text], separators: [] };
@@ -124,32 +142,48 @@ export const chunkText = (text: string, targetLength = CHUNK_TARGET_LENGTH): Tex
     chunks.push(chunk);
     boundaries.push(after);
   };
-  let current = "";
+  let current: string | null = null;
   for (const paragraph of paragraphs) {
-    const candidate = current.length === 0 ? paragraph : `${current}\n\n${paragraph}`;
+    const candidate: string = current === null ? paragraph : `${current}\n\n${paragraph}`;
     if (candidate.length <= targetLength) {
       current = candidate;
       continue;
     }
-    if (current.length > 0) flush(current, "\n\n");
+    if (current !== null) flush(current, "\n\n");
     if (paragraph.length <= targetLength) {
       current = paragraph;
       continue;
     }
-    // A single oversized paragraph falls back to splitting on newlines.
-    let lineChunk = "";
+    // A single oversized paragraph falls back to lines; an oversized line
+    // must not bypass the upstream batch budget either.
+    let lineChunk: string | null = null;
     for (const line of paragraph.split("\n")) {
-      const candidateLine = lineChunk.length === 0 ? line : `${lineChunk}\n${line}`;
+      const candidateLine: string = lineChunk === null ? line : `${lineChunk}\n${line}`;
       if (candidateLine.length <= targetLength) {
         lineChunk = candidateLine;
         continue;
       }
-      if (lineChunk.length > 0) flush(lineChunk, "\n");
-      lineChunk = line;
+      if (lineChunk !== null) flush(lineChunk, "\n");
+      let rest = line;
+      while (rest.length > targetLength) {
+        let splitAt = rest.lastIndexOf(" ", targetLength - 1);
+        if (splitAt < targetLength / 2) {
+          splitAt = targetLength;
+          // Avoid splitting a UTF-16 surrogate pair in an unspaced line.
+          if (rest.charCodeAt(splitAt) >= 0xdc00 && rest.charCodeAt(splitAt) <= 0xdfff) {
+            splitAt--;
+          }
+        } else {
+          splitAt++;
+        }
+        flush(rest.slice(0, splitAt), "");
+        rest = rest.slice(splitAt);
+      }
+      lineChunk = rest;
     }
     current = lineChunk;
   }
-  if (current.length > 0) flush(current, "");
+  if (current !== null) flush(current, "");
   return { chunks, separators: boundaries.slice(0, -1) };
 };
 
@@ -264,12 +298,16 @@ export const translateHttpApiLayer = HttpApiBuilder.group(
 
         const upstreamError = (message: string) =>
           new EnvironmentTranslateUpstreamError({ message });
-        const translateBatch = (batch: ReadonlyArray<string>, batchIndex: number) =>
-          Effect.gen(function* () {
-            const textsJson = yield* encodeTextsJson(batch).pipe(
-              Effect.mapError(() => upstreamError("Could not encode texts.")),
-            );
-            const requestBatchTranslations = Effect.gen(function* () {
+        const translateBatch = (batch: ReadonlyArray<string>, batchIndex: number) => {
+          let upstreamCalls = 0;
+          const requestBatchTranslations = (input: ReadonlyArray<string>) =>
+            Effect.gen(function* () {
+              if (++upstreamCalls > 20) {
+                return yield* upstreamError("Translation response malformed.");
+              }
+              const textsJson = yield* encodeTextsJson(input).pipe(
+                Effect.mapError(() => upstreamError("Could not encode texts.")),
+              );
               const upstreamJson = yield* httpClient
                 .execute(
                   HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
@@ -301,51 +339,88 @@ export const translateHttpApiLayer = HttpApiBuilder.group(
               );
               const content = completion.choices[0]?.message.content ?? "";
               if (content.length === 0) {
-                // Reasoning flash models can spend the whole budget on thinking; the
-                // client falls back to untranslated text on 502 and retries later.
                 yield* Effect.logWarning("Translation upstream returned empty content", {
                   batchIndex,
                 });
                 return yield* upstreamError("Translation upstream returned empty content.");
               }
-              const batchTranslations = yield* parseTranslationsJson(content);
-              if (batchTranslations === null || batchTranslations.length !== batch.length) {
+              const translations = yield* parseTranslationsJson(content);
+              if (
+                translations === null ||
+                translations.length !== input.length ||
+                translations.some(
+                  (translation, index) =>
+                    !preservesTranslationStructure(input[index]!, translation),
+                )
+              ) {
                 return yield* upstreamError("Translation response malformed.");
               }
-              return batchTranslations;
+              return [...translations];
             });
 
-            const isMalformedUpstream = (
-              error: EnvironmentTranslateUpstreamError,
-            ): error is EnvironmentTranslateUpstreamError =>
-              error.message === "Translation response malformed.";
-            const batchTranslations = yield* requestBatchTranslations.pipe(
-              Effect.catchIf(isMalformedUpstream, () =>
-                Effect.gen(function* () {
-                  // Long reasoning outputs occasionally leave one JSON escape
-                  // malformed; asking the model again usually returns a usable
-                  // array, so absorb that transient upstream defect instead of
-                  // surfacing an immediate 502 to the client.
-                  yield* Effect.logWarning("Translation response could not be parsed; retrying", {
-                    batchIndex,
-                    expected: batch.length,
-                  });
-                  return yield* requestBatchTranslations.pipe(
-                    Effect.catchIf(isMalformedUpstream, (retryError) =>
-                      Effect.gen(function* () {
-                        yield* Effect.logWarning("Translation response could not be parsed", {
-                          batchIndex,
-                          expected: batch.length,
-                        });
-                        return yield* retryError;
-                      }),
-                    ),
-                  );
-                }),
-              ),
-            );
-            return batchTranslations;
-          });
+          const isMalformedUpstream = (error: EnvironmentTranslateUpstreamError) =>
+            error.message === "Translation response malformed.";
+          const translateWithRecovery = (
+            input: ReadonlyArray<string>,
+            depth: number,
+          ): Effect.Effect<Array<string>, EnvironmentTranslateUpstreamError> =>
+            Effect.gen(function* () {
+              if (input.every((text) => !text.trim())) return [...input];
+              const translations = yield* requestBatchTranslations(input).pipe(
+                Effect.catchIf(isMalformedUpstream, () =>
+                  Effect.gen(function* () {
+                    yield* Effect.logWarning("Translation response malformed; retrying", {
+                      batchIndex,
+                      depth,
+                      expected: input.length,
+                    });
+                    return yield* requestBatchTranslations(input).pipe(
+                      Effect.catchIf(isMalformedUpstream, () => Effect.succeed(null)),
+                    );
+                  }),
+                ),
+              );
+              if (translations !== null) return translations;
+              if (depth >= MAX_MALFORMED_RECOVERY_DEPTH || upstreamCalls >= 20) {
+                yield* Effect.logWarning("Translation response malformed", { batchIndex, depth });
+                return yield* upstreamError("Translation response malformed.");
+              }
+
+              // Only translate the *original* inputs again. The model sometimes
+              // turns one multi-paragraph array item into several shortened items;
+              // joining those outputs would silently lose text.
+              if (input.length > 1) {
+                const recovered = yield* Effect.forEach(
+                  input,
+                  (text) => translateWithRecovery([text], depth + 1),
+                  { concurrency: 1 },
+                );
+                return recovered.flat();
+              }
+              const source = input[0]!;
+              const { chunks: parts, separators } = chunkText(
+                source,
+                Math.max(100, source.length >> 1),
+              );
+              if (parts.length < 2) {
+                yield* Effect.logWarning("Translation response malformed", { batchIndex, depth });
+                return yield* upstreamError("Translation response malformed.");
+              }
+              const recovered = yield* Effect.forEach(
+                parts,
+                (part) => translateWithRecovery([part], depth + 1),
+                { concurrency: 1 },
+              );
+              return [
+                joinChunks(
+                  recovered.map(([text]) => text!),
+                  separators,
+                ),
+              ];
+            });
+
+          return translateWithRecovery(batch, 0);
+        };
         const translatedChunks = (yield* Effect.forEach(chunkBatches, translateBatch, {
           concurrency: UPSTREAM_BATCH_CONCURRENCY,
         })).flat();

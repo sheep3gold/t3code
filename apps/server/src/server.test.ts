@@ -4921,6 +4921,169 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     ),
   );
 
+  it.effect("retranslates original paragraphs after repeated upstream array shape errors", () =>
+    Effect.gen(function* () {
+      const upstreamInputs: Array<Array<string>> = [];
+      const upstream = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const NodeHttp = await import("node:http");
+          return await new Promise<{ readonly close: () => Promise<void>; readonly url: string }>(
+            (resolve, reject) => {
+              const server = NodeHttp.createServer((request, response) => {
+                const chunks: Buffer[] = [];
+                request.on("data", (chunk) => {
+                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                });
+                request.on("end", () => {
+                  const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+                    readonly messages: ReadonlyArray<{ readonly content: string }>;
+                  };
+                  const input = JSON.parse(body.messages[1]!.content) as Array<string>;
+                  upstreamInputs.push(input);
+                  // The real model sometimes treats the paragraphs *inside* one
+                  // array item as separate items and shortens each of them.
+                  const output = input[0]!.includes("\n\n")
+                    ? upstreamInputs.length === 1
+                      ? ["短译", "遗漏内容", "短译"]
+                      : ["漏掉段落的短译"]
+                    : input.map((text) => `译${text.slice(0, 9)}`);
+                  response.statusCode = 200;
+                  response.setHeader("content-type", "application/json");
+                  response.end(
+                    JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }] }),
+                  );
+                });
+              });
+              server.on("error", reject);
+              server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address !== "object") {
+                  reject(new Error("Expected upstream listener address"));
+                  return;
+                }
+                resolve({
+                  url: `http://127.0.0.1:${address.port}/v1`,
+                  close: () => new Promise<void>((done) => server.close(() => done())),
+                });
+              });
+            },
+          );
+        }),
+        ({ close }) => Effect.promise(close),
+      );
+
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", upstream.url);
+      yield* buildAppUnderTest();
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const paragraphs = [1, 2, 3].map((index) => `Section ${index}${"x".repeat(300)}`);
+      const source = paragraphs.join("\n\n");
+      const translateUrl = yield* getHttpServerUrl("/api/translate");
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}`, "content-type": "application/json" },
+        body: jsonRequestBody({ texts: [source] }),
+      });
+      const body = yield* responseJsonEffect<{ readonly translations: ReadonlyArray<string> }>(
+        response,
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body.translations, [
+        paragraphs.map((p) => `译${p.slice(0, 9)}`).join("\n\n"),
+      ]);
+      assert.deepEqual(upstreamInputs, [[source], [source], ...paragraphs.map((p) => [p])]);
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
+  it.effect("translates a long single line in bounded batches via wsTicket", () =>
+    Effect.gen(function* () {
+      const upstreamInputs: Array<Array<string>> = [];
+      const upstream = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const NodeHttp = await import("node:http");
+          return await new Promise<{ readonly close: () => Promise<void>; readonly url: string }>(
+            (resolve, reject) => {
+              const server = NodeHttp.createServer((request, response) => {
+                const chunks: Buffer[] = [];
+                request.on("data", (chunk) => {
+                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                });
+                request.on("end", () => {
+                  const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+                    readonly messages: ReadonlyArray<{ readonly content: string }>;
+                  };
+                  const input = JSON.parse(body.messages[1]!.content) as Array<string>;
+                  upstreamInputs.push(input);
+                  response.statusCode = 200;
+                  response.setHeader("content-type", "application/json");
+                  response.end(
+                    JSON.stringify({
+                      choices: [{ message: { content: JSON.stringify(input) } }],
+                    }),
+                  );
+                });
+              });
+              server.on("error", reject);
+              server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address !== "object") {
+                  reject(new Error("Expected upstream listener address"));
+                  return;
+                }
+                resolve({
+                  url: `http://127.0.0.1:${address.port}/v1`,
+                  close: () => new Promise<void>((done) => server.close(() => done())),
+                });
+              });
+            },
+          );
+        }),
+        ({ close }) => Effect.promise(close),
+      );
+
+      vi.stubEnv("T3CODE_TRANSLATE_API_KEY", "test-key");
+      vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", upstream.url);
+      yield* buildAppUnderTest();
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const ticketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const ticketResponse = yield* fetchEffect(ticketUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearerToken}` },
+      });
+      const { ticket } = yield* responseJsonEffect<{ readonly ticket: string }>(ticketResponse);
+      assert.equal(ticketResponse.status, 200);
+
+      const source = "LongLine🚀".repeat(1_500);
+      const translateUrl = yield* getHttpServerUrl(
+        `/api/translate?wsTicket=${encodeURIComponent(ticket)}`,
+      );
+      const response = yield* fetchEffect(translateUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRequestBody({ texts: [source] }),
+      });
+      const body = yield* responseJsonEffect<{ readonly translations: ReadonlyArray<string> }>(
+        response,
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body.translations, [source]);
+      assert.isAbove(upstreamInputs.length, 1);
+      assert.isTrue(upstreamInputs.every((batch) => batch.join("").length <= 2_000));
+      assert.equal(
+        upstreamInputs.flat().reduce((length, chunk) => length + chunk.length, 0),
+        source.length,
+      );
+    }).pipe(
+      Effect.provide(NodeHttpServer.layerTest),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    ),
+  );
+
   it.effect("answers 502 from /api/translate when both upstream answers are malformed", () =>
     Effect.gen(function* () {
       const upstreamRequests: Array<string> = [];
