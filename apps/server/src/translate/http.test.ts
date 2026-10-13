@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { chunkText, joinChunks, parseTranslationsJson } from "./http.ts";
+import {
+  chunkText,
+  joinChunks,
+  parseTranslationsJson,
+  preservesTranslationStructure,
+} from "./http.ts";
 
 it.effect("parses a plain JSON string array", () =>
   Effect.gen(function* () {
@@ -42,6 +47,15 @@ it.effect("rejects prose instead of JSON", () =>
   }),
 );
 
+it("rejects dropped paragraphs, code fences, links, and inline code", () => {
+  expect(preservesTranslationStructure("First\n\nSecond", "第一\n\n第二")).toBe(true);
+  expect(preservesTranslationStructure("First\n\nSecond", "第一")).toBe(false);
+  expect(preservesTranslationStructure("```bash\nls\n```", "```bash\nls")).toBe(false);
+  expect(preservesTranslationStructure("[guide](https://example.com/doc)", "指南")).toBe(false);
+  expect(preservesTranslationStructure("Run `git push` now", "现在运行 git push")).toBe(false);
+  expect(preservesTranslationStructure("Hello", "")).toBe(false);
+});
+
 it("keeps a short text as a single chunk", () => {
   expect(chunkText("hello world", 2_000)).toEqual({ chunks: ["hello world"], separators: [] });
 });
@@ -75,9 +89,54 @@ it("records the paragraph break before an oversized paragraph's line chunks", ()
   expect(joinChunks(chunks, separators)).toBe(text);
 });
 
-it("never splits inside a single overlong line", () => {
+it("splits an overlong single line and reassembles it exactly", () => {
   const text = "q".repeat(5_000);
-  expect(chunkText(text, 2_000)).toEqual({ chunks: [text], separators: [] });
+  const result = chunkText(text, 2_000);
+  expect(result).toEqual({
+    chunks: ["q".repeat(2_000), "q".repeat(2_000), "q".repeat(1_000)],
+    separators: ["", ""],
+  });
+  expect(joinChunks(result.chunks, result.separators)).toBe(text);
+});
+
+it("splits long prose at spaces without breaking Unicode or Markdown", () => {
+  const text = `${"🚀 hello world ".repeat(180)}[link](https://example.com/docs) \`code\``;
+  const result = chunkText(text, 2_000);
+  expect(result.chunks.every((chunk) => chunk.length <= 2_000)).toBe(true);
+  expect(result.chunks.every((chunk) => !chunk.startsWith("\udc00"))).toBe(true);
+  expect(joinChunks(result.chunks, result.separators)).toBe(text);
+});
+
+it("does not split a surrogate pair in an unspaced line", () => {
+  const text = "🚀".repeat(1_050);
+  const result = chunkText(text, 1_999);
+  expect(result.chunks.map((chunk) => chunk.length)).toEqual([1_998, 102]);
+  expect(joinChunks(result.chunks, result.separators)).toBe(text);
+});
+
+it("preserves leading and trailing paragraph breaks across chunks", () => {
+  for (const text of [
+    `\n\n${"a".repeat(2_500)}`,
+    `${"a".repeat(2_500)}\n\n`,
+    `${"a".repeat(2_500)}\n\n\n\n${"b".repeat(2_500)}`,
+  ]) {
+    const { chunks, separators } = chunkText(text, 2_000);
+    expect(joinChunks(chunks, separators)).toBe(text);
+  }
+});
+
+it("round-trips mixed whitespace and Unicode across many chunk boundaries", () => {
+  const parts = ["🚀", "word ", "\n", "\n\n", "`code`", "", "long".repeat(80)];
+  for (let seed = 0; seed < 40; seed++) {
+    let value = seed;
+    const text = Array.from({ length: 80 }, () => {
+      value = (value * 37 + 11) % 97;
+      return parts[value % parts.length];
+    }).join("");
+    const result = chunkText(text, 100);
+    expect(joinChunks(result.chunks, result.separators)).toBe(text);
+    expect(result.chunks.every((part) => part.length <= 100)).toBe(true);
+  }
 });
 
 it("packs adjacent paragraphs together up to the target length", () => {
