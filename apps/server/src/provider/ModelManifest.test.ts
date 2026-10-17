@@ -523,6 +523,36 @@ describe("ModelManifest service", () => {
     ),
   );
 
+  it.live("keeps a newer held manifest when the fetched remote is an older edit", () => {
+    let fetchCount = 0;
+    return Effect.gen(function* () {
+      const service = yield* make;
+      // The URL serves an edit older than the bundle's, as when a fork's
+      // release corrects data the upstream host has not caught up to.
+      assert.deepStrictEqual(yield* service.refresh, BUNDLED_MODEL_MANIFEST);
+      assert.deepStrictEqual(yield* service.forceRefresh, BUNDLED_MODEL_MANIFEST);
+      assert.deepStrictEqual(yield* service.current, BUNDLED_MODEL_MANIFEST);
+      assert.strictEqual(fetchCount, 2);
+
+      // A later remote edit newer than the bundle still applies.
+      assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
+      assert.strictEqual(fetchCount, 3);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        serviceLayers({
+          prefix: "model-manifest-older-remote-test",
+          response: () =>
+            Response.json(
+              fetchCount++ < 2
+                ? { ...REMOTE_MANIFEST, updatedAt: "2000-01-01T00:00:00Z" }
+                : REMOTE_MANIFEST,
+            ),
+        }),
+      ),
+    );
+  });
+
   it.live("does not fetch when provider update checks are disabled", () =>
     Effect.gen(function* () {
       let fetchCount = 0;
