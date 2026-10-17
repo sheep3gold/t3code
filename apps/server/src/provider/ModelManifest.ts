@@ -404,6 +404,16 @@ export const make = Effect.gen(function* () {
     );
     if (fetched === null) return manifest;
 
+    // The remote copy is authoritative only while its edit date is not older
+    // than what we already hold. A release bundle can carry newer data than
+    // the URL serves (a fork correcting upstream); accepting the older fetch
+    // would undo the correction the release just shipped. Same edit-date rule
+    // as the disk-cache load above.
+    if (manifestUpdatedAtMs(fetched) < manifestUpdatedAtMs(manifest)) {
+      fetchedAtMs = now;
+      return manifest;
+    }
+
     manifest = fetched;
     fetchedAtMs = now;
     yield* encodeManifestCache({ fetchedAtMs: now, manifest: fetched }).pipe(
