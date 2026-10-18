@@ -1,4 +1,10 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  BrainIcon,
+  ChartNoAxesColumnIcon,
+  LibraryBigIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -188,6 +194,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/usage" });
   };
 
+  const handleArtifactsClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/artifacts" });
+  };
+
+  const handleMemoryClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/memory" });
+  };
+
   const handleBackClick = () => {
     closeMobileSidebar();
     void navigateToMainApp();
@@ -216,6 +232,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handlePullRequestsClick}
             />
           ) : null}
+          <SidebarUtilityItem
+            icon={<LibraryBigIcon />}
+            label="Artifacts"
+            onClick={handleArtifactsClick}
+          />
+          <SidebarUtilityItem icon={<BrainIcon />} label="Memory" onClick={handleMemoryClick} />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"

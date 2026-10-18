@@ -239,6 +239,14 @@
       "types": "./src/state/server.ts",
       "default": "./src/state/server.ts"
     },
+    "./state/artifacts": {
+      "types": "./src/state/artifactHttp.ts",
+      "default": "./src/state/artifactHttp.ts"
+    },
+    "./state/memory-ledger": {
+      "types": "./src/state/memoryLedgerHttp.ts",
+      "default": "./src/state/memoryLedgerHttp.ts"
+    },
     "./state/outdatedServerUpdate": {
       "types": "./src/state/outdatedServerUpdate.ts",
       "default": "./src/state/outdatedServerUpdate.ts"

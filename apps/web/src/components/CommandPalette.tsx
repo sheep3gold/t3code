@@ -58,6 +58,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  BrainIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -2024,6 +2025,17 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:memory",
+    searchTerms: ["memory", "memories", "lessons", "ledger", "resume state"],
+    title: "Open memory and ledgers",
+    icon: <BrainIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/memory" });
+    },
+  });
 
   actionItems.push({
     kind: "action",
