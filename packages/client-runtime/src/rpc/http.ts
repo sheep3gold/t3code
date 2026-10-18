@@ -1,6 +1,7 @@
 import {
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
+  ForkTranslationHttpApi,
   type EnvironmentAuthInvalidError,
   type EnvironmentInternalError,
   type EnvironmentOperationForbiddenError,
@@ -115,6 +116,22 @@ export const makeEnvironmentHttpApiGroupClient = <
 
 export const makeEnvironmentHttpApiUrlBuilder = (httpBaseUrl: string) =>
   HttpApiClient.urlBuilder(EnvironmentHttpApi, {
+    baseUrl: remoteApiBaseUrl(httpBaseUrl),
+  });
+
+// Fork-only translate group: served by the same server but declared on its own
+// HttpApi to keep fork routes out of the upstream EnvironmentHttpApi surface.
+export const makeForkTranslationHttpApiGroupClient = (httpBaseUrl: string) =>
+  Effect.flatMap(HttpClient.HttpClient, (httpClient) =>
+    HttpApiClient.group(ForkTranslationHttpApi, {
+      httpClient,
+      group: "translate",
+      baseUrl: remoteApiBaseUrl(httpBaseUrl),
+    }),
+  );
+
+export const makeForkTranslationHttpApiUrlBuilder = (httpBaseUrl: string) =>
+  HttpApiClient.urlBuilder(ForkTranslationHttpApi, {
     baseUrl: remoteApiBaseUrl(httpBaseUrl),
   });
 

@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
-import { FetchHttpClient, type HttpMethod } from "effect/http";
+import { FetchHttpClient, HttpClient, type HttpMethod } from "effect/http";
 
 import type { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection, PreparedHttpAuthorization } from "../connection/model.ts";
@@ -104,6 +104,104 @@ export const executeAuthenticatedEnvironmentHttpRequest = <
         withRelayClientTracing,
       )
     : executeEnvironmentRequest(input).pipe(Effect.withSpan(ENVIRONMENT_REQUEST_SPAN));
+
+/**
+ * Same authenticated request flow as executeAuthenticatedEnvironmentHttpRequest,
+ * for groups declared on a fork HttpApi instead of the upstream
+ * EnvironmentHttpApi (the translate proxy). Client and URL builders are
+ * supplied by the caller since their types are per-API.
+ */
+export const executeAuthenticatedForkHttpRequest = <Client, A, E, R>(input: {
+  readonly prepared: PreparedConnection;
+  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
+  readonly method: HttpMethod.HttpMethod;
+  readonly url: (httpBaseUrl: string) => string;
+  readonly timeoutMs: number;
+  readonly groupClient: (
+    httpBaseUrl: string,
+  ) => Effect.Effect<Client, never, HttpClient.HttpClient>;
+  readonly request: (client: Client) => Effect.Effect<A, E, R>;
+}): Effect.Effect<A, RemoteEnvironmentRequestError, R | HttpClient.HttpClient> =>
+  input.prepared.httpAuthorization?._tag === "Dpop"
+    ? executeForkRequest(input).pipe(
+        Effect.withSpan(ENVIRONMENT_REQUEST_SPAN, { root: true }),
+        withRelayClientTracing,
+      )
+    : executeForkRequest(input).pipe(Effect.withSpan(ENVIRONMENT_REQUEST_SPAN));
+
+const executeForkRequest = Effect.fnUntraced(function* <Client, A, E, R>(
+  input: Parameters<typeof executeAuthenticatedForkHttpRequest<Client, A, E, R>>[0],
+) {
+  let httpBaseUrl = input.prepared.httpBaseUrl;
+  return yield* Effect.gen(function* () {
+    let rejectedAccessToken: string | undefined;
+    for (;;) {
+      let authorization = input.prepared.httpAuthorization;
+      if (authorization?._tag === "Dpop") {
+        const remote = input.remoteAuthorization;
+        if (remote === undefined || Option.isNone(remote)) {
+          return yield* new RemoteEnvironmentAuthFetchError({
+            message: "No relay authorization service is available for the environment request.",
+            cause: input.prepared.target._tag,
+          });
+        }
+        const current = yield* remote.value
+          .authorizeDpopHttp({
+            expectedEnvironmentId: input.prepared.environmentId,
+            ...(rejectedAccessToken === undefined ? {} : { rejectedAccessToken }),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new RemoteEnvironmentAuthFetchError({
+                  message: "Could not authorize the environment request.",
+                  cause,
+                }),
+            ),
+          );
+        if (input.prepared.target._tag === "RelayConnectionTarget") {
+          httpBaseUrl = current.httpBaseUrl;
+        }
+        authorization = current.httpAuthorization;
+      }
+
+      const requestUrl = input.url(httpBaseUrl);
+      const client = yield* input.groupClient(httpBaseUrl);
+      const headers = yield* buildEnvironmentAuthHeaders(
+        authorization,
+        input.method,
+        requestUrl,
+        input.signer,
+      );
+      const result = yield* executeEnvironmentHttpRequest(
+        requestUrl,
+        input.timeoutMs,
+        withEnvironmentCredentials(authorization, input.request(client)),
+      ).pipe(Effect.result);
+
+      if (Result.isFailure(result)) {
+        if (
+          authorization?._tag === "Dpop" &&
+          rejectedAccessToken === undefined &&
+          result.failure._tag === "EnvironmentAuthInvalidError" &&
+          result.failure.reason === "invalid_credential"
+        ) {
+          rejectedAccessToken = authorization.accessToken;
+          continue;
+        }
+        return yield* result.failure;
+      }
+      return result.success;
+    }
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: input.timeoutMs,
+      orElse: () =>
+        Effect.fail(new RemoteEnvironmentAuthTimeoutError(input.url(httpBaseUrl), input.timeoutMs)),
+    }),
+  );
+});
 
 const ENVIRONMENT_REQUEST_SPAN = "clientRuntime.state.executeAuthenticatedEnvironmentHttpRequest";
 

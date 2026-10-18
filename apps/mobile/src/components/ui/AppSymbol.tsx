@@ -86,6 +86,7 @@ import IconLink from "@tabler/icons-react-native/IconLink";
 import IconListNumbers from "@tabler/icons-react-native/IconListNumbers";
 import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
 import IconMessageCircleQuestion from "@tabler/icons-react-native/IconMessageCircleQuestion";
+import IconLanguage from "@tabler/icons-react-native/IconLanguage";
 import IconMessage from "@tabler/icons-react-native/IconMessage";
 import IconMessagePlus from "@tabler/icons-react-native/IconMessagePlus";
 import IconMinus from "@tabler/icons-react-native/IconMinus";
@@ -256,6 +257,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   terminal: IconTerminal2,
   "text.alignleft": IconAlignLeft,
   "text.bubble": IconMessage,
+  "character.bubble": IconLanguage,
   "questionmark.bubble": IconMessageCircleQuestion,
   "exclamationmark.shield": IconShieldQuestion,
   "bubble.left.and.bubble.right": IconMessage,
@@ -291,6 +293,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   build: IconTool,
   chat: IconMessage,
   chat_bubble: IconMessage,
+  language: IconLanguage,
   check: IconCheck,
   close: IconX,
   construction: IconHammer,
