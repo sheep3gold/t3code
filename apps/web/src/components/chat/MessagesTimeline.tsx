@@ -61,6 +61,9 @@ import { observeResize } from "~/lib/observeResize";
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
+const NOOP_TRANSLATION_FOR_MESSAGE = (_messageId: string) => undefined;
+const NOOP_TRANSLATION_PENDING_FOR = (_messageId: string) => false;
+const NOOP_TRANSLATE_MESSAGE = (_messageId: string) => {};
 
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
@@ -144,6 +147,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   HammerIcon,
+  LanguagesIcon,
   WrenchIcon,
   Code2Icon,
   XIcon,
@@ -347,6 +351,11 @@ interface TimelineRowSharedState {
   onWorktreeSetupWorkLocally: (() => void) | null;
   onOpenWorktreeSetupTerminal: ((terminalId: string) => void) | null;
   workGroupViewState: WorkGroupViewState;
+  /** Per-message translation into Chinese; rows render their own translate button. */
+  translationAvailable: boolean;
+  translationForMessage: (messageId: string) => string | undefined;
+  translationPendingFor: (messageId: string) => boolean;
+  onTranslateMessage: (messageId: string) => void;
 }
 
 interface TimelineRowActivityState {
@@ -517,6 +526,11 @@ interface MessagesTimelineProps {
   findQuery?: string;
   activeFindMatch?: ThreadFindMatch | null;
   findNavigationId?: number;
+  /** Per-message translation into Chinese; each row renders its own translate button. */
+  translationAvailable?: boolean;
+  translationForMessage?: (messageId: string) => string | undefined;
+  translationPendingFor?: (messageId: string) => boolean;
+  onTranslateMessage?: (messageId: string) => void;
 }
 
 export function MessagesTimeline(props: MessagesTimelineProps) {
@@ -601,6 +615,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
   topFadeEnabled = false,
   historyControls,
   loadEarlier = null,
+  translationAvailable = true,
+  translationForMessage,
+  translationPendingFor,
+  onTranslateMessage,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   // The remembered position is a snapshot taken when the list identity changes;
@@ -1241,6 +1259,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
     onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
     workGroupViewState,
+    translationAvailable,
+    translationForMessage: translationForMessage ?? NOOP_TRANSLATION_FOR_MESSAGE,
+    translationPendingFor: translationPendingFor ?? NOOP_TRANSLATION_PENDING_FOR,
+    onTranslateMessage: onTranslateMessage ?? NOOP_TRANSLATE_MESSAGE,
   };
   const compactionAwaitingRow =
     isCompacting && !rows.some((row) => row.kind === "context-compaction" && row.active);
@@ -2061,6 +2083,75 @@ function MessageAuthorHeading({ children }: { children: string }) {
   return <h3 className="sr-only select-none">{children}</h3>;
 }
 
+// Translation into Chinese, requested per message via the 译 button in the
+// row's action area. The translation renders under the source text; failures
+// leave the row without a translation rather than showing an error.
+function MessageTranslationBlock({
+  messageId,
+  align,
+}: {
+  messageId: string;
+  align: "start" | "end";
+}) {
+  const ctx = use(TimelineRowCtx);
+  const translation = ctx.translationForMessage(messageId);
+  if (!translation) return null;
+  return (
+    <div
+      className={cn(
+        "mt-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1.5 text-sm text-muted-foreground",
+        align === "end" ? "w-full max-w-[80%] self-end text-start" : undefined,
+      )}
+      data-message-translation={messageId}
+    >
+      <ChatMarkdown
+        text={translation}
+        cwd={ctx.markdownCwd}
+        threadRef={ctx.threadRef ?? undefined}
+        isStreaming={false}
+        lineBreaks={false}
+        skills={ctx.skills}
+        headingLevelOffset={MESSAGE_HEADING_LEVEL}
+        onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+        onImageExpand={ctx.onImageExpand}
+      />
+    </div>
+  );
+}
+
+// Per-message translate trigger. Hidden once the translation landed or while
+// the server has no translation upstream; spins while its request is in
+// flight. Rendered in the same hover-revealed action row as copy/revert.
+function MessageTranslateButton({ messageId }: { messageId: string }) {
+  const ctx = use(TimelineRowCtx);
+  if (!ctx.translationAvailable) return null;
+  if (ctx.translationForMessage(messageId) !== undefined) return null;
+  const pending = ctx.translationPendingFor(messageId);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => ctx.onTranslateMessage(messageId)}
+            aria-label="翻译为中文"
+          />
+        }
+      >
+        {pending ? (
+          <Spinner className="size-3" aria-hidden />
+        ) : (
+          <LanguagesIcon className="size-3" aria-hidden />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">翻译为中文</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const { onImageExpand, onFileOpen } = ctx;
@@ -2347,6 +2438,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             markdownCwd={ctx.markdownCwd}
           />
         </div>
+        <MessageTranslationBlock messageId={row.message.id} align="end" />
       </div>
       {row.projectedItem &&
       row.projectedItem.item.status !== "completed" &&
@@ -2371,6 +2463,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <div className="flex items-center gap-0.5">
             {typeof revertTurnCount === "number" && (
               <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+            )}
+            {resolvedContext.text && !row.message.streaming && (
+              <MessageTranslateButton messageId={row.message.id} />
             )}
             {resolvedContext.text && (
               <MessageCopyButton
@@ -2603,6 +2698,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             />
           </AssistantCitationSource>
         </div>
+        <MessageTranslationBlock messageId={row.message.id} align="start" />
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}
@@ -2725,6 +2821,9 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
+      {!message.streaming && message.text.trim().length > 0 && (
+        <MessageTranslateButton messageId={message.id} />
+      )}
       {projectedItem?.item.type === "assistant_message" ? (
         <AssistantForkButton projectedItem={projectedItem} />
       ) : null}
