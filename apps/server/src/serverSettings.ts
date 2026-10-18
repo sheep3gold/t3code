@@ -55,6 +55,7 @@ import {
 
 import { mapSettingsSecrets, SECRET_REDACTED, type SettingsSecret } from "./settingsSecrets.ts";
 
+import { migrateLegacyForkProviderInstancesJson } from "./fork/provider/legacyForkProviderInstances.ts";
 export {
   resolveReviewGuideModelSelection,
   resolveSourceControlWriterModelSelection,
@@ -591,6 +592,7 @@ const make = Effect.gen(function* () {
   );
 
   const readRawConfig = fs.readFileString(settingsPath).pipe(
+    Effect.map(migrateLegacyForkProviderInstancesJson),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
