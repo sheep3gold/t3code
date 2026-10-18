@@ -834,6 +834,117 @@ const EnvironmentMemoryLedgerMutationErrors = [
   EnvironmentInternalError,
 ] as const;
 
+export const EnvironmentArtifactKind = Schema.Literals(["text", "markdown", "json", "html", "svg"]);
+export type EnvironmentArtifactKind = typeof EnvironmentArtifactKind.Type;
+
+export const EnvironmentArtifactSummary = Schema.Struct({
+  id: Schema.String,
+  slug: Schema.String,
+  projectId: ProjectId,
+  name: Schema.String,
+  kind: EnvironmentArtifactKind,
+  description: Schema.NullOr(Schema.String),
+  tags: Schema.Array(Schema.String),
+  currentVersion: Schema.Number,
+  sourceThreadId: ThreadId,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type EnvironmentArtifactSummary = typeof EnvironmentArtifactSummary.Type;
+export const EnvironmentArtifactDetail = Schema.Struct({
+  ...EnvironmentArtifactSummary.fields,
+  version: Schema.Number,
+  content: Schema.String,
+  versionReason: Schema.String,
+  versionCreatedAt: Schema.String,
+});
+export type EnvironmentArtifactDetail = typeof EnvironmentArtifactDetail.Type;
+export const EnvironmentArtifactVersion = Schema.Struct({
+  version: Schema.Number,
+  reason: Schema.String,
+  sourceThreadId: ThreadId,
+  createdAt: Schema.String,
+});
+export type EnvironmentArtifactVersion = typeof EnvironmentArtifactVersion.Type;
+
+const EnvironmentArtifactProjectQuery = { projectId: ProjectId };
+const EnvironmentArtifactGetParams = Schema.Struct({ slug: TrimmedNonEmptyString });
+const EnvironmentArtifactGetQuery = {
+  projectId: ProjectId,
+  version: Schema.optional(
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+};
+const EnvironmentArtifactMutationPayload = Schema.Struct({ projectId: ProjectId });
+const EnvironmentArtifactUpdatePayload = Schema.Struct({
+  projectId: ProjectId,
+  name: Schema.optional(TrimmedNonEmptyString),
+  kind: Schema.optional(EnvironmentArtifactKind),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+  content: Schema.optional(Schema.String),
+  reason: Schema.optional(TrimmedNonEmptyString),
+});
+const EnvironmentArtifactRevertPayload = Schema.Struct({
+  projectId: ProjectId,
+  targetVersion: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+});
+
+class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
+  .add(
+    HttpApiEndpoint.get("list", "/api/artifacts", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentArtifactProjectQuery,
+      success: Schema.Struct({ artifacts: Schema.Array(EnvironmentArtifactSummary) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("get", "/api/artifacts/:slug", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactGetQuery,
+      success: EnvironmentArtifactDetail,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("versions", "/api/artifacts/:slug/versions", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactProjectQuery,
+      success: Schema.Struct({ versions: Schema.Array(EnvironmentArtifactVersion) }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("update", "/api/artifacts/:slug/update", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactUpdatePayload,
+      success: EnvironmentArtifactDetail,
+      error: EnvironmentMemoryLedgerMutationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("revert", "/api/artifacts/:slug/revert", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactRevertPayload,
+      success: EnvironmentArtifactDetail,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete("remove", "/api/artifacts/:slug", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentArtifactGetParams,
+      payload: EnvironmentArtifactMutationPayload,
+      success: Schema.Struct({ removed: Schema.Boolean }),
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 class EnvironmentMemoryLedgerHttpApi extends HttpApiGroup.make("memoryLedger")
   .add(
     HttpApiEndpoint.get("listMemories", "/api/memories", {
@@ -906,4 +1017,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi)
   .add(EnvironmentWebhooksHttpApi)
-  .add(EnvironmentMemoryLedgerHttpApi) {}
+  .add(EnvironmentMemoryLedgerHttpApi)
+  .add(EnvironmentArtifactsHttpApi) {}

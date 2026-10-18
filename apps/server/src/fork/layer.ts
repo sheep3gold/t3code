@@ -9,6 +9,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as ArtifactRepository from "./artifacts/Artifacts.ts";
 import * as ThreadLedgerRepository from "./ledger/ThreadLedger.ts";
 import * as AgentMemories from "./memory/AgentMemories.ts";
 import { startMemorySync } from "./memory/MemorySync.ts";
@@ -19,6 +20,7 @@ import * as ForkTurnContext from "./turnContext/ForkTurnContext.ts";
 export const layerForkRepositories = Layer.mergeAll(
   AgentMemories.layer,
   ThreadLedgerRepository.layer,
+  ArtifactRepository.layer,
 );
 
 /** Provided to the V2 runtime so turn start can read it. */

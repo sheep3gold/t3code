@@ -36,6 +36,7 @@ import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 import * as AgentMemories from "../../../fork/memory/AgentMemories.ts";
+import * as Artifacts from "../../../fork/artifacts/Artifacts.ts";
 import * as ThreadLedger from "../../../fork/ledger/ThreadLedger.ts";
 
 const layerStubServices = Layer.mergeAll(
@@ -50,6 +51,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(AgentMemories.AgentMemoryRepository)({}),
   Layer.mock(ThreadLedger.ThreadLedgerRepository)({}),
+  Layer.mock(Artifacts.ArtifactRepository)({}),
   Layer.mock(ProjectService.ProjectService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   ServerSettings.layerTest({}),
