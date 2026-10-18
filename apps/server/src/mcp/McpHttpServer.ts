@@ -59,6 +59,7 @@ import {
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 import * as AgentMemory from "../fork/memory/AgentMemory.ts";
+import * as AgentNotification from "../fork/notifications/AgentNotification.ts";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   HttpServerRequest.toURL(request).pipe(
@@ -836,6 +837,10 @@ export const layerMcpTransport = McpServer.layerHttp({
 // Fork-only agent tools; they live under src/fork and register here because
 // MCP registration is confined to this file.
 const layerForkToolkits = Layer.mergeAll(
+  toolkitRegistration(
+    AgentNotification.AgentNotificationToolkit,
+    AgentNotification.AgentNotificationToolkitHandlersLive,
+  ),
   toolkitRegistration(AgentMemory.AgentMemoryToolkit, AgentMemory.AgentMemoryHandlersLive),
 );
 

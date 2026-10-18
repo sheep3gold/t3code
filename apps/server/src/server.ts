@@ -589,7 +589,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
-  ForkLayer.layerForkBackground,
+  ForkLayer.layerForkBackground.pipe(Layer.provide(ProjectionStoreV2.layer)),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),

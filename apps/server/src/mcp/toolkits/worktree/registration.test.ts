@@ -1,4 +1,5 @@
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -39,6 +40,7 @@ import * as AgentMemories from "../../../fork/memory/AgentMemories.ts";
 const layerStubServices = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+  Layer.mock(ProjectStore.ProjectStoreV2)({}),
   Layer.mock(DeviceService.DeviceService)({}),
   Layer.mock(ThreadManagementService.ThreadManagementService)({}),
   Layer.mock(ProviderRegistry.ProviderRegistry)({}),

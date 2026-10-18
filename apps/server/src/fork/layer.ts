@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 
 import * as AgentMemories from "./memory/AgentMemories.ts";
 import { startMemorySync } from "./memory/MemorySync.ts";
+import { startMsgHubNotifications } from "./notifications/MsgHubNotificationReactor.ts";
 import * as ForkTurnContext from "./turnContext/ForkTurnContext.ts";
 
 /** Needs only SqlClient; merged next to upstream persistence. */
@@ -23,5 +24,6 @@ export const layerForkRuntime = ForkTurnContext.layer;
 export const layerForkBackground = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* startMemorySync;
+    yield* startMsgHubNotifications;
   }),
 );
