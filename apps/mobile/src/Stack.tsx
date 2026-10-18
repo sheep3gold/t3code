@@ -128,6 +128,7 @@ import {
   SettingsArtifactDetailRouteScreen,
   SettingsArtifactsRouteScreen,
 } from "./features/artifacts/ArtifactLibraryRouteScreens";
+import { SettingsSchedulesRouteScreen } from "./features/schedules/SettingsSchedulesRouteScreen";
 import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
@@ -418,6 +419,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsArtifactsRouteScreen,
       linking: "artifacts",
       options: { title: "Artifacts" },
+    }),
+    SettingsSchedules: createNativeStackScreen({
+      screen: SettingsSchedulesRouteScreen,
+      linking: "schedules",
+      options: { title: "Schedules" },
     }),
     SettingsArtifactDetail: createNativeStackScreen({
       screen: SettingsArtifactDetailRouteScreen,
