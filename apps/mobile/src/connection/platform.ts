@@ -21,6 +21,7 @@ import * as Network from "expo-network";
 import { AppState } from "react-native";
 
 import { authClientMetadata } from "../lib/authClientMetadata";
+import { initInstallAnchor } from "../lib/installAnchor";
 import * as Runtime from "../lib/runtime";
 import * as MobileStorage from "../persistence/mobile-storage";
 import { appAtomRegistry } from "../state/atom-registry";
@@ -157,6 +158,9 @@ const layerWakeups = Wakeups.layer({
 const layerCapabilities = Layer.effectContext(
   Effect.gen(function* () {
     const storage = yield* MobileStorage.MobileStorage;
+    // Resolve the install anchor before client presentation metadata is read, so
+    // the first WebSocket URL after a reinstall already carries clientInstalledAt.
+    yield* Effect.promise(() => initInstallAnchor());
     return Context.make(
       ClientCapabilities.CloudSession,
       ClientCapabilities.CloudSession.of({
