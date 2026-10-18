@@ -739,6 +739,71 @@ export function useThreadComposerState() {
     ],
   );
 
+  /**
+   * Sends an `[OPTIONS:]` chip label as its own queued message, leaving the
+   * user's draft untouched. Same outbox path as a normal send but with no
+   * attachments or context, so a mid-turn tap queues for the next tool
+   * boundary instead of being dropped.
+   */
+  const onSendOption = useCallback(
+    async (label: string) => {
+      if (!selectedThreadShell || selectedThreadCreation !== null) return null;
+      const text = label.trim();
+      if (text.length === 0) return null;
+
+      const threadKey = activeComposerDraftKey(selectedThreadShell);
+      const draft = getComposerDraftSnapshot(threadKey);
+      const thread = selectedThreadShell;
+      const modelSelection = draft.modelSelection ?? thread.modelSelection;
+      const serverConfig = selectedEnvironmentRuntime?.serverConfig;
+      if (
+        selectedEnvironmentRuntime?.connectionState === "connected" &&
+        isModelSelectionUnavailable(serverConfig, modelSelection, thread.projectId)
+      ) {
+        const { title, detail } = describeUnavailableModelSelection(
+          serverConfig,
+          modelSelection,
+          thread.projectId,
+        );
+        Dialog.alert(title, detail);
+        return null;
+      }
+      const provider = serverConfig?.providers.find(
+        (entry) => entry.instanceId === modelSelection.instanceId,
+      );
+      const metadata = makeQueuedMessageMetadata();
+      const messageId = MessageId.make(metadata.messageId);
+      void enqueueThreadOutboxMessage({
+        environmentId: selectedThreadShell.environmentId,
+        threadId: selectedThreadShell.id,
+        messageId,
+        commandId: CommandId.make(metadata.commandId),
+        text,
+        attachments: [],
+        context: { version: 1, records: [] },
+        modelSelection,
+        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+        interactionMode: resolveProviderInteractionMode(
+          provider,
+          draft.interactionMode ?? thread.interactionMode,
+        ),
+        createdAt: metadata.createdAt,
+      }).catch((error: unknown) => {
+        Dialog.alert(
+          "Could not send",
+          error instanceof Error ? error.message : "Failed to save the queued option.",
+        );
+      });
+      return messageId;
+    },
+    [
+      selectedEnvironmentRuntime?.connectionState,
+      selectedEnvironmentRuntime?.serverConfig,
+      selectedThreadCreation,
+      selectedThreadShell,
+    ],
+  );
+
   const onChangeDraftMessage = useCallback(
     (value: string) => {
       if (!selectedThreadShell) {
@@ -1076,6 +1141,7 @@ export function useThreadComposerState() {
     onNativePasteText,
     onRemoveDraftImage,
     onSendMessage,
+    onSendOption,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,

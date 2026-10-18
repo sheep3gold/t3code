@@ -115,6 +115,7 @@ import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useThreadTranslation, type MessageTranslationState } from "../../state/translate";
+import { parseAssistantOptions } from "./assistant-options";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
@@ -1209,7 +1210,11 @@ function renderFeedEntry(
     const { message } = entry;
     const isUser = message.role === "user";
     const presentation = resolveUserMessagePresentation(message);
-    const renderedText = renderAssistantCitationsAsText(presentation.text);
+    const parsedOptions =
+      message.role === "assistant" && !message.streaming
+        ? parseAssistantOptions(presentation.text)
+        : null;
+    const renderedText = renderAssistantCitationsAsText(parsedOptions?.body ?? presentation.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
