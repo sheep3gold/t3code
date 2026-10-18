@@ -2049,7 +2049,17 @@ export const make = (
                 "session/set_config_option",
                 requestPayload,
                 acp.agent.setSessionConfigOption(requestPayload),
-              ).pipe(Effect.tap((response) => updateConfigOptions(response)));
+              ).pipe(
+                Effect.map((response) =>
+                  response.configOptions === undefined
+                    ? {
+                        ...response,
+                        configOptions: withCurrentValue(configOptions, configId, value),
+                      }
+                    : response,
+                ),
+                Effect.tap((response) => updateConfigOptions(response)),
+              );
             }),
           ),
         ),
@@ -2663,7 +2673,9 @@ export const make = (
             return {} satisfies EffectAcpSchema.SetSessionModeResponse;
           }
           const response = yield* setConfigOption(modeConfigOption?.id ?? "mode", modeId);
-          const reported = parseSessionModeState({ configOptions: response.configOptions });
+          const reported = parseSessionModeState(
+            response.configOptions === undefined ? {} : { configOptions: response.configOptions },
+          );
           if (reported === undefined) {
             yield* updateCurrentModeId(modeId);
           } else {
@@ -2718,6 +2730,18 @@ function sessionConfigOptionsFromSetup(
     | undefined,
 ): ReadonlyArray<EffectAcpSchema.SessionConfigOption> {
   return response?.configOptions ?? [];
+}
+
+function withCurrentValue(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  configId: string,
+  value: string | boolean,
+): ReadonlyArray<EffectAcpSchema.SessionConfigOption> {
+  return configOptions.map((option) =>
+    option.id === configId
+      ? ({ ...option, currentValue: value } as EffectAcpSchema.SessionConfigOption)
+      : option,
+  );
 }
 
 function configOptionCurrentValueMatches(

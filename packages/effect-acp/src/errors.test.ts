@@ -13,6 +13,19 @@ const decodeNestedNumberPayload = Schema.decodeUnknownEffect(
 const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("effect-acp errors", () => {
+  it("shows an agent's string error data after its generic message", () => {
+    const quota = new AcpError.AcpRequestError({
+      code: -32603,
+      errorMessage: "Internal error",
+      data: "The monthly usage limit has been reached",
+    });
+    expect(quota.message).toBe("Internal error: The monthly usage limit has been reached");
+    expect(
+      new AcpError.AcpRequestError({ code: -32603, errorMessage: "Internal error", data: { a: 1 } })
+        .message,
+    ).toBe("Internal error");
+  });
+
   it.effect("retains RPC method and cause without deriving the message from the cause", () => {
     const rootCause = new Error("connection details that must not become the public message");
     const failure = new RpcClientError.RpcClientError({

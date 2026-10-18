@@ -228,7 +228,8 @@ export type SetSessionConfigOptionRequest =
     };
 
 export interface SetSessionConfigOptionResponse {
-  readonly configOptions: ReadonlyArray<SessionConfigOption>;
+  /** Absent when a non-conforming agent omits it; the options are then unchanged. */
+  readonly configOptions?: ReadonlyArray<SessionConfigOption>;
   readonly _meta?: Meta;
 }
 

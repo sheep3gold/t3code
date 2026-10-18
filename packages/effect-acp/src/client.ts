@@ -1200,12 +1200,12 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
                 type: "type" in payload && payload.type === "boolean" ? "boolean" : "id",
               }),
             ).pipe(
-              Effect.map((response) => ({
-                configOptions:
-                  normalizeConfigOptions(
-                    (response as AcpSchemaV2.SetSessionConfigOptionResponse).configOptions,
-                  ) ?? [],
-              })),
+              Effect.map((response) => {
+                const configOptions = normalizeConfigOptions(
+                  (response as Partial<AcpSchemaV2.SetSessionConfigOptionResponse>).configOptions,
+                );
+                return configOptions === undefined ? {} : { configOptions };
+              }),
             ),
       prompt: (payload) =>
         negotiatedProtocolGeneration === 1

@@ -268,7 +268,12 @@ export class AcpRequestError extends Schema.TaggedError<AcpRequestError>()("AcpR
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
   override get message() {
-    return this.errorMessage;
+    // Agents put the actionable reason in `data` behind a generic message,
+    // e.g. Kiro's "Internal error" for an exhausted monthly quota.
+    const detail = typeof this.data === "string" ? this.data.trim() : "";
+    return detail === "" || detail === this.errorMessage
+      ? this.errorMessage
+      : `${this.errorMessage}: ${detail}`;
   }
 
   static fromProtocolError(
