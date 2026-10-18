@@ -189,6 +189,7 @@ import {
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { parseAssistantOptions } from "./AssistantOptionChips";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { WorkspaceEntryIcon, WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";
@@ -2670,7 +2671,12 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const rawText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  // The marker line is stripped from the body; the chips render above the
+  // composer in ChatView since candidates are "what to send next". Not parsed
+  // while streaming: a half-emitted marker would render broken chips that jump.
+  const parsedOptions = row.message.streaming ? null : parseAssistantOptions(rawText);
+  const messageText = parsedOptions?.body ?? rawText;
 
   return (
     <>

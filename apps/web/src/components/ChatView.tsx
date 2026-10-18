@@ -142,9 +142,11 @@ import { Atom } from "effect/reactivity";
 import {
   Fragment,
   type SetStateAction,
+  useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -291,6 +293,11 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useThreadTranslation } from "../hooks/useThreadTranslation";
+import {
+  AssistantOptionChips,
+  parseAssistantOptions,
+  toggleOptionInPrompt,
+} from "./chat/AssistantOptionChips";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -2808,6 +2815,34 @@ export default function ChatView(props: ChatViewProps) {
     threadKey: displayedTimelineKey,
     messages: timelineMessages,
   });
+  /**
+   * `[OPTIONS:]` chip candidates shown above the composer, read from the last
+   * assistant message only: an older turn's candidates are a stale action the
+   * user should not be able to click. Skipped while streaming so a half-emitted
+   * marker line does not render broken chips that then jump.
+   */
+  const activeOptionLabels = useMemo<ReadonlyArray<string>>(() => {
+    for (let i = timelineMessages.length - 1; i >= 0; i -= 1) {
+      const message = timelineMessages[i];
+      if (!message || message.role !== "assistant") continue;
+      if (message.streaming) return [];
+      return parseAssistantOptions(message.text ?? "")?.options ?? [];
+    }
+    return [];
+  }, [timelineMessages]);
+  /** Selection state must follow the composer live, so subscribe to the draft text. */
+  const composerPromptForOptions = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.prompt ?? "",
+  );
+  const handleOptionToggle = useCallback(
+    (label: string) => {
+      const store = useComposerDraftStore.getState();
+      const current = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
+      store.setPrompt(composerDraftTarget, toggleOptionInPrompt(current, label));
+    },
+    [composerDraftTarget],
+  );
+
   const paintOnlyDisplayedTimeline = isPaintOnlyThreadTimeline(
     displayedTimeline.displayThreadKey,
     activeThreadKey,
@@ -3341,6 +3376,17 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
   const sendAppMessageStable = useStableCallback(sendAppMessage);
+  /**
+   * The arrow on a `[OPTIONS:]` chip sends only its own label via the app
+   * message path, so the user's own draft is left untouched and mid-turn it
+   * queues for the next tool boundary instead of being dropped.
+   */
+  const handleOptionSend = useCallback(
+    (label: string) => {
+      void sendAppMessageStable(label);
+    },
+    [sendAppMessageStable],
+  );
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
   const addTerminalContextToDraft = (selection: TerminalContextSelection) => {
     composerRef.current?.addTerminalContext(selection);
@@ -8100,6 +8146,14 @@ export default function ChatView(props: ChatViewProps) {
                         inert={queuedRunEdit.isSaving}
                         aria-busy={queuedRunEdit.isSaving}
                       >
+                        {activeOptionLabels.length > 0 ? (
+                          <AssistantOptionChips
+                            options={activeOptionLabels}
+                            prompt={composerPromptForOptions}
+                            onToggle={handleOptionToggle}
+                            onSend={handleOptionSend}
+                          />
+                        ) : null}
                         <div className="relative z-10">
                           {showProviderSubagentBar ? (
                             <ProviderSubagentBar
