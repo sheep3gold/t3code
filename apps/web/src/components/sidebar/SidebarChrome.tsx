@@ -1,9 +1,11 @@
 import {
   ArrowLeftIcon,
   BrainIcon,
+  CalendarClockIcon,
   ChartNoAxesColumnIcon,
   LibraryBigIcon,
   SettingsIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
@@ -199,6 +201,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/artifacts" });
   };
 
+  const handleSchedulesClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/schedules" });
+  };
+
+  const handleWorkflowsClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/workflows" });
+  };
+
   const handleMemoryClick = () => {
     closeMobileSidebar();
     void navigate({ to: "/memory" });
@@ -236,6 +248,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<LibraryBigIcon />}
             label="Artifacts"
             onClick={handleArtifactsClick}
+          />
+          <SidebarUtilityItem
+            icon={<CalendarClockIcon />}
+            label="Schedules"
+            onClick={handleSchedulesClick}
+          />
+          <SidebarUtilityItem
+            icon={<WorkflowIcon />}
+            label="Workflows"
+            onClick={handleWorkflowsClick}
           />
           <SidebarUtilityItem icon={<BrainIcon />} label="Memory" onClick={handleMemoryClick} />
           <SidebarUtilityItem

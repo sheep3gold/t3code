@@ -59,6 +59,8 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   BrainIcon,
+  CalendarClockIcon,
+  WorkflowIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -2025,6 +2027,28 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:schedules",
+    searchTerms: ["schedules", "scheduled tasks", "cron", "recurring", "automation"],
+    title: "Open schedules",
+    icon: <CalendarClockIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/schedules" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:workflows",
+    searchTerms: ["workflows", "steps", "automation", "retry", "durable"],
+    title: "Open workflows",
+    icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/workflows" });
+    },
+  });
 
   actionItems.push({
     kind: "action",
