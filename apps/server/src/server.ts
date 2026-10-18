@@ -66,6 +66,7 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as ForkLayer from "./fork/layer.ts";
 import * as TranslationHttp from "./fork/translate/http.ts";
 import * as ForkUsageHttp from "./fork/usage/http.ts";
+import * as MemoryLedgerHttp from "./fork/memoryLedger/http.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -688,6 +689,12 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(CloudHttp.layer),
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
+      Layer.provide(
+        MemoryLedgerHttp.layer.pipe(
+          Layer.provide(ProjectionStoreV2.layer),
+          Layer.provide(ForkLayer.layerForkRepositories),
+        ),
+      ),
       Layer.provide(ProjectHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
