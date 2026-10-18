@@ -26,6 +26,9 @@ function readMcpAppDocument(
     if (content.uri !== undefined && content.uri !== uri) continue;
     const mimeType = typeof content.mimeType === "string" ? content.mimeType : "";
     if (mimeType.replace(/\s+/g, "").toLowerCase() !== MCP_APP_MIME_TYPE) continue;
+    // Sizes are checked before decoding, so an oversized resource is
+    // refused without first being copied: a string's UTF-8 form is at least
+    // its length, and base64 decodes to three quarters of its own.
     const html =
       typeof content.text === "string"
         ? content.text.length > MCP_APP_MAX_HTML_BYTES
@@ -44,7 +47,6 @@ function readMcpAppDocument(
   return undefined;
 }
 
-/** Snapshot a completed MCP tool's UI document as a sandboxed thread attachment. */
 export const snapshotMcpApp = Effect.fn("McpAppSnapshot.snapshot")(function* (input: {
   readonly attachmentsDir: string;
   readonly threadId: ThreadId;
@@ -63,6 +65,7 @@ export const snapshotMcpApp = Effect.fn("McpAppSnapshot.snapshot")(function* (in
     });
     return undefined;
   }
+  // The `-html` suffix makes the asset route serve it as a sandboxed document.
   const attachmentId = createAttachmentId(input.threadId, "html");
   const filePath =
     attachmentId === null
@@ -72,11 +75,14 @@ export const snapshotMcpApp = Effect.fn("McpAppSnapshot.snapshot")(function* (in
           relativePath: `${attachmentId}.html`,
         });
   if (attachmentId === null || filePath === null) return undefined;
+  const html = document.html;
   const ui = Predicate.isObject(document.meta) ? document.meta : {};
   const csp = readMcpAppCsp(ui.csp);
   const fileSystem = yield* FileSystem.FileSystem;
+  // Only the returned reference lets thread deletion find the document, so a
+  // write that fails or is interrupted removes it.
   yield* fileSystem
-    .writeFileString(filePath, injectMcpAppCsp(document.html, csp))
+    .writeFileString(filePath, injectMcpAppCsp(html, csp))
     .pipe(Effect.onError(() => fileSystem.remove(filePath, { force: true }).pipe(Effect.ignore)));
   const permissions = readMcpAppPermissions(ui.permissions);
   return {

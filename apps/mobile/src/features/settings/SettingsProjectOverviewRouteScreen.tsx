@@ -1,5 +1,5 @@
-import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
-import { AppText as Text, AppTextInput } from "../../components/AppText";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import { AppText as Text, AppTextInput } from "../../components/ui/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-grouping";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -96,9 +96,10 @@ function ProjectOverviewContent(props: {
       <View className="flex-row items-center gap-4 px-2">
         <ProjectFavicon
           environmentId={representative.environmentId}
-          projectTitle={displayName}
+          projectTitle={representative.title}
           workspaceRoot={representative.workspaceRoot}
           faviconPath={representative.faviconPath}
+          projectIcon={representative.projectIcon}
           size={48}
         />
         <View className="min-w-0 flex-1">

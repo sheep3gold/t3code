@@ -4,9 +4,10 @@ import { Linking } from "react-native";
 const ExternalUrlTarget = Schema.Literals([
   "file-preview",
   "markdown-link",
-  "mcp-app",
   "pull-request",
   "provider-auth",
+  "html-render",
+  "mcp-app",
 ]);
 
 export type ExternalUrlTarget = typeof ExternalUrlTarget.Type;

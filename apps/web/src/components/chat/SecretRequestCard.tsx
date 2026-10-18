@@ -2,43 +2,62 @@ import {
   SECRET_REQUEST_DEFAULT_PLACEHOLDER,
   SECRET_REQUEST_PRIVACY_NOTE,
   secretRequestAnswerInput,
+  secretRequestDisplay,
   secretRequestFailureMessage,
-  type SecretRequestCard as SecretRequestCardModel,
+  type SecretRequestItem,
 } from "@t3tools/client-runtime/secret-request";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
-import { ShieldCheckIcon } from "lucide-react";
+import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
 import { useId, useRef, useState, type FormEvent } from "react";
 
-import { orchestrationEnvironment } from "~/state/orchestration";
-import { useAtomCommand } from "~/state/use-atom-command";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { WorkLogRow } from "./WorkLog";
 
-/**
- * Inline card for a secret an agent asked the user for. The typed value lives
- * only in this component's state and the RPC payload: it is never logged,
- * toasted, or persisted, and the field clears once the answer is sent.
- */
 export function SecretRequestCard(props: {
   readonly environmentId: EnvironmentId;
-  readonly card: SecretRequestCardModel;
+  readonly item: SecretRequestItem;
+  readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];
 }) {
-  return <PendingSecretRequestForm environmentId={props.environmentId} card={props.card} />;
+  const { item } = props;
+  const display = secretRequestDisplay(item, props.visibility);
+  if (display.kind === "answered" || display.kind === "pending-elsewhere") {
+    const Icon =
+      display.kind === "pending-elsewhere"
+        ? LockIcon
+        : display.outcome === "saved"
+          ? CheckIcon
+          : MinusIcon;
+    return (
+      <WorkLogRow
+        data-v2-item-type={item.type}
+        icon={<Icon className="size-3.5 text-icon-muted" aria-hidden />}
+        label={
+          <>
+            {item.label} · {display.label}
+          </>
+        }
+      />
+    );
+  }
+  return <PendingSecretRequestForm environmentId={props.environmentId} item={item} />;
 }
 
 function PendingSecretRequestForm(props: {
   readonly environmentId: EnvironmentId;
-  readonly card: SecretRequestCardModel;
+  readonly item: SecretRequestItem;
 }) {
-  const { card } = props;
+  const { item } = props;
   const inputId = useId();
   const errorId = useId();
   const privacyId = useId();
-  const answer = useAtomCommand(orchestrationEnvironment.answerSecretRequest, {
+  const answer = useAtomCommand(serverEnvironment.answerSecretRequest, {
     label: "answer secret request",
     // The failure cause holds the request; keep it out of the console.
     reportFailure: false,
@@ -53,7 +72,7 @@ function PendingSecretRequestForm(props: {
   const send = async (
     reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
   ) => {
-    const input = secretRequestAnswerInput(card, reply);
+    const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
     inFlight.current = true;
     setSubmitting(true);
@@ -63,7 +82,6 @@ function PendingSecretRequestForm(props: {
       setSubmitting(false);
     });
     if (result._tag === "Success") {
-      // The card switches to its answered row once the activity lands.
       setSecret("");
       return;
     }
@@ -77,16 +95,12 @@ function PendingSecretRequestForm(props: {
     void send({ type: "save", secret });
   };
 
-  // Same hierarchy as a chat card: what is asked, why, the field, then the
-  // promise about where the value goes.
   return (
     <form
-      data-secret-request-card="true"
+      data-v2-item-type={item.type}
       className="flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-card p-4"
       onSubmit={onSubmit}
       autoComplete="off"
-      // A click anywhere on the card targets its field, so a paste that
-      // follows lands here rather than with the composer.
       onPointerDown={(event) => {
         if (!(event.target instanceof HTMLElement)) return;
         if (event.target.closest("input, button, a")) return;
@@ -95,9 +109,9 @@ function PendingSecretRequestForm(props: {
     >
       <div className="flex min-w-0 flex-col gap-1">
         <label htmlFor={inputId} className="text-sm font-medium text-foreground">
-          {card.label}
+          {item.label}
         </label>
-        {card.reason.trim() ? <p className="text-sm text-muted-foreground">{card.reason}</p> : null}
+        {item.reason.trim() ? <p className="text-sm text-muted-foreground">{item.reason}</p> : null}
       </div>
       <div className="flex min-w-0 items-center gap-2">
         <div className="min-w-0 flex-1">
@@ -115,7 +129,7 @@ function PendingSecretRequestForm(props: {
             data-1p-ignore
             data-lpignore="true"
             data-bwignore
-            placeholder={card.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+            placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
             value={secret}
             disabled={submitting}
             aria-invalid={error !== null || undefined}
@@ -142,7 +156,7 @@ function PendingSecretRequestForm(props: {
         </p>
         <Button
           type="button"
-          size="compact"
+          size="xs"
           variant="ghost-muted"
           disabled={submitting}
           onClick={() => void send({ type: "decline" })}

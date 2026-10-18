@@ -53,10 +53,6 @@ export function subscribeConfirmDialog(listener: () => void): () => void {
   };
 }
 
-/**
- * Registers the renderer host that can present themed confirmations. The
- * returned cleanup function also cancels any request left without a host.
- */
 export function registerConfirmDialogHost(): () => void {
   registeredHostCount += 1;
   let registered = true;
@@ -74,8 +70,7 @@ export function registerConfirmDialogHost(): () => void {
 }
 
 /**
- * Requests a themed confirmation when a host is mounted. An undefined result
- * means no themed host is currently available.
+ * An undefined result means no themed host is currently available.
  */
 export function requestConfirmDialog(
   message: string,
@@ -101,13 +96,8 @@ export function requestConfirmDialog(
   return confirmation;
 }
 
-/**
- * Whether a confirmation is showing or about to show. Callers that must not
- * stack on top of a dialog (a full-screen MCP app, for example) check this
- * before taking the screen.
- */
 export function isConfirmDialogActive(): boolean {
-  return registeredHostCount > 0 && (activeConfirmation !== null || queuedConfirmations.length > 0);
+  return state.status !== "idle" || activeConfirmation !== null || queuedConfirmations.length > 0;
 }
 
 export function respondToConfirmDialog(confirmed: boolean): void {

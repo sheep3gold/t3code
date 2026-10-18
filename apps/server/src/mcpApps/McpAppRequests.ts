@@ -7,9 +7,12 @@ import {
   type McpAppToolInfo,
   type McpAppToolInfoInput,
   type McpAppUpdateModelContextInput,
+  type OrchestrationV2AppThread,
   type ThreadId,
+  type TurnItemId,
 } from "@t3tools/contracts";
-import { mcpAppFromActivity, mcpAppToolCallableByApp } from "@t3tools/shared/mcpApp";
+import { mcpAppToolCallableByApp, type McpAppReference } from "@t3tools/shared/mcpApp";
+import { mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -17,11 +20,16 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
-import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
-import { McpAppModelContext, MCP_APP_MODEL_CONTEXT_MAX_BYTES } from "./McpAppModelContext.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as McpAppModelContext from "./McpAppModelContext.ts";
 
+/**
+ * A stopped session is reported, never started: an app view must not spend a
+ * provider turn.
+ */
 export class McpAppRequests extends Context.Service<
   McpAppRequests,
   {
@@ -43,108 +51,142 @@ export class McpAppRequests extends Context.Service<
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const utf8 = new TextEncoder();
 
+const readOnlyHint = (tool: ProviderAdapter.ProviderAdapterV2McpTool) =>
+  Predicate.isObject(tool.annotations) && tool.annotations.readOnlyHint === true;
+
+const toolTitle = (tool: ProviderAdapter.ProviderAdapterV2McpTool) =>
+  Predicate.isObject(tool.annotations) && typeof tool.annotations.title === "string"
+    ? tool.annotations.title
+    : undefined;
+
 const make = Effect.gen(function* () {
-  const snapshots = yield* ProjectionSnapshotQuery;
-  const directory = yield* ProviderSessionDirectory;
-  const registry = yield* ProviderAdapterRegistry;
-  const modelContext = yield* McpAppModelContext;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+  const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const modelContext = yield* McpAppModelContext.McpAppModelContext;
+
   const fail = (threadId: ThreadId, reason: McpAppRequestError["reason"], cause?: unknown) =>
     new McpAppRequestError({ threadId, reason, ...(cause === undefined ? {} : { cause }) });
 
   const resolveApp = Effect.fn("McpAppRequests.resolveApp")(function* (input: {
     readonly threadId: ThreadId;
-    readonly toolCallId: string;
+    readonly itemId: TurnItemId;
   }) {
-    const activity = Option.getOrUndefined(
-      yield* snapshots
-        .getMcpAppActivity(input)
-        .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause))),
-    );
-    const app = activity === undefined ? undefined : mcpAppFromActivity(activity);
-    if (!app) return yield* fail(input.threadId, "not-an-app");
-    return app;
+    const item = yield* orchestrator
+      .getTurnItem({ threadId: input.threadId, itemId: input.itemId })
+      .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
+    const app: McpAppReference | undefined =
+      item?.type === "dynamic_tool" ? mcpAppFromToolItem(item) : undefined;
+    if (item === null || app === undefined || item.providerThreadId === null) {
+      return yield* fail(input.threadId, "not-an-app");
+    }
+    return { app, providerThreadId: item.providerThreadId };
   });
 
   const resolve = Effect.fn("McpAppRequests.resolve")(function* (input: {
     readonly threadId: ThreadId;
-    readonly toolCallId: string;
+    readonly itemId: TurnItemId;
   }) {
-    const app = yield* resolveApp(input);
-    const binding = Option.getOrUndefined(
-      yield* directory
-        .getBinding(input.threadId)
+    const { app, providerThreadId } = yield* resolveApp(input);
+    const projection = yield* threadManagement
+      .getThreadRecords(input.threadId, ["providerThreads"])
+      .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
+    const providerThread = projection.providerThreads.find(
+      (candidate) => candidate.id === providerThreadId,
+    );
+    if (providerThread?.providerSessionId == null) {
+      return yield* fail(input.threadId, "session-stopped");
+    }
+    const runtime = Option.getOrUndefined(
+      yield* providerSessions
+        .get(providerThread.providerSessionId)
         .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause))),
     );
-    if (binding?.providerInstanceId === undefined) {
-      return yield* fail(input.threadId, "session-stopped");
-    }
-    const adapter = yield* registry
-      .getByInstance(binding.providerInstanceId)
-      .pipe(Effect.mapError((cause) => fail(input.threadId, "provider-unsupported", cause)));
-    if (adapter.mcpApps === undefined) {
-      return yield* fail(input.threadId, "provider-unsupported");
-    }
-    if (!(yield* adapter.hasSession(input.threadId))) {
-      return yield* fail(input.threadId, "session-stopped");
-    }
-    return { app, operations: adapter.mcpApps };
+    if (runtime === undefined) return yield* fail(input.threadId, "session-stopped");
+    const mcpApps: ProviderAdapter.ProviderAdapterV2McpApps | undefined = runtime.mcpApps;
+    if (mcpApps === undefined) return yield* fail(input.threadId, "provider-unsupported");
+    return { app, providerThread, mcpApps };
+  });
+
+  const findTool = Effect.fn("McpAppRequests.findTool")(function* (
+    threadId: ThreadId,
+    resolved: Effect.Success<ReturnType<typeof resolve>>,
+    name: string,
+  ) {
+    const tools = yield* resolved.mcpApps
+      .listTools({ providerThread: resolved.providerThread, server: resolved.app.server })
+      .pipe(Effect.mapError((cause) => fail(threadId, "request-failed", cause)));
+    return tools.find((tool) => tool.name === name);
   });
 
   const toolInfo = Effect.fn("McpAppRequests.toolInfo")(function* (input: McpAppToolInfoInput) {
-    const { app, operations } = yield* resolve(input);
-    const tools = yield* operations
-      .listTools(input.threadId, app.server)
-      .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
-    const tool = tools.find((candidate) => candidate.name === input.name);
-    const title = tool && typeof tool.title === "string" ? tool.title : undefined;
-    const annotations = tool && Predicate.isObject(tool.annotations) ? tool.annotations : undefined;
+    const resolved = yield* resolve(input);
+    const tool = yield* findTool(input.threadId, resolved, input.name);
+    const title = tool === undefined ? undefined : toolTitle(tool);
     return {
       callable: tool !== undefined && mcpAppToolCallableByApp(tool._meta),
-      readOnly: annotations?.readOnlyHint === true,
+      readOnly: tool !== undefined && readOnlyHint(tool),
       ...(title === undefined ? {} : { title }),
       ...(tool === undefined ? {} : { tool }),
     } satisfies McpAppToolInfo;
   });
 
   const callTool = Effect.fn("McpAppRequests.callTool")(function* (input: McpAppCallToolInput) {
-    const { app, operations } = yield* resolve(input);
-    const tools = yield* operations
-      .listTools(input.threadId, app.server)
-      .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
-    const tool = tools.find((candidate) => candidate.name === input.name);
-    if (!tool || !mcpAppToolCallableByApp(tool._meta)) {
+    const resolved = yield* resolve(input);
+    // The spec forbids apps calling tools hidden from them; checked here too,
+    // since a client's own check is only a courtesy to its user.
+    const tool = yield* findTool(input.threadId, resolved, input.name);
+    if (tool === undefined || !mcpAppToolCallableByApp(tool._meta)) {
       return yield* fail(input.threadId, "tool-not-callable");
     }
-    const response = yield* operations
-      .callTool(input.threadId, app.server, input.name, input.arguments)
+    return yield* resolved.mcpApps
+      .callTool({
+        providerThread: resolved.providerThread,
+        server: resolved.app.server,
+        tool: input.name,
+        arguments: input.arguments,
+      })
       .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
-    return {
-      content: [...response.content],
-      ...(response.structuredContent === undefined
-        ? {}
-        : { structuredContent: response.structuredContent }),
-      ...(response.isError === true ? { isError: true } : {}),
-      ...(response._meta === undefined ? {} : { _meta: response._meta }),
-    } satisfies McpAppCallToolResult;
   });
 
   const readResource = Effect.fn("McpAppRequests.readResource")(function* (
     input: McpAppReadResourceInput,
   ) {
-    const { app, operations } = yield* resolve(input);
-    const response = yield* operations
-      .readResource(input.threadId, app.server, input.uri)
+    const resolved = yield* resolve(input);
+    return yield* resolved.mcpApps
+      .readResource({
+        providerThread: resolved.providerThread,
+        server: resolved.app.server,
+        uri: input.uri,
+      })
       .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
-    return { contents: [...response.contents] } satisfies McpAppReadResourceResult;
+  });
+
+  const descendsFrom = Effect.fn("McpAppRequests.descendsFrom")(function* (
+    threadId: ThreadId,
+    ancestorId: ThreadId,
+  ) {
+    const seen = new Set<ThreadId>();
+    let current: ThreadId | null = threadId;
+    while (current !== null && !seen.has(current)) {
+      if (current === ancestorId) return true;
+      seen.add(current);
+      const records: { readonly thread: OrchestrationV2AppThread } = yield* threadManagement
+        .getThreadRecords(current, [])
+        .pipe(Effect.mapError((cause) => fail(threadId, "request-failed", cause)));
+      const { lineage } = records.thread;
+      current = lineage.relationshipToParent === "fork" ? lineage.parentThreadId : null;
+    }
+    return false;
   });
 
   const updateModelContext = Effect.fn("McpAppRequests.updateModelContext")(function* (
     input: McpAppUpdateModelContextInput,
   ) {
-    const app = yield* resolveApp(input);
-    // Context belongs to the conversation on screen; this fork has no
-    // forked-thread lineage, so only the app's own thread qualifies.
-    if (input.conversationThreadId !== input.threadId) {
+    const { app } = yield* resolveApp(input);
+    // Context belongs to the conversation on screen, which only shows this app
+    // when it is the app's own thread or one forked from it.
+    if (!(yield* descendsFrom(input.conversationThreadId, input.threadId))) {
       return yield* fail(input.threadId, "not-an-app");
     }
     const texts: Array<string> = [];
@@ -157,9 +199,8 @@ const make = Effect.gen(function* () {
     if (input.structuredContent !== undefined) {
       texts.push(encodeJson(input.structuredContent));
     }
-    // Kept as sent; blank text clears the app's context in the store.
     const text = texts.join("\n");
-    if (utf8.encode(text).byteLength > MCP_APP_MODEL_CONTEXT_MAX_BYTES) {
+    if (utf8.encode(text).byteLength > McpAppModelContext.MCP_APP_MODEL_CONTEXT_MAX_BYTES) {
       return yield* fail(
         input.threadId,
         "request-failed",
@@ -169,7 +210,7 @@ const make = Effect.gen(function* () {
     yield* modelContext
       .set({
         threadId: input.conversationThreadId,
-        toolCallId: input.toolCallId,
+        itemId: input.itemId,
         server: app.server,
         tool: app.tool,
         text,
@@ -180,4 +221,4 @@ const make = Effect.gen(function* () {
   return McpAppRequests.of({ callTool, toolInfo, readResource, updateModelContext });
 });
 
-export const McpAppRequestsLayerLive = Layer.effect(McpAppRequests, make);
+export const layer = Layer.effect(McpAppRequests, make);

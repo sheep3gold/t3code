@@ -10,8 +10,6 @@ const Sheet = SheetPrimitive.Root;
 
 const SheetPortal = SheetPrimitive.Portal;
 
-// Sheets are docked panels, not dialogs: their layer (--z-sheet) sits under dialogs that open
-// from inside them and under anything the app floats above panels.
 function SheetBackdrop({ className, ...props }: SheetPrimitive.Backdrop.Props) {
   return (
     <SheetPrimitive.Backdrop
@@ -138,7 +136,7 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
 function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props) {
   return (
     <SheetPrimitive.Title
-      className={cn("font-heading font-semibold text-xl leading-none", className)}
+      className={cn("font-semibold text-xl leading-none", className)}
       data-slot="sheet-title"
       {...props}
     />

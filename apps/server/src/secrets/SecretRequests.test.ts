@@ -1,70 +1,59 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ApprovalRequestId, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  ProjectId,
+  type OrchestrationV2ServerCommand,
+  ThreadId,
+  TurnItemId,
+} from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
+import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 
-import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerConfig from "../config.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "./SecretRequests.ts";
 
-const threadId = ThreadId.make("thread-1");
-const requestId = ApprovalRequestId.make("secret-request:thread-1:req-1");
+const threadId = ThreadId.make("thread-orchestrator");
+const turnItemId = TurnItemId.make("turn-item:secret-request:1");
 const projectId = ProjectId.make("project-1");
 
-const requestedActivity = (rid: string = requestId) => ({
-  kind: "user-input.requested",
-  turnId: "turn-1",
-  payload: {
-    requestId: rid,
-    responseMode: "message",
-    secretRequest: true,
-    label: "GitHub token",
-    reason: "Used as GH_TOKEN.",
-    questions: [],
-  },
-});
-
-/** Runs `body` against the service with an in-memory store and a thread holding one request. */
 const withService = <A, E>(
   body: (input: {
     readonly service: SecretRequests.SecretRequests["Service"];
     readonly stored: Map<string, Uint8Array>;
-    readonly dispatched: Array<{ readonly type: string; readonly activity?: unknown }>;
+    readonly dispatched: Array<OrchestrationV2ServerCommand>;
   }) => Effect.Effect<A, E>,
   options: {
-    /** Activity list the thread reports; defaults to one pending secret request. */
-    readonly activities?: ReadonlyArray<unknown>;
-    readonly turnState?: string;
+    readonly threadId?: ThreadId;
+    readonly runStatus?: string;
     readonly removeFails?: boolean;
-    /** How many record dispatches fail before one succeeds. */
+    readonly closedFirst?: boolean;
     readonly failedRecords?: number;
   } = {},
 ) =>
   Effect.gen(function* () {
     const stored = new Map<string, Uint8Array>();
-    const dispatched: Array<{ readonly type: string; readonly activity?: unknown }> = [];
+    const dispatched: Array<OrchestrationV2ServerCommand> = [];
+    let secretStatus = "pending";
     let failedRecords = options.failedRecords ?? 0;
-    const dependencies = Layer.mergeAll(
+    const requestThreadId = options.threadId ?? threadId;
+    const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       NodeServices.layer,
       Layer.succeed(
-        ServerConfig.ServerConfig,
-        ServerConfig.ServerConfig.of({ secretsDir: "/tmp/secret-requests-test" } as never),
-      ),
-      Layer.succeed(
         ServerSecretStore.ServerSecretStore,
         ServerSecretStore.ServerSecretStore.of({
-          // Yields like a real file read, so concurrent callers can interleave.
-          get: (name: string) =>
-            Effect.yieldNow.pipe(Effect.as(Option.fromNullishOr(stored.get(name)))),
-          set: (name: string, value: Uint8Array) => Effect.sync(() => void stored.set(name, value)),
-          create: (name: string, value: Uint8Array) =>
+          get: (name) => Effect.yieldNow.pipe(Effect.as(Option.fromNullishOr(stored.get(name)))),
+          set: (name, value) => Effect.sync(() => void stored.set(name, value)),
+          create: (name, value) =>
             stored.has(name)
               ? Effect.fail(
                   new ServerSecretStore.SecretStorePersistError({
@@ -79,7 +68,7 @@ const withService = <A, E>(
                   } as never),
                 )
               : Effect.sync(() => void stored.set(name, value)),
-          getOrCreateRandom: (name: string, bytes: number) =>
+          getOrCreateRandom: (name, bytes) =>
             Effect.sync(() => {
               const existing = stored.get(name);
               if (existing) return existing;
@@ -87,7 +76,7 @@ const withService = <A, E>(
               stored.set(name, value);
               return value;
             }),
-          remove: (name: string) =>
+          remove: (name) =>
             options.removeFails
               ? Effect.fail(
                   new ServerSecretStore.SecretStorePersistError({
@@ -96,44 +85,49 @@ const withService = <A, E>(
                   }),
                 )
               : Effect.sync(() => void stored.delete(name)),
-        } as never),
+        }),
       ),
-      Layer.succeed(
-        ProjectionSnapshotQuery.ProjectionSnapshotQuery,
-        ProjectionSnapshotQuery.ProjectionSnapshotQuery.of({
-          getThreadDetailById: () =>
-            Effect.succeed(
-              Option.some({
-                projectId,
-                latestTurn: { state: options.turnState ?? "running" },
-                activities: options.activities ?? [requestedActivity()],
-              }),
-            ),
-        } as never),
-      ),
-      Layer.succeed(
-        OrchestrationEngine.OrchestrationEngineService,
-        OrchestrationEngine.OrchestrationEngineService.of({
-          dispatch: (command: { readonly type: string }) => {
-            if (command.type === "thread.activity.append" && failedRecords > 0) {
-              failedRecords -= 1;
-              return Effect.fail(new Error("engine unavailable") as never);
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadRecords: () =>
+          Effect.succeed({
+            thread: { projectId },
+            runs: [{ id: "run-1", status: options.runStatus ?? "running" }],
+            turnItems: [
+              {
+                id: turnItemId,
+                threadId: requestThreadId,
+                runId: "run-1",
+                nodeId: "node-root",
+                type: "secret_request",
+                label: "GitHub token",
+                reason: "Used as GH_TOKEN.",
+                secretStatus,
+              },
+            ],
+          } as never),
+        dispatch: (command) => {
+          if (command.type === "secret_request.record" && failedRecords > 0) {
+            failedRecords -= 1;
+            return Effect.fail(new Error("orchestrator unavailable") as never);
+          }
+          return Effect.sync(() => {
+            dispatched.push(command);
+            if (options.closedFirst && command.type === "secret_request.record") {
+              secretStatus = "cancelled";
+            } else if (command.type === "secret_request.record" && secretStatus === "pending") {
+              secretStatus = command.secretStatus;
             }
-            return Effect.sync(() => {
-              dispatched.push(command as never);
-              return {} as never;
-            });
-          },
-        } as never),
-      ),
+            return {} as never;
+          });
+        },
+      }),
     );
     return yield* Effect.gen(function* () {
       const service = yield* SecretRequests.SecretRequests;
       return yield* body({ service, stored, dispatched });
-    }).pipe(Effect.provide(SecretRequests.layer.pipe(Layer.provide(dependencies))));
+    }).pipe(Effect.provide(SecretRequests.layer.pipe(Layer.provide(layerDependencies))));
   });
 
-/** The secret values in the store, leaving out the server's own salt. */
 const valuesOf = (stored: Map<string, Uint8Array>) =>
   Array.from(stored.entries())
     .filter(([name]) => name !== "secret-request-salt")
@@ -144,25 +138,21 @@ it.effect("a saved answer becomes a one-use ref, and the thread only learns it w
     Effect.gen(function* () {
       yield* service.answer({
         threadId,
-        requestId,
+        turnItemId,
         answer: { type: "save", secret: "ghp_secret" },
       });
       assert.equal(dispatched.length, 1);
-      assert.equal(dispatched[0]!.type, "thread.activity.append");
-      const activity = dispatched[0]!.activity as { payload: Record<string, unknown> };
-      assert.equal(activity.payload["secretStatus"], "saved");
-      // The value never crosses the wire into the thread record: no payload
-      // field holds the typed value.
-      for (const value of Object.values(activity.payload)) {
-        assert.notStrictEqual(value, "ghp_secret");
-      }
+      assert.include(dispatched[0] as object, {
+        type: "secret_request.record",
+        secretStatus: "saved",
+      });
+      assert.notInclude(Object.values(dispatched[0] as object).map(String), "ghp_secret");
 
-      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, requestId }));
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
       assert.equal(yield* service.consume({ ref, projectId }), "ghp_secret");
-      // Used once: the value is gone from the store and the ref fails.
       assert.isFalse(valuesOf(stored).some((value) => value.includes("ghp_secret")));
       const again = yield* service.consume({ ref, projectId }).pipe(Effect.flip);
-      assert.equal(again.reason, "ref_unavailable");
+      assert.include(again.message, "already used");
     }),
   ),
 );
@@ -172,10 +162,10 @@ it.effect("two concurrent uses of one ref hand the value out once", () =>
     Effect.gen(function* () {
       yield* service.answer({
         threadId,
-        requestId,
+        turnItemId,
         answer: { type: "save", secret: "ghp_secret" },
       });
-      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, requestId }));
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
       const results = yield* Effect.all(
         [service.consume({ ref, projectId }), service.consume({ ref, projectId })].map(
           Effect.result,
@@ -187,34 +177,17 @@ it.effect("two concurrent uses of one ref hand the value out once", () =>
   ),
 );
 
-it.effect("a second answer after the card resolved is refused", () => {
-  const resolved = {
-    kind: "user-input.resolved",
-    turnId: "turn-1",
-    payload: { requestId, responseMode: "message", secretStatus: "declined" },
-  };
-  return withService(
-    ({ service }) =>
-      Effect.gen(function* () {
-        const error = yield* service
-          .answer({ threadId, requestId, answer: { type: "decline" } })
-          .pipe(Effect.flip);
-        assert.equal(error.reason, "already_answered");
-      }),
-    { activities: [requestedActivity(), resolved] },
-  );
-});
-
-it.effect("an answer on a thread whose turn ended is refused as agent_stopped", () =>
+it.effect("a save that loses to the card closing deletes the value and says so", () =>
   withService(
-    ({ service }) =>
+    ({ service, stored }) =>
       Effect.gen(function* () {
         const error = yield* service
-          .answer({ threadId, requestId, answer: { type: "save", secret: "ghp_secret" } })
+          .answer({ threadId, turnItemId, answer: { type: "save", secret: "ghp_secret" } })
           .pipe(Effect.flip);
         assert.equal(error.reason, "agent_stopped");
+        assert.isFalse(valuesOf(stored).some((value) => value.includes("ghp_secret")));
       }),
-    { turnState: "completed" },
+    { closedFirst: true },
   ),
 );
 
@@ -223,92 +196,208 @@ it.effect("a save whose record failed can be saved again", () =>
     ({ service }) =>
       Effect.gen(function* () {
         const failed = yield* service
-          .answer({ threadId, requestId, answer: { type: "save", secret: "ghp_secret" } })
+          .answer({ threadId, turnItemId, answer: { type: "save", secret: "ghp_secret" } })
           .pipe(Effect.flip);
         assert.equal(failed.reason, "record_failed");
         yield* service.answer({
           threadId,
-          requestId,
+          turnItemId,
           answer: { type: "save", secret: "ghp_secret" },
         });
-        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, requestId }));
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
         assert.equal(yield* service.consume({ ref, projectId }), "ghp_secret");
       }),
     { failedRecords: 1 },
   ),
 );
 
-it.effect("a save whose record failed has its value cleaned up", () =>
+it.effect("a save whose record and cleanup both failed is finished by saving again", () =>
   withService(
-    ({ service, stored }) =>
+    ({ service }) =>
       Effect.gen(function* () {
         yield* service
-          .answer({ threadId, requestId, answer: { type: "save", secret: "ghp_secret" } })
+          .answer({ threadId, turnItemId, answer: { type: "save", secret: "ghp_secret" } })
           .pipe(Effect.flip);
-        assert.isFalse(valuesOf(stored).some((value) => value.includes("ghp_secret")));
-      }),
-    { failedRecords: 1 },
-  ),
-);
-
-it.effect("a declined answer records the decline and stores nothing", () =>
-  withService(({ service, stored, dispatched }) =>
-    Effect.gen(function* () {
-      yield* service.answer({ threadId, requestId, answer: { type: "decline" } });
-      assert.equal(dispatched.length, 1);
-      const activity = dispatched[0]!.activity as { payload: Record<string, unknown> };
-      assert.equal(activity.payload["secretStatus"], "declined");
-      assert.equal(stored.has("secret-request-salt"), true);
-      assert.equal(
-        Array.from(stored.keys()).filter((name) => name !== "secret-request-salt").length,
-        0,
-      );
-    }),
-  ),
-);
-
-it.effect("an unknown request id is not_found", () =>
-  withService(({ service }) =>
-    Effect.gen(function* () {
-      const error = yield* service
-        .answer({
+        yield* service.answer({
           threadId,
-          requestId: ApprovalRequestId.make("secret-request:thread-1:missing"),
-          answer: { type: "decline" },
-        })
-        .pipe(Effect.flip);
-      assert.equal(error.reason, "not_found");
-    }),
+          turnItemId,
+          answer: { type: "save", secret: "ghp_secret" },
+        });
+        assert.isTrue(Option.isSome(yield* service.savedRef({ threadId, turnItemId })));
+      }),
+    { failedRecords: 1, removeFails: true },
   ),
 );
 
-it.effect("a malformed ref is refused before touching the store", () =>
-  withService(({ service }) =>
-    Effect.gen(function* () {
-      const error = yield* service
-        .consume({
-          ref: "secret-ref:not-hex" as never,
-          projectId,
-        })
-        .pipe(Effect.flip);
-      assert.equal(error.reason, "invalid_ref");
-    }),
-  ),
-);
-
-it.effect("a ref entered for another project is refused", () =>
+it.effect("a ref only works in the project it was entered for", () =>
   withService(({ service }) =>
     Effect.gen(function* () {
       yield* service.answer({
         threadId,
-        requestId,
+        turnItemId,
         answer: { type: "save", secret: "ghp_secret" },
       });
-      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, requestId }));
-      const error = yield* service
-        .consume({ ref, projectId: ProjectId.make("project-2") })
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+      const elsewhere = yield* service
+        .consume({ ref, projectId: ProjectId.make("project-other") })
         .pipe(Effect.flip);
-      assert.equal(error.reason, "ref_unavailable");
+      assert.include(elsewhere.message, "does not exist");
+      assert.equal(yield* service.consume({ ref, projectId }), "ghp_secret");
     }),
+  ),
+);
+
+it.effect("declining stores nothing, and a request is answered once", () =>
+  withService(({ service, stored, dispatched }) =>
+    Effect.gen(function* () {
+      yield* service.answer({ threadId, turnItemId, answer: { type: "decline" } });
+      assert.deepEqual(valuesOf(stored), []);
+      assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+      const late = yield* service
+        .answer({ threadId, turnItemId, answer: { type: "save", secret: "ghp_secret" } })
+        .pipe(Effect.flip);
+      assert.include(late.message, "already answered");
+      assert.equal(dispatched.length, 1);
+      assert.deepEqual(valuesOf(stored), []);
+    }),
+  ),
+);
+
+it.effect("traces and counts a saved answer without ever recording the value", () =>
+  Effect.gen(function* () {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const counted = Metric.snapshot.pipe(
+      Effect.map((snapshots) => {
+        const found = snapshots.find(
+          (snapshot) =>
+            snapshot.id === "t3_secret_refs_consumed_total" &&
+            snapshot.attributes?.result === "used",
+        );
+        return found?.type === "Counter" ? Number(found.state.count) : 0;
+      }),
+    );
+    const before = yield* counted;
+    yield* withService(({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save", secret: "ghp_secret" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        yield* service.consume({ ref, projectId });
+      }),
+    ).pipe(Effect.withTracer(tracer));
+    assert.equal((yield* counted) - before, 1);
+    const recorded = spans.flatMap((span) => [
+      span.name,
+      ...Array.from(span.attributes.values(), String),
+    ]);
+    assert.include(recorded, "SecretRequests.answer");
+    assert.include(recorded, "SecretRequests.consume");
+    assert.isFalse(recorded.some((value) => value.includes("ghp_secret")));
+  }),
+);
+
+it.effect("works in threads with long ids, such as a delegated subagent's", () => {
+  const delegatedThreadId = ThreadId.make(
+    `thread:delegated-task:command%3Amcp%3A${"a".repeat(36)}%3Adelegate-task%3Arelease-notes-v0.2.0-${"b".repeat(40)}`,
+  );
+  return withService(
+    ({ service, stored }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId: delegatedThreadId,
+          turnItemId,
+          answer: { type: "save", secret: "ghp_secret" },
+        });
+        assert.isTrue(Array.from(stored.keys()).every((name) => name.length < 100));
+        const ref = Option.getOrThrow(
+          yield* service.savedRef({ threadId: delegatedThreadId, turnItemId }),
+        );
+        assert.equal(yield* service.consume({ ref, projectId }), "ghp_secret");
+      }),
+    { threadId: delegatedThreadId },
+  );
+});
+
+it.effect("refuses an answer once the agent that asked has stopped", () =>
+  withService(
+    ({ service, stored, dispatched }) =>
+      Effect.gen(function* () {
+        const late = yield* service
+          .answer({ threadId, turnItemId, answer: { type: "save", secret: "ghp_secret" } })
+          .pipe(Effect.flip);
+        assert.include(late.message, "has stopped");
+        assert.deepEqual(valuesOf(stored), []);
+        assert.equal(dispatched.length, 0);
+      }),
+    { runStatus: "completed" },
+  ),
+);
+
+it.effect("drops values nobody used once they expire, and keeps the rest", () =>
+  Effect.gen(function* () {
+    const store = yield* ServerSecretStore.ServerSecretStore;
+    const encode = (savedAt: number) =>
+      new TextEncoder().encode(
+        `{"projectId":"project-1","value":"ghp_secret","savedAt":${savedAt}}`,
+      );
+    yield* TestClock.adjust("2 days");
+    const now = yield* Clock.currentTimeMillis;
+    const stale = `secret-request-${"a".repeat(32)}`;
+    const fresh = `secret-request-${"b".repeat(32)}`;
+    yield* store.set(stale, encode(now - 25 * 60 * 60 * 1000));
+    yield* store.set(fresh, encode(now));
+    yield* store.set("unrelated", new Uint8Array([1]));
+
+    yield* Effect.gen(function* () {
+      yield* SecretRequests.SecretRequests;
+    }).pipe(
+      Effect.provide(
+        SecretRequests.layer.pipe(
+          Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
+        ),
+      ),
+      Effect.scoped,
+    );
+
+    assert.isTrue(Option.isNone(yield* store.get(stale)));
+    assert.isTrue(Option.isSome(yield* store.get(fresh)));
+    assert.isTrue(Option.isSome(yield* store.get("unrelated")));
+    assert.isTrue(Option.isSome(yield* store.get("secret-request-salt")));
+  }).pipe(
+    Effect.provide(
+      ServerSecretStore.layer.pipe(
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-secret-requests-" }),
+        ),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+it.effect("a used value that cannot be deleted is not handed out", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save", secret: "ghp_secret" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const failed = yield* service.consume({ ref, projectId }).pipe(Effect.flip);
+        assert.include(failed.message, "Could not use");
+      }),
+    { removeFails: true },
   ),
 );

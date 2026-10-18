@@ -1,14 +1,11 @@
-import * as Mime from "effect/unstable/http/Mime";
-import * as DateTime from "effect/DateTime";
+import * as Mime from "effect/http/Mime";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
-  isProviderAvailable,
-  UsageReadError,
-  type UsageInstancesSummary,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
+import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -27,12 +24,12 @@ import {
   HttpServerResponse,
   HttpServerRequest,
   HttpServerRespondable,
-} from "effect/unstable/http";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import { OtlpTracer, OtlpSerialization } from "effect/unstable/observability";
+} from "effect/http";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
-import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
+import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
@@ -50,39 +47,22 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
-import * as ServerSettings from "./serverSettings.ts";
-import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
-import * as UsageService from "./usage/UsageService.ts";
-import { readInstanceUsageLimits } from "./usage/usageQuotaProbe.ts";
-import { dayInZone, foldDailyUsage, isDay, shiftDay } from "./usage/usageHistory.ts";
-import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+import { WEBHOOK_ROUTE_PREFIX } from "./scheduledTasks/ScheduledTaskService.ts";
+import {
+  browserApiCorsAllowedHeaders,
+  browserApiCorsAllowedMethods,
+  DESKTOP_RENDERER_ORIGINS,
+} from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
-const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
-const PROVIDER_MODELS_PATH = "/api/provider-models";
-/** Trailing window the usage summary attributes to each configured instance. */
-const PROVIDER_USAGE_SUMMARY_DAYS = 7;
-/**
- * The usage history rows bucket into this reporting zone, so a turn lands on
- * the day the page's readers experienced it. Fixed rather than client-supplied:
- * every caller of this endpoint shares one chart, and mixing zones would make
- * its days incomparable.
- */
-const PROVIDER_USAGE_HISTORY_TIME_ZONE = "Asia/Shanghai";
-/**
- * Longest history window offered. Must stay at or below the scan cache
- * retention (`CACHE_RETENTION_DAYS` in UsageService): beyond it every request
- * re-parses the whole window's transcripts cold.
- */
-const PROVIDER_USAGE_HISTORY_MAX_DAYS = 90;
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
-const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
-// HTML previews are agent output, not the app. The sandbox gives the document an
-// opaque origin: scripts run, but same-origin cookies, storage, and API calls are
-// out of reach. Relative sibling assets still load through their signed URLs.
-const HTML_CONTENT_SECURITY_POLICY = "sandbox allow-scripts allow-forms allow-popups allow-modals";
+// The sandbox gives the document an opaque origin: scripts run, but same-origin
+// cookies, storage, and API calls are out of reach. No modals: agent HTML can
+// open without a click (inline renders, and mobile loads it as the top document),
+// and must not raise blocking dialogs.
+const HTML_CONTENT_SECURITY_POLICY =
+  "sandbox allow-scripts allow-forms allow-popups allow-downloads";
 
 // Types a browser may render as a document if a proxy strips the disposition
 // header. Downloads of these fall back to octet-stream.
@@ -95,7 +75,6 @@ const isSafeInlineMediaMimeType = (mimeType: string): boolean =>
 const isSafeInlineDocumentMimeType = (mimeType: string): boolean =>
   mimeType.toLowerCase() === "application/pdf" || mimeType.toLowerCase() === "text/html";
 
-/** RFC 6266 disposition with an ASCII fallback name plus a UTF-8 `filename*`. */
 export function downloadContentDisposition(fileName?: string): string {
   if (fileName === undefined) {
     return "attachment";
@@ -159,7 +138,6 @@ export function assetResponseHeaders(
   };
 }
 
-/** A single byte range for native media readers; unsupported range syntax uses the full file. */
 function assetByteRange(header: string, size: bigint) {
   const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
   if (!match || (!match[1] && !match[2])) return null;
@@ -189,19 +167,37 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     readonly fileName?: string;
     readonly mimeType?: string;
     readonly file?: OpenMediaFile;
+    readonly renderIntent?: "mcp-app";
   },
   rangeHeader?: string,
   ifRangeHeader?: string,
   method: "GET" | "HEAD" = "GET",
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
+  if (
+    asset.renderIntent === "mcp-app" &&
+    !asset.download &&
+    headers["Content-Type"] === "text/html; charset=utf-8"
+  ) {
+    const bytes = yield* readMcpAppHtml(asset.path);
+    if (bytes === null) {
+      return HttpServerResponse.text("MCP app is too large to preview.", { status: 413 });
+    }
+    const body = new TextEncoder().encode(
+      injectMcpAppCookieBootstrap(injectMcpAppThemeBootstrap(new TextDecoder().decode(bytes))),
+    );
+    headers["Content-Length"] = String(body.byteLength);
+    return method === "HEAD"
+      ? HttpServerResponse.empty({ status: 200, headers })
+      : HttpServerResponse.uint8Array(body, { headers });
+  }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
   const isMedia = /^(?:audio|video)\//i.test(headers["Content-Type"] ?? "");
   if (isMedia) {
-    // Host media can change in place. Do not invite conditional range requests
-    // with validators that cannot establish byte-for-byte identity. Attachment media
-    // carries no `file`, and must not outlive the signed URL that granted it either.
+    // Do not invite conditional range requests with validators that cannot establish
+    // byte-for-byte identity. Attachment media carries no `file`, and must not
+    // outlive the signed URL that granted it either.
     headers["Cache-Control"] = "private, no-store";
   }
   let status = 200;
@@ -254,21 +250,16 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   return yield* HttpServerResponse.file(asset.path, { status, offset, bytesToRead, headers });
 });
 
-export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compression(), {
+export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compression(), {
   global: true,
 });
 
-export const browserApiCorsLayer = Layer.unwrap(
+export const layerBrowserApiCors = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
     // Dev uses credentialed requests from Vite or the Electron custom origin, so both must be
     // explicit. Packaged desktop omits credentials and uses Effect's default wildcard origin.
-    //
-    // T3CODE_DEV_ALLOWED_ORIGINS covers dev servers reached from a second
-    // origin — a tailnet name, a LAN IP, a phone. Browser dev normally proxies
-    // through Vite and is same-origin (no preflight at all), so this is a
-    // safety net for the desktop renderer and any direct-to-backend caller.
     return HttpRouter.cors({
       ...(devOrigin
         ? {
@@ -321,7 +312,7 @@ const authenticateRawRouteWithScope = (
     }
   });
 
-export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
+export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "metadata",
   Effect.fnUntraced(function* (handlers) {
@@ -338,10 +329,11 @@ export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
 
 class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{
   readonly cause: unknown;
-  readonly bodyJson: OtlpTracer.TraceData;
 }> {}
 
-export const otlpTracesProxyRouteLayer = HttpRouter.add(
+// Renderers export up to once a second while they have spans buffered, so
+// tracing this proxy would add more server spans than it forwards.
+export const layerOtlpTracesProxyRoute = HttpRouter.add(
   "POST",
   OTLP_TRACES_PROXY_PATH,
   Effect.gen(function* () {
@@ -357,15 +349,10 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
 
     yield* Effect.try({
       try: () => decodeOtlpTraceRecords(bodyJson),
-      catch: (cause) => new DecodeOtlpTraceRecordsError({ cause, bodyJson }),
+      catch: (cause) => new DecodeOtlpTraceRecordsError({ cause }),
     }).pipe(
       Effect.flatMap((records) => browserTraceCollector.record(records)),
-      Effect.catch((cause) =>
-        Effect.logWarning("Failed to decode browser OTLP traces", {
-          cause,
-          bodyJson,
-        }),
-      ),
+      Effect.catch((cause) => Effect.logWarning("Failed to decode browser OTLP traces", { cause })),
     );
 
     if (otlpTracesUrl === undefined) {
@@ -396,301 +383,25 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
       EnvironmentInternalError: HttpServerRespondable.toResponse,
       EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
     }),
+    Effect.withTracerEnabled(false),
   ),
 );
 
-export const providerUsageSummaryRouteLayer = HttpRouter.add(
-  "GET",
-  PROVIDER_USAGE_SUMMARY_PATH,
-  Effect.gen(function* () {
-    // The payload is the sanitized summary other zxytech hubs proxy
-    // server-to-server behind an nginx IP allowlist (101 web-hub), so a
-    // request without credentials is allowed through; when credentials are
-    // present they must carry the orchestration read scope. Invalid
-    // credentials still fail rather than silently downgrading to anonymous.
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
-      Effect.catchIf(
-        (error): error is EnvironmentAuth.ServerAuthMissingCredentialError =>
-          EnvironmentAuth.isServerAuthCredentialError(error) &&
-          EnvironmentAuth.serverAuthCredentialReason(error) === "missing_credential",
-        () => Effect.succeed(null),
-      ),
-      Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-        failEnvironmentAuthInvalid(
-          EnvironmentAuth.serverAuthCredentialReason(error),
-          EnvironmentAuth.serverAuthDpopFailureReason(error),
-        ),
-      ),
-      Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
-        failEnvironmentInternal("internal_error", error),
-      ),
-    );
-    if (session !== null && !session.scopes.includes(AuthOrchestrationReadScope)) {
-      return yield* failEnvironmentScopeRequired(AuthOrchestrationReadScope);
-    }
-    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
-    const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-    const usageService = yield* UsageService.UsageService;
-    const serverSettings = yield* ServerSettings.ServerSettingsService;
-    const providers = yield* providerRegistry.getProviders;
-    const usageLimitSourceSnapshots = yield* usageLimitSources.current;
-    const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
-    const { stateDir } = yield* ServerConfig.ServerConfig;
+const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
 
-    // Lazy-loading modes for the model-usage page and the mini program:
-    // `scope=index` answers with identities only (no scans, no probes) so the
-    // client can paint cards at once; `instance=<id>` computes just that card,
-    // and `refresh=1` additionally skips the quota-probe cache.
-    const requestUrl = HttpServerRequest.toURL(request);
-    const params = Option.isSome(requestUrl)
-      ? requestUrl.value.searchParams
-      : new URLSearchParams();
-    const scope = params.get("scope");
-    const instanceParam = params.get("instance");
-    const refresh = params.get("refresh") === "1";
-    const accountEntries = usageLimitSourceSnapshots.flatMap((source) =>
-      source.accounts.map((account) => ({
-        id: `${source.id}:${account.id}`,
-        driver: account.driver,
-        displayName: account.plan ?? source.label,
-        modelCount: 0,
-        state: "ready" as const,
-        usageLimits: account.usageLimits,
-      })),
-    );
-    const providerIdentity = (provider: (typeof providers)[number]) => ({
-      id: provider.instanceId,
-      driver: provider.driver,
-      displayName: provider.displayName ?? provider.driver,
-      modelCount: provider.models.length,
-      state: provider.status,
-    });
-    if (scope === "index") {
-      return HttpServerResponse.jsonUnsafe({
-        providers: [
-          ...providers.map(providerIdentity),
-          ...accountEntries.map((entry) => ({
-            id: entry.id,
-            driver: entry.driver,
-            displayName: entry.displayName,
-            modelCount: entry.modelCount,
-            state: entry.state,
-          })),
-        ],
-        readAt: DateTime.formatIso(yield* DateTime.now),
-      });
-    }
-    if (scope === "history") {
-      // Daily rows for the model-usage page's chart: one entry per calendar
-      // day, zero-filled, folded from the same transcript scan the usage page
-      // reads. Unlike the quota probes this is a local, warm-cached scan, so
-      // the page may poll it without hammering any upstream.
-      const daysParam = Number.parseInt(params.get("days") ?? "", 10);
-      const days = Number.isFinite(daysParam)
-        ? Math.min(PROVIDER_USAGE_HISTORY_MAX_DAYS, Math.max(1, daysParam))
-        : PROVIDER_USAGE_HISTORY_MAX_DAYS;
-      const untilParam = params.get("untilDay");
-      if (untilParam !== null && !isDay(untilParam)) {
-        return HttpServerResponse.jsonUnsafe({ error: "invalid untilDay" }, { status: 400 });
-      }
-      // `untilDay` defaults to today in the reporting zone; an explicit value
-      // is the caller's own window (a future day simply yields zero rows).
-      const untilDay =
-        untilParam ??
-        dayInZone(DateTime.toEpochMillis(yield* DateTime.now), PROVIDER_USAGE_HISTORY_TIME_ZONE);
-      const sinceDay = shiftDay(untilDay, -(days - 1));
-      const scanned = yield* usageService
-        .readSummary({
-          sinceDay,
-          untilDay,
-          timeZone: PROVIDER_USAGE_HISTORY_TIME_ZONE,
-          resolution: "day",
-        })
-        .pipe(
-          Effect.catch((error: UsageReadError) =>
-            Effect.logWarning("Provider usage history scan failed", {
-              detail: error.detail,
-            }).pipe(Effect.as(null)),
-          ),
-        );
-      return HttpServerResponse.jsonUnsafe({
-        timeZone: PROVIDER_USAGE_HISTORY_TIME_ZONE,
-        sinceDay,
-        untilDay,
-        days: foldDailyUsage(scanned?.buckets ?? [], sinceDay, untilDay),
-        available: scanned !== null,
-        readAt: scanned?.readAt ?? DateTime.formatIso(yield* DateTime.now),
-      });
-    }
-    if (instanceParam !== null) {
-      const provider = providers.find((candidate) => candidate.instanceId === instanceParam);
-      const account = accountEntries.find((entry) => entry.id === instanceParam);
-      if (provider === undefined && account === undefined) {
-        return HttpServerResponse.jsonUnsafe({ error: "unknown instance" }, { status: 404 });
-      }
-      const readAtNow = DateTime.formatIso(yield* DateTime.now);
-      if (provider === undefined || account !== undefined) {
-        // A limit-source account carries its windows already and has no
-        // transcript home to attribute usage to.
-        return HttpServerResponse.jsonUnsafe({
-          provider: { ...account, usage: { available: false } },
-          readAt: readAtNow,
-        });
-      }
-      const scanned = yield* usageService.readInstances({ days: PROVIDER_USAGE_SUMMARY_DAYS }).pipe(
-        Effect.catch((error: UsageReadError) =>
-          Effect.logWarning("Provider usage attribution scan failed", {
-            detail: error.detail,
-          }).pipe(Effect.as(null)),
-        ),
-      );
-      const usage = scanned?.instances.find(
-        (instance) => instance.instanceId === provider.instanceId,
-      )?.usage;
-      const limits =
-        settings === null
-          ? undefined
-          : yield* readInstanceUsageLimits(settings, provider.instanceId, {
-              refresh,
-              stateDir,
-            }).pipe(Effect.orElseSucceed(() => undefined));
-      return HttpServerResponse.jsonUnsafe({
-        provider: {
-          ...providerIdentity(provider),
-          usage: usage ?? { available: false },
-          usageLimits: limits ??
-            provider.usageLimits ?? {
-              checkedAt: scanned?.readAt ?? readAtNow,
-              windows: [],
-              unavailable: { reason: "unsupported" },
-            },
-        },
-        readAt: scanned?.readAt ?? readAtNow,
-      });
-    }
+// TracerDisabledWhen is one predicate for the whole server, and
+// HttpRouter.serve builds its routes privately, so it is provided to the served
+// layer, never merged into the routes.
+const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
+  const queryIndex = request.url.indexOf("?");
+  const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
+  // Webhook URLs carry their secret token in the path, so they never reach a trace.
+  return UNTRACED_REQUEST_PATHS.has(path) || path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`);
+});
 
-    // Attribution is best-effort: a scan failure must not blank the provider
-    // state and usage-limits data the caller can still use.
-    const instancesSummary = yield* usageService
-      .readInstances({ days: PROVIDER_USAGE_SUMMARY_DAYS })
-      .pipe(
-        Effect.catch((error: UsageReadError) =>
-          Effect.logWarning("Provider usage attribution scan failed", {
-            detail: error.detail,
-          }).pipe(Effect.as(null)),
-        ),
-      );
-    const usageByInstance = new Map<string, UsageInstancesSummary["instances"][number]["usage"]>(
-      (instancesSummary?.instances ?? []).map((instance) => [instance.instanceId, instance.usage]),
-    );
+export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 
-    const readAt = instancesSummary?.readAt ?? DateTime.formatIso(yield* DateTime.now);
-    const presentUsages = providers.flatMap((provider) => {
-      const usage = usageByInstance.get(provider.instanceId);
-      return usage === undefined ? [] : [usage];
-    });
-
-    // Quota probes run per provider but only for instances the probe module
-    // knows; the rest fall through to their registry-provided windows.
-    const probedLimits = new Map(
-      yield* Effect.forEach(
-        providers,
-        (provider) =>
-          settings === null
-            ? Effect.succeed([provider.instanceId, undefined] as const)
-            : readInstanceUsageLimits(settings, provider.instanceId, { stateDir }).pipe(
-                Effect.map((limits) => [provider.instanceId, limits] as const),
-                Effect.orElseSucceed(() => [provider.instanceId, undefined] as const),
-              ),
-        // Anthropic's OAuth usage endpoint rate-limits aggressively; serial
-        // probes plus the probe cache keep bursts of page refreshes from
-        // tripping it.
-        { concurrency: 1 },
-      ),
-    );
-
-    return HttpServerResponse.jsonUnsafe({
-      providers: [
-        ...providers.map((provider) => ({
-          id: provider.instanceId,
-          driver: provider.driver,
-          displayName: provider.displayName ?? provider.driver,
-          modelCount: provider.models.length,
-          state: provider.status,
-          usage: usageByInstance.get(provider.instanceId) ?? { available: false },
-          usageLimits: probedLimits.get(provider.instanceId) ??
-            provider.usageLimits ?? {
-              checkedAt: readAt,
-              windows: [],
-              unavailable: { reason: "unsupported" },
-            },
-        })),
-        ...usageLimitSourceSnapshots.flatMap((source) =>
-          source.accounts.map((account) => ({
-            id: `${source.id}:${account.id}`,
-            driver: account.driver,
-            displayName: account.plan ?? source.label,
-            modelCount: 0,
-            state: "ready" as const,
-            usage: { available: false },
-            usageLimits: account.usageLimits,
-          })),
-        ),
-      ],
-      totals: {
-        totalTokens: presentUsages.reduce((sum, usage) => sum + usage.totalTokens, 0),
-        costUsd: presentUsages.reduce((sum, usage) => sum + usage.costUsd, 0),
-        available: presentUsages.length > 0,
-      },
-      readAt,
-    });
-  }).pipe(
-    Effect.catchTags({
-      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-      EnvironmentInternalError: HttpServerRespondable.toResponse,
-      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
-    }),
-  ),
-);
-
-// Model picker data for HTTP-only clients (the mini program gateway) that
-// cannot subscribe to the websocket server config.
-export const providerModelsRouteLayer = HttpRouter.add(
-  "GET",
-  PROVIDER_MODELS_PATH,
-  Effect.gen(function* () {
-    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
-    const providers = yield* providerRegistry.getProviders;
-
-    return HttpServerResponse.jsonUnsafe({
-      providers: providers.map((provider) => ({
-        instanceId: provider.instanceId,
-        driver: provider.driver,
-        displayName: provider.displayName ?? provider.driver,
-        enabled: provider.enabled,
-        available: isProviderAvailable(provider),
-        status: provider.status,
-        requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange === true,
-        models: provider.models.map((model) => ({
-          slug: model.slug,
-          name: model.name,
-          ...(model.isDefault ? { isDefault: true } : {}),
-        })),
-      })),
-    });
-  }).pipe(
-    Effect.catchTags({
-      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-      EnvironmentInternalError: HttpServerRespondable.toResponse,
-      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
-    }),
-  ),
-);
-
-export const assetRouteLayer = HttpRouter.add(
+export const layerAssetRoute = HttpRouter.add(
   "GET",
   `${ASSET_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
@@ -712,6 +423,12 @@ export const assetRouteLayer = HttpRouter.add(
     );
     if (!asset) {
       return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    if (asset.kind === "bytes") {
+      return HttpServerResponse.uint8Array(asset.bytes, {
+        contentType: asset.mimeType,
+        headers: { "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" },
+      });
     }
     if (asset.kind === "github-media") {
       return yield* githubMediaResponse(asset, request.headers).pipe(
@@ -737,7 +454,7 @@ export const assetRouteLayer = HttpRouter.add(
   }),
 );
 
-export const attachmentUploadRouteLayer = HttpRouter.add(
+export const layerAttachmentUploadRoute = HttpRouter.add(
   "POST",
   `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
@@ -814,7 +531,6 @@ const loadImmutableBuildAssets = Effect.gen(function* () {
 
 const openStaticFile = Effect.fn("openStaticFile")(function* (filePath: string) {
   const fileSystem = yield* FileSystem.FileSystem;
-  // Reject directories and special files before opening. Response metadata comes from the handle.
   const pathInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
   if (pathInfo?.type !== "File") return null;
   const file = yield* fileSystem.open(filePath, { flag: "r" });
@@ -950,8 +666,6 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     }
 
     const contentType = isHtml ? "text/html; charset=utf-8" : mimeType;
-    // The request scope closes the handle for GET, HEAD, 304, errors, and cancellation.
-    // HEAD still passes through compression, which selects headers without reading the stream.
     return HttpServerResponse.stream(streamStaticFile(opened.file, fileInfo.size), {
       headers,
       contentType,
@@ -964,8 +678,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
   }),
 );
 
-// Read the installed build's manifest once. Unknown files use revalidation.
-export const staticAndDevRouteLayer = Layer.unwrap(
+export const layerStaticAndDevRoute = Layer.unwrap(
   loadImmutableBuildAssets.pipe(
     Effect.map((assets) => HttpRouter.add("GET", "*", handleStaticAndDevRequest(assets))),
   ),

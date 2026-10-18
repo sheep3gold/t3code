@@ -1,13 +1,39 @@
+import {
+  matchInlineSkills,
+  formatProviderSkillDisplayName,
+  type InlineSkill,
+} from "./inlineSkills.ts";
+import {
+  artifactTemplateFromHastProperties,
+  renderCodexInlineDirectivesAsMarkdown,
+} from "./codexMarkdownDirectives.ts";
+import { codexArtifactTemplatePresentationLabel } from "./codexArtifactTemplates.ts";
+import {
+  buildFileLinkParentSuffixByPath,
+  splitFilePathPosition,
+  fileLinkLabel,
+} from "./fileLinks.ts";
+import {
+  isMarkdownFileLinkLabel,
+  extractMarkdownLinkHrefs,
+  extractInlineCodeSpans,
+  inlineCodeFilePathCandidate,
+  resolveMarkdownFileLinkTarget,
+} from "./markdownLinks.ts";
 import { upgradeLegacyContextMessage } from "./composerContextLegacy.ts";
 import { parseComposerContextHref } from "./composerContextReferences.ts";
-import { parseAssistantCitationHref } from "./assistantCitations.ts";
-import type { AssistantCitation } from "@t3tools/contracts";
+import { assistantCitationLabel, parseAssistantCitationHref } from "./assistantCitations.ts";
+import type { OrchestrationV2ConversationMessage } from "@t3tools/contracts";
+import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "./proposedPlanText.ts";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
-import remarkBreaks from "remark-breaks";
 import remarkRehype from "remark-rehype";
-import rehypeRaw from "rehype-raw";
+import {
+  shouldPreserveAssistantLineBreaks,
+  CHAT_MARKDOWN_REHYPE_PLUGINS,
+  CHAT_MARKDOWN_REMARK_PLUGINS,
+  CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS,
+} from "./markdownPipeline.ts";
 
 // Inline wrappers (including Shiki token spans) must not split a search phrase.
 export const THREAD_FIND_BLOCK_TAGS = new Set([
@@ -51,21 +77,18 @@ export const THREAD_FIND_BLOCK_TAGS = new Set([
 
 const assistantProcessor = unified()
   .use(remarkParse)
-  .use(remarkGfm)
+  .use(CHAT_MARKDOWN_REMARK_PLUGINS)
   .use(remarkRehype, { allowDangerousHtml: true })
-  .use(rehypeRaw);
+  .use(CHAT_MARKDOWN_REHYPE_PLUGINS);
 const assistantBreaksProcessor = unified()
   .use(remarkParse)
-  .use(remarkGfm)
-  .use(remarkBreaks)
+  .use(CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS)
   .use(remarkRehype, { allowDangerousHtml: true })
-  .use(rehypeRaw);
+  .use(CHAT_MARKDOWN_REHYPE_PLUGINS);
 const userProcessor = unified()
   .use(remarkParse)
-  .use(remarkGfm)
-  .use(remarkBreaks)
-  .use(remarkRehype, { allowDangerousHtml: true })
-  .use(rehypeRaw);
+  .use(CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS)
+  .use(remarkRehype, { allowDangerousHtml: true });
 
 interface TextTree {
   readonly type: string;
@@ -74,69 +97,104 @@ interface TextTree {
   readonly properties?: {
     readonly href?: unknown;
     readonly src?: unknown;
+    readonly dataInlineCode?: unknown;
   };
   readonly children?: ReadonlyArray<TextTree>;
 }
 
-export interface ThreadFindMessage {
-  readonly role: "user" | "assistant";
-  readonly text: string;
-  readonly streaming?: boolean;
-  /** Present when `text` is already free of legacy context blocks. */
-  readonly hasContext?: boolean;
-}
-
-/** Mirrors the web renderer's "★ Insight" line-break rule. */
-function shouldPreserveAssistantLineBreaks(text: string): boolean {
-  return /^★ Insight(?:\s|─)/mu.test(text);
-}
-
-/** The citation chip shows the comment when present, otherwise the quoted text. */
-function citationChipLabel(citation: AssistantCitation): string {
-  return (citation.comment?.trim() || citation.text).replace(/\s+/g, " ");
-}
-
-/** Uses the renderer's Markdown transforms, without mounting folded/virtualized rows. */
 function markdownThreadFindText(
   markdown: string,
   userMessage = false,
+  cwd?: string,
+  skills: readonly InlineSkill[] = [],
   lineBreaks = false,
-  skipContextReferences = userMessage,
 ): string[] {
   const processor = userMessage
     ? userProcessor
     : lineBreaks
       ? assistantBreaksProcessor
       : assistantProcessor;
-  const tree = processor.runSync(processor.parse(markdown)) as unknown as TextTree;
+  const tree = processor.runSync(processor.parse(markdown));
+  const paths = [
+    ...extractMarkdownLinkHrefs(renderCodexInlineDirectivesAsMarkdown(markdown)),
+    ...extractInlineCodeSpans(markdown).flatMap((span) => inlineCodeFilePathCandidate(span) ?? []),
+  ].flatMap((href) => {
+    const target = resolveMarkdownFileLinkTarget(href, cwd);
+    return target ? [splitFilePathPosition(target).path] : [];
+  });
+  const parentSuffixes = buildFileLinkParentSuffixByPath(paths);
   const segments: string[] = [];
   let text = "";
   const flush = () => {
     if (text.trim()) segments.push(text);
     text = "";
   };
-  const visit = (node: TextTree, inPre = false): void => {
+  const visit = (node: TextTree, inPre = false, inlineSkills = false) => {
     const href = node.properties?.href ?? node.properties?.src;
-    if (skipContextReferences && typeof href === "string" && parseComposerContextHref(href)) {
-      // Context chips render as standalone tokens; a search phrase must not
-      // join prose across a chip. Plans render markdown literally, so they
-      // keep the reference label text instead.
+    if (userMessage && typeof href === "string" && parseComposerContextHref(href)) {
       flush();
       return;
     }
     const citation =
       node.tagName === "a" && typeof href === "string" ? parseAssistantCitationHref(href) : null;
     if (citation) {
-      // Matches the citation chip, which shows its label instead of the link text.
-      text += citationChipLabel(citation);
+      text += assistantCitationLabel(citation);
+      return;
+    }
+    {
+      let candidate: string | null = null;
+      if (node.tagName === "a" && typeof href === "string") {
+        candidate = href;
+      } else if (
+        node.tagName === "code" &&
+        !inPre &&
+        node.properties?.dataInlineCode !== undefined
+      ) {
+        candidate = inlineCodeFilePathCandidate(
+          (node.children ?? []).map((child) => child.value ?? "").join(""),
+        );
+      }
+      const target = candidate ? resolveMarkdownFileLinkTarget(candidate, cwd) : null;
+      if (target) {
+        const labelText = (node: TextTree): string =>
+          node.value ?? (node.children ?? []).map(labelText).join("");
+        const label = labelText(node);
+        if (node.tagName === "a" && candidate && !isMarkdownFileLinkLabel(label, candidate))
+          text += `${label} `;
+        text += fileLinkLabel(splitFilePathPosition(target), parentSuffixes);
+        return;
+      }
+    }
+    const template = artifactTemplateFromHastProperties(node.properties);
+    if (template) {
+      flush();
+      segments.push(
+        template.displayName,
+        codexArtifactTemplatePresentationLabel(template.artifactKind),
+      );
       return;
     }
     const block = THREAD_FIND_BLOCK_TAGS.has(node.tagName ?? "");
     if (block) flush();
     if (node.type === "text" || (userMessage && node.type === "raw")) {
-      text += inPre ? (node.value ?? "") : (node.value ?? "").replace(/\r?\n/g, " ");
+      let value = node.value ?? "";
+      if (inlineSkills) {
+        let cursor = 0;
+        let rendered = "";
+        for (const { start, end, skill } of matchInlineSkills(value, skills)) {
+          rendered += value.slice(cursor, start) + formatProviderSkillDisplayName(skill);
+          cursor = end;
+        }
+        value = rendered + value.slice(cursor);
+      }
+      text += inPre ? value : value.replace(/\r?\n/g, " ");
     }
-    for (const child of node.children ?? []) visit(child, inPre || node.tagName === "pre");
+    const renderSkills =
+      node.tagName === "code" || node.tagName === "a"
+        ? false
+        : inlineSkills || node.tagName === "p" || node.tagName === "li";
+    for (const child of node.children ?? [])
+      visit(child, inPre || node.tagName === "pre", renderSkills);
     if (block) flush();
   };
   visit(tree);
@@ -144,32 +202,29 @@ function markdownThreadFindText(
   return segments;
 }
 
-/** Plans render their markdown literally, so they are indexed as written. */
-export function searchablePlanSegments(markdown: string): readonly string[] {
-  return markdownThreadFindText(markdown, false, false);
+/** Plans render `$skill` tokens literally (no skill chips), so they are indexed as written. */
+export function searchablePlanSegments(markdown: string, cwd?: string): readonly string[] {
+  return [
+    proposedPlanTitle(markdown) ?? "Proposed plan",
+    ...markdownThreadFindText(stripDisplayedPlanMarkdown(markdown), false, cwd, []),
+  ];
 }
 
-// Legacy context blocks that could not be upgraded stay in the stored text, but
-// the web renderer's sanitize step hides those tags; the find index mirrors
-// what is visible, so they are removed before parsing.
-const HIDDEN_LEGACY_CONTEXT_BLOCKS =
-  /^<(?:terminal_context|element_context|preview_annotation)>\n[\s\S]*?\n<\/(?:terminal_context|element_context|preview_annotation)>/gm;
-
-export function searchableMessageSegments(message: ThreadFindMessage): readonly string[] | null {
+export function searchableMessageSegments(
+  message: Pick<OrchestrationV2ConversationMessage, "role" | "text" | "streaming" | "context">,
+  cwd?: string,
+  skills: readonly InlineSkill[] = [],
+): readonly string[] | null {
   if (message.role === "user") {
-    if (message.hasContext) {
-      // Structured context is rendered from records; literal legacy tags in the
-      // text are not upgraded and stay visible verbatim.
-      return markdownThreadFindText(message.text, true, true);
-    }
-    const upgraded = upgradeLegacyContextMessage(message.text).text;
-    const text = upgraded.replace(HIDDEN_LEGACY_CONTEXT_BLOCKS, "");
-    return markdownThreadFindText(text, true, true);
+    const text = message.context ? message.text : upgradeLegacyContextMessage(message.text).text;
+    return markdownThreadFindText(text, true, cwd, skills);
   }
   if (message.role !== "assistant") return null;
   return markdownThreadFindText(
     message.text || (message.streaming ? "" : "(empty response)"),
     false,
+    cwd,
+    skills,
     shouldPreserveAssistantLineBreaks(message.text),
   );
 }

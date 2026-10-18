@@ -5,12 +5,11 @@ import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./ru
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { type Atom } from "effect/unstable/reactivity";
-import { HttpClient } from "effect/unstable/http";
+import { type Atom } from "effect/reactivity";
+import { HttpClient } from "effect/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
@@ -31,7 +30,7 @@ const fetchEnvironmentArtifacts = Effect.fn("fetchEnvironmentArtifacts")(functio
     ...input,
     group: "artifacts",
     method: "GET",
-    url: (base) => environmentEndpointUrl(base, "/api/artifacts"),
+    url: (urls) => urls.list(),
     timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.list({ payload: { projectId: input.projectId }, headers }),
@@ -49,7 +48,7 @@ const fetchEnvironmentArtifact = Effect.fn("fetchEnvironmentArtifact")(function*
     ...input,
     group: "artifacts",
     method: "GET",
-    url: (base) => environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}`),
+    url: (urls) => urls.get({ params: { slug: input.slug } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.get({
@@ -70,8 +69,7 @@ const fetchEnvironmentArtifactVersions = Effect.fn("fetchEnvironmentArtifactVers
     ...input,
     group: "artifacts",
     method: "GET",
-    url: (base) =>
-      environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/versions`),
+    url: (urls) => urls.versions({ params: { slug: input.slug } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.versions({
@@ -100,8 +98,7 @@ const updateEnvironmentArtifact = Effect.fn("updateEnvironmentArtifact")(functio
     ...input,
     group: "artifacts",
     method: "POST",
-    url: (base) =>
-      environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/update`),
+    url: (urls) => urls.update({ params: { slug: input.slug } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.update({
@@ -131,8 +128,7 @@ const revertEnvironmentArtifact = Effect.fn("revertEnvironmentArtifact")(functio
     ...input,
     group: "artifacts",
     method: "POST",
-    url: (base) =>
-      environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}/revert`),
+    url: (urls) => urls.revert({ params: { slug: input.slug } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.revert({
@@ -150,7 +146,7 @@ const removeEnvironmentArtifact = Effect.fn("removeEnvironmentArtifact")(functio
     ...input,
     group: "artifacts",
     method: "DELETE",
-    url: (base) => environmentEndpointUrl(base, `/api/artifacts/${encodeURIComponent(input.slug)}`),
+    url: (urls) => urls.get({ params: { slug: input.slug } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.remove({

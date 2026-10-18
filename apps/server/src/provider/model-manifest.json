@@ -1,14 +1,25 @@
 {
   "version": 1,
-  "updatedAt": "2026-10-18T08:50:00Z",
+  "updatedAt": "2026-10-09T23:31:10Z",
   "compatibility": [
     {
       "driver": "codex",
-      "t3CodeRange": ">=0.0.42",
-      "recommendedRange": ">=0.129.0",
+      "t3CodeRange": ">=0.0.44",
+      "recommendedRange": ">=0.159.0",
       "ranges": [
-        { "range": ">=0.129.0", "status": "supported" },
-        { "range": "<0.129.0", "status": "broken" }
+        { "range": ">=0.156.0", "status": "supported" },
+        { "range": ">=0.149.0 <0.156.0", "status": "unsupported" },
+        { "range": "<0.149.0", "status": "broken" }
+      ]
+    },
+    {
+      "driver": "codex",
+      "t3CodeRange": ">=0.0.42 <0.0.44",
+      "recommendedRange": ">=0.156.0",
+      "ranges": [
+        { "range": ">=0.156.0", "status": "supported" },
+        { "range": ">=0.149.0 <0.156.0", "status": "unsupported" },
+        { "range": "<0.149.0", "status": "broken" }
       ]
     },
     {
@@ -36,15 +47,28 @@
       "recommendedRange": ">=1.0.13",
       "ranges": [
         { "range": ">=1.0.13", "status": "supported" },
-        { "range": "<1.0.13", "status": "unknown" }
+        { "range": "<1.0.13", "status": "broken" }
       ]
     },
     {
       "driver": "opencode",
-      "t3CodeRange": ">=0.0.42",
-      "recommendedRange": ">=1.14.19",
+      "t3CodeRange": ">=0.0.42 <0.0.46",
+      "recommendedRange": ">=1.14.19 <2.0.0",
+      "recommendedVersion": "1.14.19",
       "ranges": [
-        { "range": ">=1.14.19", "status": "supported" },
+        { "range": ">=2.0.0", "status": "broken" },
+        { "range": ">=1.14.19 <2.0.0", "status": "supported" },
+        { "range": "<1.14.19", "status": "broken" }
+      ]
+    },
+    {
+      "driver": "opencode",
+      "t3CodeRange": ">=0.0.46",
+      "recommendedRange": ">=2.0.18",
+      "ranges": [
+        { "range": ">=2.0.18", "status": "supported" },
+        { "range": ">=2.0.0 <2.0.18", "status": "unsupported" },
+        { "range": ">=1.14.19 <2.0.0", "status": "graceful" },
         { "range": "<1.14.19", "status": "broken" }
       ]
     },
@@ -55,29 +79,31 @@
       "ranges": [{ "range": "=1.1.1", "status": "supported" }]
     },
     {
-      "driver": "kiro",
-      "t3CodeRange": ">=0.0.42",
-      "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
+      "driver": "pi",
+      "t3CodeRange": ">=0.0.46",
+      "recommendedRange": ">=1.0.0",
+      "ranges": [
+        { "range": ">=0.80.5", "status": "supported" },
+        { "range": "<0.80.5", "status": "unsupported" }
+      ]
     },
     {
-      "driver": "minimax",
-      "t3CodeRange": ">=0.0.42",
-      "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
-    },
-    {
-      "driver": "factory",
-      "t3CodeRange": ">=0.0.42",
-      "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
+      "driver": "muse",
+      "t3CodeRange": ">=0.0.46",
+      "recommendedRange": ">=1.4.2",
+      "ranges": [
+        { "range": ">=1.4.2", "status": "supported" },
+        { "range": "<1.4.2", "status": "unknown" }
+      ]
     }
   ],
   "currentModels": {
     "codex": [
       "gpt-6-astra",
-      "gpt-6-sol",
+      "gpt-6.1-sol",
       "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna"
+      "gpt-daybreak-blue-latest",
+      "gpt-daybreak-red-latest"
     ],
     "claudeAgent": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
     "antigravity": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"]
@@ -104,10 +130,10 @@
           "status": "current",
           "adapter": { "codex": { "minVersion": "0.155.0" } }
         },
-        { "slug": "gpt-6-sol", "name": "GPT-6 Sol", "status": "current" },
-        { "slug": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "status": "current" },
-        { "slug": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "status": "current" },
-        { "slug": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "status": "current" },
+        { "slug": "gpt-6-sol", "name": "GPT-6 Sol", "status": "legacy" },
+        { "slug": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "status": "legacy" },
+        { "slug": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "status": "legacy" },
+        { "slug": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "status": "legacy" },
         { "slug": "gpt-5.5", "name": "GPT-5.5", "status": "legacy" }
       ]
     },

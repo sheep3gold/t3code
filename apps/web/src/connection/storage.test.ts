@@ -3,7 +3,7 @@ import {
   PrimaryConnectionTarget,
 } from "@t3tools/client-runtime/connection";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { ConnectionCatalogDocument, EnvironmentCacheStore } from "@t3tools/client-runtime/platform";
+import { ConnectionCatalogDocument, Persistence } from "@t3tools/client-runtime/platform";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -12,17 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { afterEach, vi } from "vite-plus/test";
 
-import {
-  connectionStorageLayer,
-  makeBrowserGitHubRoutingPermissions,
-  makeCatalogBackend,
-  makeCatalogStore,
-} from "./storage";
-
-const fixedHandle = (database: IDBDatabase) => ({
-  get: Effect.succeed(database),
-  invalidate: () => Effect.void,
-});
+import * as ConnectionStorage from "./storage";
 
 const emptyCatalog = {
   schemaVersion: 1,
@@ -40,12 +30,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("makeCatalogStore", () => {
+describe("ConnectionStorage.makeCatalogStore", () => {
   it.effect("quarantines malformed catalogs and starts from an empty document", () =>
     Effect.gen(function* () {
       const writes: string[] = [];
       const quarantined: string[] = [];
-      const store = yield* makeCatalogStore({
+      const store = yield* ConnectionStorage.makeCatalogStore({
         read: Effect.succeed("{not-json"),
         write: (raw) => Effect.sync(() => writes.push(raw)),
         quarantine: (raw) => Effect.sync(() => quarantined.push(raw)),
@@ -64,7 +54,7 @@ describe("makeCatalogStore", () => {
         reason: "remote-unavailable",
         detail: "permission denied",
       });
-      const store = yield* makeCatalogStore({
+      const store = yield* ConnectionStorage.makeCatalogStore({
         read: Effect.fail(failure),
         write: () => Effect.void,
       });
@@ -74,7 +64,12 @@ describe("makeCatalogStore", () => {
   );
 });
 
-describe("makeCatalogBackend", () => {
+const fixedHandle = (database: IDBDatabase) => ({
+  get: Effect.succeed(database),
+  invalidate: () => Effect.void,
+});
+
+describe("ConnectionStorage.makeCatalogBackend", () => {
   it.effect("reports a closed IndexedDB connection as a typed read and write failure", () =>
     Effect.gen(function* () {
       vi.stubGlobal("window", {});
@@ -83,7 +78,7 @@ describe("makeCatalogBackend", () => {
           throw new DOMException("The database connection is closing.", "InvalidStateError");
         },
       } as unknown as IDBDatabase;
-      const backend = makeCatalogBackend(fixedHandle(database));
+      const backend = ConnectionStorage.makeCatalogBackend(fixedHandle(database));
 
       const readError = yield* Effect.flip(backend.read);
       const writeError = yield* Effect.flip(backend.write("{}"));
@@ -103,7 +98,7 @@ describe("makeCatalogBackend", () => {
           setConnectionCatalog,
         },
       });
-      const backend = makeCatalogBackend(fixedHandle({} as IDBDatabase));
+      const backend = ConnectionStorage.makeCatalogBackend(fixedHandle({} as IDBDatabase));
 
       const error = yield* backend.write("{}").pipe(Effect.flip);
 
@@ -112,92 +107,30 @@ describe("makeCatalogBackend", () => {
       expect(setConnectionCatalog).toHaveBeenCalledWith("{}");
     }),
   );
-});
 
-describe("browser GitHub routing permissions", () => {
-  it.effect("revokes across runtimes before storage events and resists stale catalog writes", () =>
+  it.effect("fails IndexedDB writes whose commit aborts", () =>
     Effect.gen(function* () {
-      const values = new Map<string, string>();
-      const localStorage: Storage = {
-        get length() {
-          return values.size;
-        },
-        key: (index) => [...values.keys()][index] ?? null,
-        getItem: (key) => values.get(key) ?? null,
-        setItem: (key, value) => {
-          values.set(key, value);
-        },
-        removeItem: (key) => {
-          values.delete(key);
-        },
-        clear: () => {
-          values.clear();
-        },
-      };
-      const firstBrowser = Object.assign(new EventTarget(), { localStorage });
-      const secondBrowser = Object.assign(new EventTarget(), { localStorage });
-      const first = makeBrowserGitHubRoutingPermissions(firstBrowser);
-      const second = makeBrowserGitHubRoutingPermissions(secondBrowser);
-      const entry = {
-        target: new PrimaryConnectionTarget({
-          environmentId: EnvironmentId.make("first"),
-          label: "First",
-          httpBaseUrl: "http://localhost:3000",
-          wsBaseUrl: "ws://localhost:3000",
+      vi.stubGlobal("window", {});
+      const transaction = Object.assign(new EventTarget(), {
+        error: null as DOMException | null,
+        objectStore: () => ({
+          put: () => {
+            // A failed commit aborts the transaction without an "error" event.
+            queueMicrotask(() => {
+              transaction.error = new DOMException("Quota exceeded", "QuotaExceededError");
+              transaction.dispatchEvent(new Event("abort"));
+            });
+          },
         }),
-        profile: Option.none(),
-        enabled: true,
-      };
-      const other = {
-        ...entry,
-        target: new PrimaryConnectionTarget({
-          ...entry.target,
-          environmentId: EnvironmentId.make("second"),
-        }),
-      };
-      expect(yield* first.get(entry)).toBe("off");
-      yield* first.set(entry, "read-write");
-      expect(yield* second.get(entry)).toBe("read-write");
-      const oldPermissions = Option.getOrThrow(yield* Stream.runHead(first.changes));
-      const staleCatalog = yield* makeCatalogStore({
-        read: Effect.succeed(
-          encodeCatalog({ ...emptyCatalog, githubRoutingPermissions: oldPermissions }),
-        ),
-        write: () => Effect.void,
       });
-      yield* staleCatalog.read;
-      const listening = yield* Deferred.make<void>();
-      const revoked = yield* Deferred.make<void>();
-      yield* second.changes.pipe(
-        Stream.runForEach((permissions) =>
-          Deferred.succeed(permissions.length > 0 ? listening : revoked, undefined),
-        ),
-        Effect.forkChild,
+      const backend = ConnectionStorage.makeCatalogBackend(
+        fixedHandle({ transaction: () => transaction } as unknown as IDBDatabase),
       );
-      yield* Deferred.await(listening);
 
-      yield* first.set(entry, "off");
-      expect(yield* second.get(entry)).toBe("off");
-      secondBrowser.dispatchEvent(Object.assign(new Event("storage"), { key: null }));
-      yield* Deferred.await(revoked);
-      yield* second.set(other, "read");
-      yield* staleCatalog.update((document) => ({ ...document, accountId: "updated" }));
-      expect(yield* second.get(entry)).toBe("off");
-      expect(yield* first.get(other)).toBe("read");
-      expect(yield* makeBrowserGitHubRoutingPermissions(firstBrowser).get(entry)).toBe("off");
+      const error = yield* backend.write("{}").pipe(Effect.flip);
 
-      yield* first.set(entry, "read-write");
-      yield* second.forget(entry.target.environmentId);
-      expect(yield* first.get(entry)).toBe("off");
-      expect(yield* first.get(other)).toBe("read");
-      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
-        throw new Error("Storage unavailable");
-      });
-      expect(yield* first.set(entry, "read-write").pipe(Effect.flip)).toBeInstanceOf(
-        ConnectionTransientError,
-      );
-      expect(yield* second.get(entry)).toBe("off");
-    }).pipe(Effect.scoped),
+      expect(error.message).toContain("QuotaExceededError");
+    }),
   );
 });
 
@@ -231,14 +164,14 @@ describe("environment cache removal", () => {
       });
 
       const [threadError, refsError] = yield* Effect.gen(function* () {
-        const cache = yield* EnvironmentCacheStore;
+        const cache = yield* Persistence.EnvironmentCacheStore;
         return [
           yield* Effect.flip(
             cache.removeThread(EnvironmentId.make("env"), ThreadId.make("thread")),
           ),
           yield* Effect.flip(cache.clearVcsRefs(EnvironmentId.make("env"))),
         ] as const;
-      }).pipe(Effect.provide(connectionStorageLayer));
+      }).pipe(Effect.provide(ConnectionStorage.layer));
 
       expect(threadError.message).toContain("Commit aborted");
       expect(refsError.message).toContain("Commit aborted");
@@ -257,13 +190,13 @@ describe("IndexedDB connection recovery", () => {
       vi.stubGlobal("indexedDB", { open });
 
       yield* Effect.gen(function* () {
-        const cache = yield* EnvironmentCacheStore;
+        const cache = yield* Persistence.EnvironmentCacheStore;
         expect(open).not.toHaveBeenCalled();
         const error = yield* Effect.flip(
           cache.loadThread(EnvironmentId.make("env"), ThreadId.make("thread")),
         );
         expect(error.message).toContain("Storage is unavailable");
-      }).pipe(Effect.provide(connectionStorageLayer));
+      }).pipe(Effect.provide(ConnectionStorage.layer));
 
       expect(open).toHaveBeenCalledOnce();
     }),
@@ -303,7 +236,7 @@ describe("IndexedDB connection recovery", () => {
       vi.stubGlobal("indexedDB", { open });
 
       yield* Effect.gen(function* () {
-        const cache = yield* EnvironmentCacheStore;
+        const cache = yield* Persistence.EnvironmentCacheStore;
         const environmentId = EnvironmentId.make("env");
         const threadId = ThreadId.make("thread");
         expect(Option.isNone(yield* cache.loadThread(environmentId, threadId))).toBe(true);
@@ -316,7 +249,7 @@ describe("IndexedDB connection recovery", () => {
         );
         expect(recovered.every(Option.isNone)).toBe(true);
         expect(open).toHaveBeenCalledTimes(2);
-      }).pipe(Effect.provide(connectionStorageLayer));
+      }).pipe(Effect.provide(ConnectionStorage.layer));
 
       expect(first.close).not.toHaveBeenCalled();
       expect(second.close).toHaveBeenCalledOnce();
@@ -360,11 +293,100 @@ describe("IndexedDB connection closed without a close event", () => {
       vi.stubGlobal("indexedDB", { open });
 
       yield* Effect.gen(function* () {
-        const cache = yield* EnvironmentCacheStore;
+        const cache = yield* Persistence.EnvironmentCacheStore;
         const loaded = yield* cache.loadThread(EnvironmentId.make("env"), ThreadId.make("thread"));
         expect(Option.isNone(loaded)).toBe(true);
         expect(open).toHaveBeenCalledTimes(2);
-      }).pipe(Effect.provide(connectionStorageLayer));
+      }).pipe(Effect.provide(ConnectionStorage.layer));
     }),
+  );
+});
+
+describe("browser GitHub routing permissions", () => {
+  it.effect("revokes across runtimes before storage events and resists stale catalog writes", () =>
+    Effect.gen(function* () {
+      const values = new Map<string, string>();
+      const localStorage: Storage = {
+        get length() {
+          return values.size;
+        },
+        key: (index) => [...values.keys()][index] ?? null,
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => {
+          values.set(key, value);
+        },
+        removeItem: (key) => {
+          values.delete(key);
+        },
+        clear: () => {
+          values.clear();
+        },
+      };
+      const firstBrowser = Object.assign(new EventTarget(), { localStorage });
+      const secondBrowser = Object.assign(new EventTarget(), { localStorage });
+      const first = ConnectionStorage.makeBrowserGitHubRoutingPermissions(firstBrowser);
+      const second = ConnectionStorage.makeBrowserGitHubRoutingPermissions(secondBrowser);
+      const entry = {
+        target: new PrimaryConnectionTarget({
+          environmentId: EnvironmentId.make("first"),
+          label: "First",
+          httpBaseUrl: "http://localhost:3000",
+          wsBaseUrl: "ws://localhost:3000",
+        }),
+        profile: Option.none(),
+        enabled: true,
+      };
+      const other = {
+        ...entry,
+        target: new PrimaryConnectionTarget({
+          ...entry.target,
+          environmentId: EnvironmentId.make("second"),
+        }),
+      };
+      expect(yield* first.get(entry)).toBe("off");
+      yield* first.set(entry, "read-write");
+      expect(yield* second.get(entry)).toBe("read-write");
+      const oldPermissions = Option.getOrThrow(yield* Stream.runHead(first.changes));
+      const staleCatalog = yield* ConnectionStorage.makeCatalogStore({
+        read: Effect.succeed(
+          encodeCatalog({ ...emptyCatalog, githubRoutingPermissions: oldPermissions }),
+        ),
+        write: () => Effect.void,
+      });
+      yield* staleCatalog.read;
+      const listening = yield* Deferred.make<void>();
+      const revoked = yield* Deferred.make<void>();
+      yield* second.changes.pipe(
+        Stream.runForEach((permissions) =>
+          Deferred.succeed(permissions.length > 0 ? listening : revoked, undefined),
+        ),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(listening);
+
+      yield* first.set(entry, "off");
+      expect(yield* second.get(entry)).toBe("off");
+      secondBrowser.dispatchEvent(Object.assign(new Event("storage"), { key: null }));
+      yield* Deferred.await(revoked);
+      yield* second.set(other, "read");
+      yield* staleCatalog.update((document) => ({ ...document, accountId: "updated" }));
+      expect(yield* second.get(entry)).toBe("off");
+      expect(yield* first.get(other)).toBe("read");
+      expect(
+        yield* ConnectionStorage.makeBrowserGitHubRoutingPermissions(firstBrowser).get(entry),
+      ).toBe("off");
+
+      yield* first.set(entry, "read-write");
+      yield* second.forget(entry.target.environmentId);
+      expect(yield* first.get(entry)).toBe("off");
+      expect(yield* first.get(other)).toBe("read");
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("Storage unavailable");
+      });
+      expect(yield* first.set(entry, "read-write").pipe(Effect.flip)).toBeInstanceOf(
+        ConnectionTransientError,
+      );
+      expect(yield* second.get(entry)).toBe("off");
+    }).pipe(Effect.scoped),
   );
 });

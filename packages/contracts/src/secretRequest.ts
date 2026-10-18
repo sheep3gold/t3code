@@ -1,14 +1,14 @@
 import * as Schema from "effect/Schema";
 
-import { ApprovalRequestId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 
 /**
- * The user's answer to an agent's request for a secret. A saved value is kept
- * by the server under a one-use SecretRef; the thread learns only the status.
+ * A saved value is kept by the server under a one-use SecretRef; the thread
+ * learns only the status.
  */
 export const SecretRequestAnswerInput = Schema.Struct({
   threadId: ThreadId,
-  requestId: ApprovalRequestId,
+  turnItemId: TurnItemId,
   answer: Schema.Union([
     Schema.Struct({ type: Schema.Literal("save"), secret: TrimmedNonEmptyString }),
     Schema.Struct({ type: Schema.Literal("decline") }),
@@ -38,7 +38,6 @@ export const SecretRequestFailureReason = Schema.Literals(
 );
 export type SecretRequestFailureReason = typeof SecretRequestFailureReason.Type;
 
-/** Answering a request or using its ref failed; the message is shown to users and agents. */
 export class SecretRequestError extends Schema.TaggedError<SecretRequestError>()(
   "SecretRequestError",
   {

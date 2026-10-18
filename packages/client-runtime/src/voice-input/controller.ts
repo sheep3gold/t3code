@@ -1,12 +1,8 @@
-// @effect-diagnostics globalTimers:off - This imperative controller runs on
-// raw Promises/AbortController and session tokens, without an Effect runtime.
 import { replaceTextRange } from "@t3tools/shared/composerTrigger";
 
 import type { PreparedVoiceTranscription, VoiceTranscriber } from "./transcription.ts";
 
 export const VOICE_RECORDING_LIMIT_SECONDS = 5 * 60;
-export const VOICE_PREPARATION_TIMEOUT_MS = 30_000;
-export const VOICE_TRANSCRIPTION_TIMEOUT_MS = 60_000;
 
 export type VoiceInputPhase = "idle" | "preparing" | "recording" | "transcribing" | "error";
 
@@ -125,59 +121,41 @@ export function resolveTranscriptCommit(
   };
 }
 
-let activeSession: symbol | null = null;
+type VoiceInputSession = {
+  abandoned: boolean;
+  readonly released: Promise<void>;
+  readonly release: () => void;
+};
+
+let activeSession: VoiceInputSession | null = null;
 let activeTranscriptionOperation: Promise<unknown> | null = null;
 
-function acquireSession(): symbol | null {
+function acquireSession(): VoiceInputSession | null {
   if (activeSession) return null;
-  const token = Symbol("voice-input-session");
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const token = { abandoned: false, released: promise, release: resolve };
   activeSession = token;
   return token;
 }
 
-function releaseSession(token: symbol | null): void {
-  if (token && activeSession === token) activeSession = null;
+function releaseSession(token: VoiceInputSession | null): void {
+  if (token && activeSession === token) {
+    activeSession = null;
+    token.release();
+  }
 }
 
-function stealSession(): symbol {
-  const token = Symbol("voice-input-session");
-  activeSession = token;
-  return token;
-}
-
-async function runTranscriptionOperation<T>(
-  operation: () => Promise<T>,
-  options?: { readonly timeoutMs?: number },
-): Promise<T> {
+async function runTranscriptionOperation<T>(operation: () => Promise<T>): Promise<T> {
   if (activeTranscriptionOperation) {
-    // A hung or orphaned operation must not wedge the slot for the lifetime of
-    // the app process. The newer operation takes over the slot; the orphaned
-    // one becomes a no-op when it eventually settles because it no longer
-    // matches activeTranscriptionOperation.
-    activeTranscriptionOperation = null;
+    throw new Error("voice-operation-busy");
   }
 
-  const timeoutMs = options?.timeoutMs ?? VOICE_TRANSCRIPTION_TIMEOUT_MS;
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  let timedOut = false;
-  const promise = Promise.resolve().then(operation);
+  const promise = operation();
   activeTranscriptionOperation = promise;
   try {
-    const timeoutPromise = new Promise<never>((_resolve, reject) => {
-      timeout = setTimeout(() => {
-        timedOut = true;
-        // The hung operation may never settle, but the slot must be freed so
-        // the next voice attempt is not rejected forever.
-        if (activeTranscriptionOperation === promise) activeTranscriptionOperation = null;
-        reject(new Error("voice-operation-timeout"));
-      }, timeoutMs);
-    });
-    return await Promise.race([promise, timeoutPromise]);
+    return await promise;
   } finally {
-    if (timeout) clearTimeout(timeout);
-    if (!timedOut && activeTranscriptionOperation === promise) {
-      activeTranscriptionOperation = null;
-    }
+    if (activeTranscriptionOperation === promise) activeTranscriptionOperation = null;
   }
 }
 
@@ -190,9 +168,6 @@ function preparationErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message === "voice-operation-busy") {
     return "Voice transcription is still finishing. Try again shortly.";
   }
-  if (error instanceof Error && error.message === "voice-operation-timeout") {
-    return "Voice transcription took too long to start. Please try again.";
-  }
   if (errorCode(error) === "unsupported-locale") {
     return "Voice transcription is not available for this language.";
   }
@@ -203,9 +178,6 @@ function transcriptionErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message === "voice-operation-busy") {
     return "Voice transcription is still finishing. Try again shortly.";
   }
-  if (error instanceof Error && error.message === "voice-operation-timeout") {
-    return "Voice transcription took too long. Please try again.";
-  }
   return "Could not transcribe this recording.";
 }
 
@@ -215,7 +187,7 @@ export class VoiceInputController {
   private readonly dependencies: VoiceInputControllerDependencies;
   private state: VoiceInputState = IDLE_STATE;
   private operationToken = 0;
-  private sessionToken: symbol | null = null;
+  private sessionToken: VoiceInputSession | null = null;
   private transcription: PreparedVoiceTranscription | null = null;
   private transcriptionAbortController: AbortController | null = null;
   private capturedDraft: VoiceDraftSnapshot | null = null;
@@ -239,32 +211,28 @@ export class VoiceInputController {
       this.setError("This draft is no longer available.", "retry");
       return;
     }
-    let sessionToken = acquireSession();
-    if (!sessionToken) {
-      // A previous controller may have been invalidated mid-preparation (e.g. the
-      // user switched threads) without its async cleanup ever settling, leaving
-      // the global session locked forever. Steal the lock so voice input keeps
-      // working; any orphaned preparation that later settles is a no-op because
-      // its operation token was already invalidated.
-      sessionToken = stealSession();
-    }
-
-    this.sessionToken = sessionToken;
-
-    // Belt-and-suspenders: if any async step below (permission prompt,
-    // transcriber prepare, recorder setup) never settles, the cancel keeps the
-    // session token releasable instead of wedging voice input for the lifetime
-    // of the app process.
-    const preparationTimeout = setTimeout(() => {
-      this.cancel();
-    }, VOICE_PREPARATION_TIMEOUT_MS);
-
+    let sessionToken: VoiceInputSession | null = null;
     const operationToken = ++this.operationToken;
-    const abortController = new AbortController();
-    this.transcriptionAbortController = abortController;
     this.setState({ phase: "preparing", error: null, errorAction: null });
 
     try {
+      for (
+        let previousSession = activeSession;
+        previousSession?.abandoned;
+        previousSession = activeSession
+      ) {
+        await previousSession.released;
+        if (!this.isCurrent(operationToken)) return;
+      }
+      sessionToken = acquireSession();
+      if (!sessionToken) {
+        this.setError("Another voice recording is already active.", "retry");
+        return;
+      }
+      this.sessionToken = sessionToken;
+      const abortController = new AbortController();
+      this.transcriptionAbortController = abortController;
+
       const transcriber = this.dependencies.getTranscriber();
       if (!transcriber) {
         this.setError("Voice transcription is not available.", null);
@@ -286,11 +254,7 @@ export class VoiceInputController {
           transcriber.prepare({ signal: abortController.signal }),
         );
       } catch (error) {
-        // Swallow preparation failures from invalidated (e.g. lock-stolen)
-        // sessions; the newer session now owns the slot and drives the UI.
-        if (this.isCurrent(operationToken) && this.currentPhase() === "preparing") {
-          this.setError(preparationErrorMessage(error), "retry");
-        }
+        if (this.isCurrent(operationToken)) this.setError(preparationErrorMessage(error), "retry");
         return;
       }
       if (!this.isCurrent(operationToken)) return;
@@ -315,11 +279,12 @@ export class VoiceInputController {
       if (this.isCurrent(operationToken))
         this.setError("Could not start voice recording.", "retry");
     } finally {
-      clearTimeout(preparationTimeout);
-      if (this.isCurrent(operationToken) && this.state.phase === "error") {
-        await this.releaseResources();
-      } else if (!this.isCurrent(operationToken) && !this.finishing) {
-        await this.releaseResources();
+      if (sessionToken && this.sessionToken === sessionToken) {
+        if (this.isCurrent(operationToken) && this.state.phase === "error") {
+          await this.releaseResources();
+        } else if (!this.isCurrent(operationToken) && !this.finishing) {
+          await this.releaseResources();
+        }
       }
     }
   }
@@ -436,7 +401,7 @@ export class VoiceInputController {
           transcription.transcribe(recordingUri, { signal }),
         );
       } catch (error) {
-        if (this.isCurrent(operationToken) && this.currentPhase() === "transcribing") {
+        if (this.isCurrent(operationToken)) {
           this.setError(transcriptionErrorMessage(error), "retry");
         }
         return;
@@ -482,9 +447,7 @@ export class VoiceInputController {
     );
     try {
       await this.dependencies.recorder.stop();
-      this.rememberRecordingUri(this.dependencies.recorder.uri);
     } catch {
-      this.rememberRecordingUri(this.dependencies.recorder.uri);
     } finally {
       await this.releaseResources();
     }
@@ -492,14 +455,14 @@ export class VoiceInputController {
 
   private async releaseResources(): Promise<void> {
     this.rememberRecordingUri(this.recordingUri);
-    this.rememberRecordingUri(this.dependencies.recorder.uri);
+    try {
+      this.rememberRecordingUri(this.dependencies.recorder.uri);
+    } catch {}
     this.recordingUri = null;
     for (const uri of this.ownedRecordingUris) {
       try {
         this.dependencies.deleteRecording(uri);
-      } catch {
-        // The cache may already have removed a failed or interrupted recording.
-      }
+      } catch {}
     }
     this.ownedRecordingUris.clear();
     await this.releaseAudioSession();
@@ -519,26 +482,17 @@ export class VoiceInputController {
     try {
       await this.dependencies.releaseRecording();
       this.recordingConfigured = false;
-    } catch {
-      // Final cleanup retries if the prompt release before transcription fails.
-    }
+    } catch {}
   }
 
   private invalidateOperation(): void {
     this.operationToken += 1;
+    if (this.sessionToken) this.sessionToken.abandoned = true;
     this.transcriptionAbortController?.abort();
   }
 
   private isCurrent(operationToken: number): boolean {
     return operationToken === this.operationToken;
-  }
-
-  /**
-   * Await 之后的 phase 判断必须绕开 TS 对 `this.state` 的流窄化：会话可能已被
-   * 更新的操作接管（lock-stolen），窄化出的字面量并集在这个时点不可信。
-   */
-  private currentPhase(): VoiceInputState["phase"] {
-    return this.state.phase;
   }
 
   private setError(error: string, errorAction: VoiceInputState["errorAction"]): void {

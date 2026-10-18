@@ -1,19 +1,18 @@
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./runtime.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { type Atom } from "effect/unstable/reactivity";
-import { HttpClient } from "effect/unstable/http";
+import { type Atom } from "effect/reactivity";
+import { HttpClient } from "effect/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
-import { EnvironmentRegistry } from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
-import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./runtime.ts";
 
 const DEFAULT_SCHEDULE_TIMEOUT_MS = 10_000;
 
@@ -24,7 +23,7 @@ type ScheduleRequestContext = {
   readonly timeoutMs?: number;
 };
 
-type ScheduleCreateInput = {
+export type ScheduleCreateInput = {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
   readonly prompt: string;
@@ -43,7 +42,7 @@ const fetchEnvironmentSchedules = Effect.fn("fetchEnvironmentSchedules")(functio
     ...input,
     group: "schedules",
     method: "GET",
-    url: (base) => environmentEndpointUrl(base, "/api/schedules"),
+    url: (urls) => urls.list(),
     timeoutMs: input.timeoutMs ?? DEFAULT_SCHEDULE_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.list({ payload: { projectId: input.projectId }, headers }),
@@ -57,7 +56,7 @@ const createEnvironmentSchedule = Effect.fn("createEnvironmentSchedule")(functio
     ...input,
     group: "schedules",
     method: "POST",
-    url: (base) => environmentEndpointUrl(base, "/api/schedules"),
+    url: (urls) => urls.create(),
     timeoutMs: input.timeoutMs ?? DEFAULT_SCHEDULE_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.create({
@@ -77,26 +76,28 @@ const createEnvironmentSchedule = Effect.fn("createEnvironmentSchedule")(functio
   });
 });
 
-type ScheduleMutationInput = ScheduleRequestContext & {
+export type ScheduleMutationInput = {
   readonly projectId: ProjectId;
   readonly scheduleId: string;
 };
 
+type ScheduleMutationRequest = ScheduleRequestContext & ScheduleMutationInput;
+
 const mutateEnvironmentSchedule = Effect.fn("mutateEnvironmentSchedule")(function* (
-  input: ScheduleMutationInput & {
+  input: ScheduleMutationRequest & {
     readonly operation: "pause" | "resume" | "remove";
   },
 ) {
-  const suffix = input.operation === "remove" ? "" : `/${input.operation}`;
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "schedules",
     method: input.operation === "remove" ? "DELETE" : "POST",
-    url: (base) =>
-      environmentEndpointUrl(
-        base,
-        `/api/schedules/${encodeURIComponent(input.scheduleId)}${suffix}`,
-      ),
+    url: (urls) =>
+      input.operation === "pause"
+        ? urls.pause({ params: { scheduleId: input.scheduleId } })
+        : input.operation === "resume"
+          ? urls.resume({ params: { scheduleId: input.scheduleId } })
+          : urls.remove({ params: { scheduleId: input.scheduleId } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_SCHEDULE_TIMEOUT_MS,
     request: ({ client, headers }) =>
       input.operation === "pause"
@@ -119,13 +120,13 @@ const mutateEnvironmentSchedule = Effect.fn("mutateEnvironmentSchedule")(functio
   });
 });
 
-const pauseEnvironmentSchedule = (input: ScheduleMutationInput) =>
+const pauseEnvironmentSchedule = (input: ScheduleMutationRequest) =>
   mutateEnvironmentSchedule({ ...input, operation: "pause" });
 
-const resumeEnvironmentSchedule = (input: ScheduleMutationInput) =>
+const resumeEnvironmentSchedule = (input: ScheduleMutationRequest) =>
   mutateEnvironmentSchedule({ ...input, operation: "resume" });
 
-const removeEnvironmentSchedule = (input: ScheduleMutationInput) =>
+const removeEnvironmentSchedule = (input: ScheduleMutationRequest) =>
   mutateEnvironmentSchedule({ ...input, operation: "remove" });
 
 export type FetchEnvironmentScheduleError = RemoteEnvironmentRequestError;
@@ -143,31 +144,6 @@ export function createEnvironmentScheduleAtoms<R, E>(
       return yield* request(prepared.value);
     });
 
-  const list = createEnvironmentQueryAtomFamily(runtime, {
-    label: "environment-data:schedules:list",
-    staleTimeMs: 15_000,
-    refreshIntervalMs: 15_000,
-    execute: (input: { readonly projectId: ProjectId }) =>
-      withPreparedConnection((prepared) =>
-        Effect.gen(function* () {
-          const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-          const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-          return yield* fetchEnvironmentSchedules({
-            prepared,
-            projectId: input.projectId,
-            signer,
-            remoteAuthorization,
-          });
-        }),
-      ),
-  });
-
-  const refreshProject = (
-    registry: { refresh: (atom: ReturnType<typeof list>) => void },
-    environmentId: EnvironmentId,
-    projectId: ProjectId,
-  ) => Effect.sync(() => registry.refresh(list({ environmentId, input: { projectId } })));
-
   const withRequestContext = <A, E2, R2>(
     request: (context: ScheduleRequestContext) => Effect.Effect<A, E2, R2>,
   ) =>
@@ -178,6 +154,20 @@ export function createEnvironmentScheduleAtoms<R, E>(
         return yield* request({ prepared, signer, remoteAuthorization });
       }),
     );
+
+  const list = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-data:schedules:list",
+    staleTimeMs: 15_000,
+    refreshIntervalMs: 15_000,
+    execute: (input: { readonly projectId: ProjectId }) =>
+      withRequestContext((context) => fetchEnvironmentSchedules({ ...context, ...input })),
+  });
+
+  const refreshProject = (
+    registry: { refresh: (atom: ReturnType<typeof list>) => void },
+    environmentId: EnvironmentId,
+    projectId: ProjectId,
+  ) => Effect.sync(() => registry.refresh(list({ environmentId, input: { projectId } })));
 
   return {
     list,
@@ -190,33 +180,21 @@ export function createEnvironmentScheduleAtoms<R, E>(
     }),
     pause: createEnvironmentCommand(runtime, {
       label: "environment-data:schedules:pause",
-      execute: (
-        input: Omit<ScheduleMutationInput, keyof ScheduleRequestContext>,
-        registry,
-        environmentId,
-      ) =>
+      execute: (input: ScheduleMutationInput, registry, environmentId) =>
         withRequestContext((context) => pauseEnvironmentSchedule({ ...context, ...input })).pipe(
           Effect.tap(() => refreshProject(registry, environmentId, input.projectId)),
         ),
     }),
     resume: createEnvironmentCommand(runtime, {
       label: "environment-data:schedules:resume",
-      execute: (
-        input: Omit<ScheduleMutationInput, keyof ScheduleRequestContext>,
-        registry,
-        environmentId,
-      ) =>
+      execute: (input: ScheduleMutationInput, registry, environmentId) =>
         withRequestContext((context) => resumeEnvironmentSchedule({ ...context, ...input })).pipe(
           Effect.tap(() => refreshProject(registry, environmentId, input.projectId)),
         ),
     }),
     remove: createEnvironmentCommand(runtime, {
       label: "environment-data:schedules:remove",
-      execute: (
-        input: Omit<ScheduleMutationInput, keyof ScheduleRequestContext>,
-        registry,
-        environmentId,
-      ) =>
+      execute: (input: ScheduleMutationInput, registry, environmentId) =>
         withRequestContext((context) => removeEnvironmentSchedule({ ...context, ...input })).pipe(
           Effect.tap(() => refreshProject(registry, environmentId, input.projectId)),
         ),

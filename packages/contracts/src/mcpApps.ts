@@ -1,11 +1,14 @@
 import * as Schema from "effect/Schema";
 
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 
-/** The completed MCP tool call that produced an app. The server resolves its owner. */
+/**
+ * Each names the tool call that produced the app; the environment resolves the
+ * app's server from that item, so an app can only reach the server it came from.
+ */
 const McpAppTarget = {
   threadId: ThreadId,
-  toolCallId: TrimmedNonEmptyString,
+  itemId: TurnItemId,
 };
 
 export const McpAppCallToolInput = Schema.Struct({
@@ -48,6 +51,9 @@ export const McpAppReadResourceResult = Schema.Struct({
 });
 export type McpAppReadResourceResult = typeof McpAppReadResourceResult.Type;
 
+/**
+ * Each update replaces the app's previous one; no content clears it.
+ */
 export const McpAppUpdateModelContextInput = Schema.Struct({
   ...McpAppTarget,
   conversationThreadId: ThreadId,

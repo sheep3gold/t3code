@@ -9,7 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { useCallback } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";

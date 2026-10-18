@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   createAppUpdateDeferral,
@@ -69,14 +69,6 @@ function makeAvailableUpdateClient(overrides: Partial<AppUpdateClient> = {}): Ap
     ...overrides,
   });
 }
-
-beforeEach(() => {
-  vi.stubGlobal("__DEV__", false);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe("runAppUpdateCheck", () => {
   it("does nothing while running from the Metro development server", async () => {
@@ -174,7 +166,6 @@ describe("runAppUpdateCheck", () => {
 
     await runAppUpdateCheck({ client, deferral, environment });
 
-    // A failed deferred reload resets the deferral before the stay fires.
     deferral.pendingInstall = false;
     foregroundStayCallbacks[0]!();
 
@@ -192,15 +183,12 @@ describe("runAppUpdateCheck", () => {
 
     await runAppUpdateCheck({ client, deferral, environment });
     expect(backgroundCallbacks).toHaveLength(1);
-    // Arming may fire for an already-backgrounded app…
     expect(vi.mocked(environment.onNextBackground).mock.calls[0]![1]).toBe(true);
 
     backgroundCallbacks[0]!();
     await vi.waitFor(() => expect(backgroundCallbacks).toHaveLength(2));
     expect(client.reloadAsync).not.toHaveBeenCalled();
     expect(deferral.pendingInstall).toBe(true);
-    // …but a re-arm must wait for a fresh transition, or an unsafe attempt
-    // would retry in a tight loop within the same background session.
     expect(vi.mocked(environment.onNextBackground).mock.calls[1]![1]).toBe(false);
 
     safe.mockResolvedValue(true);
@@ -277,8 +265,6 @@ describe("runAppUpdateCheck", () => {
     resolveCheck({ isAvailable: true, isRollBackToEmbedded: false });
     await Promise.all([backgroundCheck, manualCheck]);
 
-    // The coalesced background check deferred the download, but the manual
-    // caller explicitly asked to install, so the restart happens anyway.
     expect(client.checkForUpdateAsync).toHaveBeenCalledOnce();
     expect(client.reloadAsync).toHaveBeenCalledOnce();
   });
@@ -298,8 +284,6 @@ describe("runAppUpdateCheck", () => {
     await runAppUpdateCheck({ client, deferral, environment });
     flushPendingWrites.mockReturnValue(blockedFlush);
 
-    // The deferred install starts and blocks on its flush; the foreground
-    // prompt firing in that window must not begin a second restart.
     backgroundCallbacks[0]!();
     await vi.waitFor(() => expect(flushPendingWrites).toHaveBeenCalledOnce());
     foregroundStayCallbacks[0]!();
@@ -367,8 +351,6 @@ describe("runAppUpdateCheck", () => {
 
     await runAppUpdateCheck({ client, deferral, environment });
 
-    // Nobody asked for this restart, so it must not discard the state it
-    // failed to land; the rollback waits armed for the next backgrounding.
     expect(client.reloadAsync).not.toHaveBeenCalled();
     expect(deferral.pendingInstall).toBe(true);
     expect(backgroundCallbacks).toHaveLength(1);
@@ -415,7 +397,6 @@ describe("runAppUpdateCheck", () => {
     await runAppUpdateCheck({ client, deferral: createAppUpdateDeferral(), environment });
 
     expect(client.fetchUpdateAsync).toHaveBeenCalledOnce();
-    // A rollback pulls a broken bundle, so it never waits on the prompt.
     expect(environment.confirmInstallNow).not.toHaveBeenCalled();
     expect(client.reloadAsync).toHaveBeenCalledOnce();
   });
