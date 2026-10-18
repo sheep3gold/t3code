@@ -1,0 +1,6 @@
+[Unit]
+Description=Keep t3code.service the only T3 server and the t3 launcher interceptor installed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/t3code/deploy/host/t3code-portwatch.sh

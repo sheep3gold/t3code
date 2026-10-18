@@ -1,0 +1,25 @@
+# t3code 在 124 本机由 release-hub 自动构建和发布。
+# rsync 只把 release 源码同步到 /opt/t3code；真正的 pnpm 构建、dist 原子更新、
+# 用户级 t3code.service 重启与失败回滚由 t3code-deploy oneshot 完成。
+deploy:
+  kind: rsync
+  host: local
+  workdir: /opt/t3code
+  unit: t3code-deploy
+  units:
+    - deploy/t3code-deploy.service
+  exclude:
+    - ".git/"
+    - "node_modules/"
+    - ".generated/"
+    - "apps/web/dist/"
+    - "apps/server/dist/"
+  backup_exclude:
+    - "node_modules/"
+    - ".generated/"
+    - "apps/web/dist/"
+    - "apps/server/dist/"
+  health:
+    kind: http
+    url: http://127.0.0.1:3773/
+    expect_status: 200

@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically reclaim port 3773 for t3code.service
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=10s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
