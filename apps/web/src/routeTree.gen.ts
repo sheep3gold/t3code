@@ -9,16 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WorkflowsRouteImport } from './routes/workflows'
 import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SchedulesRouteImport } from './routes/schedules'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as MemoryRouteImport } from './routes/memory'
 import { Route as ConnectAgentRouteImport } from './routes/connect-agent'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
-import { Route as WorkflowsRouteImport } from './routes/workflows'
-import { Route as SchedulesRouteImport } from './routes/schedules'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
@@ -41,6 +41,11 @@ import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
+const WorkflowsRoute = WorkflowsRouteImport.update({
+  id: '/workflows',
+  path: '/workflows',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
   path: '/welcome',
@@ -54,6 +59,11 @@ const UsageRoute = UsageRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SchedulesRoute = SchedulesRouteImport.update({
+  id: '/schedules',
+  path: '/schedules',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PairRoute = PairRouteImport.update({
@@ -79,16 +89,6 @@ const ConnectRoute = ConnectRouteImport.update({
 const ArtifactsRoute = ArtifactsRouteImport.update({
   id: '/artifacts',
   path: '/artifacts',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const WorkflowsRoute = WorkflowsRouteImport.update({
-  id: '/workflows',
-  path: '/workflows',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SchedulesRoute = SchedulesRouteImport.update({
-  id: '/schedules',
-  path: '/schedules',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
@@ -201,15 +201,15 @@ const ChatEnvironmentIdThreadIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/artifacts': typeof ArtifactsRoute
-  '/workflows': typeof WorkflowsRoute
-  '/schedules': typeof SchedulesRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
   '/memory': typeof MemoryRoute
   '/pair': typeof PairRoute
+  '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
+  '/workflows': typeof WorkflowsRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -232,15 +232,15 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/artifacts': typeof ArtifactsRoute
-  '/workflows': typeof WorkflowsRoute
-  '/schedules': typeof SchedulesRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
   '/memory': typeof MemoryRoute
   '/pair': typeof PairRoute
+  '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
+  '/workflows': typeof WorkflowsRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -266,15 +266,15 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
   '/artifacts': typeof ArtifactsRoute
-  '/workflows': typeof WorkflowsRoute
-  '/schedules': typeof SchedulesRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
   '/memory': typeof MemoryRoute
   '/pair': typeof PairRoute
+  '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
+  '/workflows': typeof WorkflowsRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -301,15 +301,15 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/artifacts'
-    | '/workflows'
-    | '/schedules'
     | '/connect'
     | '/connect-agent'
     | '/memory'
     | '/pair'
+    | '/schedules'
     | '/settings'
     | '/usage'
     | '/welcome'
+    | '/workflows'
     | '/new'
     | '/pull-requests'
     | '/projects/$projectKey'
@@ -332,15 +332,15 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/artifacts'
-    | '/workflows'
-    | '/schedules'
     | '/connect'
     | '/connect-agent'
     | '/memory'
     | '/pair'
+    | '/schedules'
     | '/settings'
     | '/usage'
     | '/welcome'
+    | '/workflows'
     | '/new'
     | '/pull-requests'
     | '/projects/$projectKey'
@@ -365,15 +365,15 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_chat'
     | '/artifacts'
-    | '/workflows'
-    | '/schedules'
     | '/connect'
     | '/connect-agent'
     | '/memory'
     | '/pair'
+    | '/schedules'
     | '/settings'
     | '/usage'
     | '/welcome'
+    | '/workflows'
     | '/_chat/new'
     | '/_chat/pull-requests'
     | '/projects/$projectKey'
@@ -403,14 +403,23 @@ export interface RootRouteChildren {
   ConnectAgentRoute: typeof ConnectAgentRoute
   MemoryRoute: typeof MemoryRoute
   PairRoute: typeof PairRoute
+  SchedulesRoute: typeof SchedulesRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
+  WorkflowsRoute: typeof WorkflowsRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/workflows': {
+      id: '/workflows'
+      path: '/workflows'
+      fullPath: '/workflows'
+      preLoaderRoute: typeof WorkflowsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/welcome': {
       id: '/welcome'
       path: '/welcome'
@@ -430,6 +439,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/schedules': {
+      id: '/schedules'
+      path: '/schedules'
+      fullPath: '/schedules'
+      preLoaderRoute: typeof SchedulesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pair': {
@@ -465,20 +481,6 @@ declare module '@tanstack/react-router' {
       path: '/artifacts'
       fullPath: '/artifacts'
       preLoaderRoute: typeof ArtifactsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/workflows': {
-      id: '/workflows'
-      path: '/workflows'
-      fullPath: '/workflows'
-      preLoaderRoute: typeof WorkflowsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/schedules': {
-      id: '/schedules'
-      path: '/schedules'
-      fullPath: '/schedules'
-      preLoaderRoute: typeof SchedulesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -694,9 +696,11 @@ const rootRouteChildren: RootRouteChildren = {
   ConnectAgentRoute: ConnectAgentRoute,
   MemoryRoute: MemoryRoute,
   PairRoute: PairRoute,
+  SchedulesRoute: SchedulesRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,
+  WorkflowsRoute: WorkflowsRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
 }
 export const routeTree = rootRouteImport
