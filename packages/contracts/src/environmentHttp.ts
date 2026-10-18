@@ -98,6 +98,10 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_memory",
   "invalid_ledger",
   "invalid_artifact",
+  "invalid_schedule",
+  "invalid_workflow",
+  "workflow_not_retryable",
+  "workflow_not_restartable",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -229,6 +233,8 @@ export const EnvironmentResourceNotFoundReason = Schema.Literals([
   "thread_not_found",
   "artifact_not_found",
   "memory_not_found",
+  "schedule_not_found",
+  "workflow_not_found",
 ]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
@@ -945,6 +951,217 @@ class EnvironmentArtifactsHttpApi extends HttpApiGroup.make("artifacts")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export const EnvironmentThreadSchedule = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  threadTitle: Schema.String,
+  prompt: Schema.String,
+  scheduleKind: Schema.Literals(["once", "interval", "cron"]),
+  intervalSeconds: Schema.NullOr(Schema.Number),
+  cronExpression: Schema.NullOr(Schema.String),
+  timezone: Schema.NullOr(Schema.String),
+  skipDates: Schema.Array(Schema.String),
+  nextRunAt: Schema.String,
+  status: Schema.Literals(["active", "paused", "completed"]),
+  lastRunAt: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type EnvironmentThreadSchedule = typeof EnvironmentThreadSchedule.Type;
+
+// Schedules/workflows handlers reject malformed payloads with the invalid-request
+// error, which the shared thread-snapshot union deliberately omits.
+const EnvironmentScheduleWorkflowErrors = [
+  EnvironmentRequestInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentResourceNotFoundError,
+  EnvironmentInternalError,
+] as const;
+
+const EnvironmentScheduleProjectQuery = { projectId: ProjectId };
+const EnvironmentScheduleProjectPayload = Schema.Struct({ projectId: ProjectId });
+const EnvironmentScheduleParams = Schema.Struct({ scheduleId: TrimmedNonEmptyString });
+const EnvironmentScheduleCreatePayload = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  prompt: TrimmedNonEmptyString,
+  at: Schema.optional(TrimmedNonEmptyString),
+  delaySeconds: Schema.optional(
+    Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+  everySeconds: Schema.optional(
+    Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+  cronExpression: Schema.optional(TrimmedNonEmptyString),
+  timezone: Schema.optional(TrimmedNonEmptyString),
+  skipDates: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+
+class EnvironmentSchedulesHttpApi extends HttpApiGroup.make("schedules")
+  .add(
+    HttpApiEndpoint.get("list", "/api/schedules", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentScheduleProjectQuery,
+      success: Schema.Struct({ schedules: Schema.Array(EnvironmentThreadSchedule) }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("create", "/api/schedules", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentScheduleCreatePayload,
+      success: EnvironmentThreadSchedule,
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("pause", "/api/schedules/:scheduleId/pause", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentScheduleParams,
+      payload: EnvironmentScheduleProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("resume", "/api/schedules/:scheduleId/resume", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentScheduleParams,
+      payload: EnvironmentScheduleProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete("remove", "/api/schedules/:scheduleId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentScheduleParams,
+      payload: EnvironmentScheduleProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+export const EnvironmentWorkflowStep = Schema.Struct({
+  index: Schema.Number,
+  title: Schema.String,
+  prompt: Schema.String,
+  dependsOn: Schema.Array(Schema.Number),
+  status: Schema.Literals(["pending", "running", "completed", "failed"]),
+  attempt: Schema.Number,
+  result: Schema.NullOr(Schema.String),
+  childThreadId: Schema.NullOr(ThreadId),
+  worktreePath: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
+  startedAt: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(Schema.String),
+});
+export type EnvironmentWorkflowStep = typeof EnvironmentWorkflowStep.Type;
+
+export const EnvironmentThreadWorkflow = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  threadTitle: Schema.String,
+  name: Schema.String,
+  status: Schema.Literals(["running", "paused", "completed", "failed", "cancelled"]),
+  currentStep: Schema.Number,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  steps: Schema.Array(EnvironmentWorkflowStep),
+});
+export type EnvironmentThreadWorkflow = typeof EnvironmentThreadWorkflow.Type;
+
+const EnvironmentWorkflowProjectQuery = { projectId: ProjectId };
+const EnvironmentWorkflowProjectPayload = Schema.Struct({ projectId: ProjectId });
+const EnvironmentWorkflowParams = Schema.Struct({ workflowId: TrimmedNonEmptyString });
+const EnvironmentWorkflowStepInput = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  prompt: TrimmedNonEmptyString,
+  dependsOn: Schema.optional(Schema.Array(Schema.Int)),
+});
+const EnvironmentWorkflowCreatePayload = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  name: TrimmedNonEmptyString,
+  steps: Schema.Array(EnvironmentWorkflowStepInput),
+});
+const EnvironmentWorkflowRestartPayload = Schema.Struct({
+  projectId: ProjectId,
+  fromStep: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+});
+
+class EnvironmentWorkflowsHttpApi extends HttpApiGroup.make("workflows")
+  .add(
+    HttpApiEndpoint.get("list", "/api/workflows", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentWorkflowProjectQuery,
+      success: Schema.Struct({ workflows: Schema.Array(EnvironmentThreadWorkflow) }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("get", "/api/workflows/:workflowId", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectQuery,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("create", "/api/workflows", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentWorkflowCreatePayload,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("pause", "/api/workflows/:workflowId/pause", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("resume", "/api/workflows/:workflowId/resume", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("retry", "/api/workflows/:workflowId/retry", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("restart", "/api/workflows/:workflowId/restart", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowRestartPayload,
+      success: EnvironmentThreadWorkflow,
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("cancel", "/api/workflows/:workflowId/cancel", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentWorkflowParams,
+      payload: EnvironmentWorkflowProjectPayload,
+      success: Schema.Struct({ changed: Schema.Boolean }),
+      error: EnvironmentScheduleWorkflowErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 class EnvironmentMemoryLedgerHttpApi extends HttpApiGroup.make("memoryLedger")
   .add(
     HttpApiEndpoint.get("listMemories", "/api/memories", {
@@ -1018,4 +1235,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentConnectHttpApi)
   .add(EnvironmentWebhooksHttpApi)
   .add(EnvironmentMemoryLedgerHttpApi)
-  .add(EnvironmentArtifactsHttpApi) {}
+  .add(EnvironmentArtifactsHttpApi)
+  .add(EnvironmentSchedulesHttpApi)
+  .add(EnvironmentWorkflowsHttpApi) {}

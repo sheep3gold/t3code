@@ -68,6 +68,8 @@ import * as TranslationHttp from "./fork/translate/http.ts";
 import * as ForkUsageHttp from "./fork/usage/http.ts";
 import * as MemoryLedgerHttp from "./fork/memoryLedger/http.ts";
 import * as ArtifactsHttp from "./fork/artifacts/http.ts";
+import * as SchedulesHttp from "./fork/schedules/http.ts";
+import * as WorkflowsHttp from "./fork/workflows/http.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -697,6 +699,18 @@ const layerMakeRoutes = Layer.mergeAll(
         ),
       ),
       Layer.provide(ArtifactsHttp.layer.pipe(Layer.provide(ForkLayer.layerForkRepositories))),
+      Layer.provide(
+        SchedulesHttp.layer.pipe(
+          Layer.provide(ProjectionStoreV2.layer),
+          Layer.provide(ForkLayer.layerForkRepositories),
+        ),
+      ),
+      Layer.provide(
+        WorkflowsHttp.layer.pipe(
+          Layer.provide(ProjectionStoreV2.layer),
+          Layer.provide(ForkLayer.layerForkRepositories),
+        ),
+      ),
       Layer.provide(ProjectHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
