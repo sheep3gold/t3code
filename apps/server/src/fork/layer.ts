@@ -9,13 +9,17 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as ThreadLedgerRepository from "./ledger/ThreadLedger.ts";
 import * as AgentMemories from "./memory/AgentMemories.ts";
 import { startMemorySync } from "./memory/MemorySync.ts";
 import { startMsgHubNotifications } from "./notifications/MsgHubNotificationReactor.ts";
 import * as ForkTurnContext from "./turnContext/ForkTurnContext.ts";
 
 /** Needs only SqlClient; merged next to upstream persistence. */
-export const layerForkRepositories = AgentMemories.layer;
+export const layerForkRepositories = Layer.mergeAll(
+  AgentMemories.layer,
+  ThreadLedgerRepository.layer,
+);
 
 /** Provided to the V2 runtime so turn start can read it. */
 export const layerForkRuntime = ForkTurnContext.layer;

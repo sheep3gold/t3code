@@ -4,6 +4,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as ThreadLedger from "../ledger/ThreadLedgerToolkit.ts";
+import * as ThreadLedgerPersistence from "../ledger/ThreadLedger.ts";
 import { readAgentLessonContext } from "../memory/AgentMemory.ts";
 import * as AgentMemories from "../memory/AgentMemories.ts";
 import * as MemsearchMirror from "../memory/MemsearchMirror.ts";
@@ -41,6 +43,7 @@ export const layer = Layer.effect(
   ForkTurnContext,
   Effect.gen(function* () {
     const memories = yield* AgentMemories.AgentMemoryRepository;
+    const ledger = yield* ThreadLedgerPersistence.ThreadLedgerRepository;
     return {
       read: (input) =>
         Effect.all(
@@ -48,6 +51,10 @@ export const layer = Layer.effect(
             readAgentLessonContext(input.projectId).pipe(
               Effect.provideService(AgentMemories.AgentMemoryRepository, memories),
               orEmpty("saved lessons", input),
+            ),
+            ThreadLedger.readThreadLedgerContext(input.threadId).pipe(
+              Effect.provideService(ThreadLedgerPersistence.ThreadLedgerRepository, ledger),
+              orEmpty("thread ledger", input),
             ),
             MemsearchMirror.relevantFactsContext(input.userText, input.projectId),
           ],

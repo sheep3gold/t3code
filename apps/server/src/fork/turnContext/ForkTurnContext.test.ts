@@ -6,11 +6,14 @@ import * as Layer from "effect/Layer";
 
 import { runMigrations } from "../../persistence/Migrations.ts";
 import { runForkMigrations } from "../persistence/ForkMigrations.ts";
+import * as ThreadLedger from "../ledger/ThreadLedger.ts";
 import * as AgentMemories from "../memory/AgentMemories.ts";
 import * as ForkTurnContext from "./ForkTurnContext.ts";
 
 const layerDatabase = NodeSqliteClient.layer({ filename: ":memory:" });
-const layerRepository = AgentMemories.layer.pipe(Layer.provideMerge(layerDatabase));
+const layerRepository = Layer.mergeAll(AgentMemories.layer, ThreadLedger.layer).pipe(
+  Layer.provideMerge(layerDatabase),
+);
 const layerContext = ForkTurnContext.layer.pipe(Layer.provideMerge(layerRepository));
 
 it.effect("prepends saved lessons for the thread's project", () =>

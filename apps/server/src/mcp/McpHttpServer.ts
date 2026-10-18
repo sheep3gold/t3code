@@ -58,6 +58,7 @@ import {
 } from "./toolkits/device/tools.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
+import * as ThreadLedger from "../fork/ledger/ThreadLedgerToolkit.ts";
 import * as AgentMemory from "../fork/memory/AgentMemory.ts";
 import * as AgentNotification from "../fork/notifications/AgentNotification.ts";
 
@@ -842,6 +843,7 @@ const layerForkToolkits = Layer.mergeAll(
     AgentNotification.AgentNotificationToolkitHandlersLive,
   ),
   toolkitRegistration(AgentMemory.AgentMemoryToolkit, AgentMemory.AgentMemoryHandlersLive),
+  toolkitRegistration(ThreadLedger.ThreadLedgerToolkit, ThreadLedger.ThreadLedgerHandlersLive),
 );
 
 export const layer = Layer.mergeAll(
