@@ -65,6 +65,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as ForkLayer from "./fork/layer.ts";
 import * as TranslationHttp from "./fork/translate/http.ts";
+import * as ForkUsageHttp from "./fork/usage/http.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -679,6 +680,7 @@ const layerCommandReadiness = HttpRouter.middleware(
 
 const layerMakeRoutes = Layer.mergeAll(
   TranslationHttp.layer,
+  ForkUsageHttp.layer,
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(AuthHttp.layer),
