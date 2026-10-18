@@ -124,6 +124,10 @@ import {
 } from "./features/settings/SettingsOpenSourceLicensesRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
 import { SettingsProjectOverviewRouteScreen } from "./features/settings/SettingsProjectOverviewRouteScreen";
+import {
+  SettingsArtifactDetailRouteScreen,
+  SettingsArtifactsRouteScreen,
+} from "./features/artifacts/ArtifactLibraryRouteScreens";
 import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
@@ -409,6 +413,16 @@ const SettingsContentStack = createV5SheetStackNavigator({
       options: {
         title: "Usage",
       },
+    }),
+    SettingsArtifacts: createNativeStackScreen({
+      screen: SettingsArtifactsRouteScreen,
+      linking: "artifacts",
+      options: { title: "Artifacts" },
+    }),
+    SettingsArtifactDetail: createNativeStackScreen({
+      screen: SettingsArtifactDetailRouteScreen,
+      linking: "artifacts/:slug",
+      options: { title: "Artifact" },
     }),
   },
 });
