@@ -476,6 +476,9 @@ export const WS_METHODS = {
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverSkillRead: "server.skillRead",
+  serverSkillUpsert: "server.skillUpsert",
+  serverSkillDelete: "server.skillDelete",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverSearchAcpRegistry: "server.searchAcpRegistry",
   serverPrepareAcpRegistryAgent: "server.prepareAcpRegistryAgent",
@@ -759,6 +762,67 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Skill file editing for Claude instances. The server reads and writes the
+ * `SKILL.md` under `<claude configDir>/skills/<name>/`; non-Claude drivers
+ * have no supported writable skill directory.
+ */
+const ServerSkillReadInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  name: TrimmedNonEmptyString,
+});
+
+const ServerSkillDocument = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  /** Markdown body below the frontmatter. */
+  body: Schema.String,
+  /** Absolute SKILL.md path on the server's filesystem. */
+  path: TrimmedNonEmptyString,
+});
+
+const ServerSkillUpsertInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  /** Directory name under <configDir>/skills; lowercase slug. */
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  body: Schema.String,
+  /** Set when renaming: the previous directory to move after writing. */
+  previousName: Schema.optional(TrimmedNonEmptyString),
+});
+
+const ServerSkillDeleteInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  name: TrimmedNonEmptyString,
+});
+
+const ServerSkillFileError = Schema.Struct({
+  _tag: Schema.Literal("ServerSkillFileError"),
+  operation: Schema.Literals(["read", "upsert", "delete"]),
+  instanceId: ProviderInstanceId,
+  skillName: TrimmedNonEmptyString,
+  reason: TrimmedNonEmptyString,
+  cause: Schema.optional(Schema.Defect()),
+});
+
+const WsServerSkillReadRpc = Rpc.make(WS_METHODS.serverSkillRead, {
+  payload: ServerSkillReadInput,
+  success: ServerSkillDocument,
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSkillUpsertRpc = Rpc.make(WS_METHODS.serverSkillUpsert, {
+  payload: ServerSkillUpsertInput,
+  success: ServerSkillDocument,
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSkillDeleteRpc = Rpc.make(WS_METHODS.serverSkillDelete, {
+  payload: ServerSkillDeleteInput,
+  success: Schema.Struct({ deleted: Schema.Boolean }),
+  error: Schema.Union([ServerSkillFileError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1882,6 +1946,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetDatabaseStorageRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerSkillReadRpc,
+  WsServerSkillUpsertRpc,
+  WsServerSkillDeleteRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerSearchAcpRegistryRpc,
   WsServerPrepareAcpRegistryAgentRpc,
