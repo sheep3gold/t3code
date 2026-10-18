@@ -38,6 +38,8 @@ import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 import * as AgentMemories from "../../../fork/memory/AgentMemories.ts";
 import * as Artifacts from "../../../fork/artifacts/Artifacts.ts";
 import * as ThreadLedger from "../../../fork/ledger/ThreadLedger.ts";
+import * as ThreadSchedules from "../../../fork/schedules/ThreadSchedules.ts";
+import * as ThreadWorkflows from "../../../fork/workflows/ThreadWorkflows.ts";
 
 const layerStubServices = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
@@ -52,6 +54,8 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(AgentMemories.AgentMemoryRepository)({}),
   Layer.mock(ThreadLedger.ThreadLedgerRepository)({}),
   Layer.mock(Artifacts.ArtifactRepository)({}),
+  Layer.mock(ThreadSchedules.ThreadScheduleRepository)({}),
+  Layer.mock(ThreadWorkflows.ThreadWorkflowRepository)({}),
   Layer.mock(ProjectService.ProjectService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   ServerSettings.layerTest({}),
