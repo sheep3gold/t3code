@@ -102,7 +102,9 @@ rsync -a --delete "$SRC/apps/server/dist/" "$LIVE/apps/server/dist/"
 "$SRC/deploy/host/install-host.sh" all
 start_unit
 
-for _ in $(seq 1 90); do
+# 首次 V2 启动要把 1.5G 的 V1 state.sqlite 复制成 statev2.sqlite 并跑
+# 迁移+导入，远超常规启动时间；健康窗口按 20 分钟给。
+for _ in $(seq 1 600); do
   main_pid=$("${T3CTL[@]}" show -p MainPID --value t3code.service)
   if [ "$main_pid" != "0" ] && [ "$(port_owner)" = "$main_pid" ] &&
     curl --noproxy "*" -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$PORT/"; then
@@ -114,5 +116,5 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 
-echo "t3code did not become healthy within 180 seconds" >&2
+echo "t3code did not become healthy within 20 minutes" >&2
 false
