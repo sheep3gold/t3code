@@ -1,10 +1,9 @@
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 import { serializeAssistantCitation } from "./assistantCitations.ts";
-import { formatComposerContextReference } from "./composerContextReferences.ts";
-import { searchableMessageSegments, searchablePlanSegments } from "./threadFindText.ts";
+import { searchableMessageSegments } from "./threadFindText.ts";
 
-it("excludes review attachments upgraded to context reference links", () => {
+it("excludes review attachments rendered as context chips", () => {
   const text = [
     "Before **review**",
     '<review_comment sectionId="turn:2" sectionTitle="Turn 2" filePath="hidden.ts" startIndex="3" endIndex="14" rangeLabel="L4">',
@@ -31,19 +30,22 @@ it("excludes structured context chips without joining text across them", () => {
     searchableMessageSegments({
       role: "user",
       streaming: false,
-      hasContext: true,
       text: "before[hidden label](t3-context://v1/terminal/terminal_1)after",
+      context: { version: 1, records: [] },
     }),
   ).toEqual(["before", "after"]);
 });
 
-it("does not upgrade literal legacy tags when context is already structured", () => {
+it("does not upgrade literal legacy tags in messages with structured context", () => {
   const text =
     "<terminal_context>\n- Terminal 1 line 12:\n  12 | visible output\n</terminal_context>";
   expect(
-    searchableMessageSegments({ role: "user", streaming: false, hasContext: true, text })?.join(
-      "\n",
-    ),
+    searchableMessageSegments({
+      role: "user",
+      streaming: false,
+      text,
+      context: { version: 1, records: [] },
+    })?.join("\n"),
   ).toContain("visible output");
   expect(searchableMessageSegments({ role: "user", streaming: false, text })).toEqual([]);
 });
@@ -70,41 +72,70 @@ it("excludes repeated legacy attachments containing literal context tags", () =>
   ).toEqual(["Fix this"]);
 });
 
-it("keeps plain link targets literal", () => {
+const assistantSegments = (text: string, cwd?: string) =>
+  searchableMessageSegments({ role: "assistant", text, streaming: false }, cwd);
+
+it("searches displayed prose and file-chip labels without hidden paths", () => {
   expect(
-    searchableMessageSegments({
-      role: "assistant",
-      streaming: false,
-      text: "See [the docs](https://example.com/page) for details.",
-    }),
-  ).toEqual(["See the docs for details."]);
+    assistantSegments("[important description](/tmp/actual.ts). `/tmp/inline-example.ts:42`"),
+  ).toEqual(["important description actual.ts. inline-example.ts · L42"]);
+  expect(assistantSegments("[label](src/main.ts#L3C2)", "/workspace/repo")).toEqual([
+    "label main.ts · L3:C2",
+  ]);
+  expect(assistantSegments("[label](src/main.ts#L3C2)")).toEqual(["label"]);
+});
+
+it("includes the same parent suffixes for duplicate filenames as the renderer", () => {
+  expect(
+    assistantSegments(
+      "[first](src/main.ts) and `/workspace/repo/tests/main.ts:2`",
+      "/workspace/repo",
+    ),
+  ).toEqual(["first main.ts · repo/src and main.ts · repo/tests · L2"]);
+  expect(
+    assistantSegments(
+      "[first](src/main.ts) and `/workspace/repo/src/main.ts:2`",
+      "/workspace/repo",
+    ),
+  ).toEqual(["first main.ts and main.ts · L2"]);
+});
+
+it("keeps fence paths literal and indexes file-chip labels in user messages", () => {
+  expect(assistantSegments("```text\n/tmp/file.ts:42\n```")).toEqual(["/tmp/file.ts:42\n"]);
+  expect(
+    searchableMessageSegments({ role: "user", text: "`/tmp/file.ts:42`", streaming: false }),
+  ).toEqual(["file.ts · L42"]);
 });
 
 it("indexes nested disclosure summaries and bodies in rendered order", () => {
   expect(
-    searchableMessageSegments({
-      role: "assistant",
-      streaming: false,
-      text: "<details><summary>Outer</summary><p>first</p><details><summary>Inner</summary><p>second</p></details></details>",
-    }),
+    assistantSegments(
+      "<details><summary>Outer</summary><p>first</p><details><summary>Inner</summary><p>second</p></details></details>",
+    ),
   ).toEqual(["Outer", "first", "Inner", "second"]);
 });
 
-it("uses line breaks without splitting ordinary assistant prose", () => {
+it("uses Insight line breaks without splitting ordinary assistant prose", () => {
+  expect(assistantSegments("★ Insight ─────\nfirst line\nsecond line")).toEqual([
+    "★ Insight ─────",
+    " first line",
+    " second line",
+  ]);
+  expect(assistantSegments("first line\nsecond line")).toEqual(["first line second line"]);
+});
+
+it("indexes skill labels in prose but leaves links and code literal", () => {
   expect(
-    searchableMessageSegments({
-      role: "assistant",
-      streaming: false,
-      text: "★ Insight ─────\nfirst line\nsecond line",
-    }),
-  ).toEqual(["★ Insight ─────", " first line", " second line"]);
-  expect(
-    searchableMessageSegments({
-      role: "assistant",
-      streaming: false,
-      text: "first line\nsecond line",
-    }),
-  ).toEqual(["first line second line"]);
+    searchableMessageSegments(
+      {
+        role: "assistant",
+        streaming: false,
+        text: "Use $test-t3-app now.\n\n`$test-t3-app`\n\n[$test-t3-app](https://example.com)",
+      },
+      undefined,
+      [{ name: "test-t3-app", displayName: "T3 App Testing" }],
+    ),
+  ).toEqual(["Use T3 App Testing now.", "$test-t3-app", "$test-t3-app"]);
 });
 
 it("indexes the citation chip label instead of its link text", () => {
@@ -126,25 +157,5 @@ it("indexes the citation chip label instead of its link text", () => {
   const commented = serializeAssistantCitation({ ...citation, comment: "my note" });
   expect(searchableMessageSegments({ role: "user", text: commented, streaming: false })).toEqual([
     "my note",
-  ]);
-});
-
-it("renders the streaming placeholder and empty-response fallback", () => {
-  expect(searchableMessageSegments({ role: "assistant", streaming: true, text: "" })).toEqual([]);
-  expect(searchableMessageSegments({ role: "assistant", streaming: false, text: "" })).toEqual([
-    "(empty response)",
-  ]);
-});
-
-it("indexes plans as literal markdown segments", () => {
-  const reference = formatComposerContextReference({
-    kind: "terminal",
-    contextId: "legacy_terminal_1" as never,
-    label: "Terminal 1 line 12",
-  });
-  expect(searchablePlanSegments(`# Plan\n\nDo **the thing**.\n\n${reference}`)).toEqual([
-    "Plan",
-    "Do the thing.",
-    "Terminal 1 line 12",
   ]);
 });

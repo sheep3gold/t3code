@@ -1,19 +1,18 @@
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./runtime.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { type Atom } from "effect/unstable/reactivity";
-import { HttpClient } from "effect/unstable/http";
+import { type Atom } from "effect/reactivity";
+import { HttpClient } from "effect/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
-import { EnvironmentRegistry } from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
-import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./runtime.ts";
 
 const DEFAULT_WORKFLOW_TIMEOUT_MS = 10_000;
 
@@ -35,34 +34,33 @@ export type WorkflowCreateInput = {
   }>;
 };
 
-type WorkflowMutationInput = {
+export type WorkflowMutationInput = {
   readonly projectId: ProjectId;
   readonly workflowId: string;
 };
 
-export const fetchEnvironmentWorkflows = Effect.fn("fetchEnvironmentWorkflows")(function* (
+const fetchEnvironmentWorkflows = Effect.fn("fetchEnvironmentWorkflows")(function* (
   input: WorkflowRequestContext & { readonly projectId: ProjectId },
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "workflows",
     method: "GET",
-    url: (base) => environmentEndpointUrl(base, "/api/workflows"),
+    url: (urls) => urls.list(),
     timeoutMs: input.timeoutMs ?? DEFAULT_WORKFLOW_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.list({ payload: { projectId: input.projectId }, headers }),
   });
 });
 
-export const fetchEnvironmentWorkflow = Effect.fn("fetchEnvironmentWorkflow")(function* (
+const fetchEnvironmentWorkflow = Effect.fn("fetchEnvironmentWorkflow")(function* (
   input: WorkflowRequestContext & WorkflowMutationInput,
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "workflows",
     method: "GET",
-    url: (base) =>
-      environmentEndpointUrl(base, `/api/workflows/${encodeURIComponent(input.workflowId)}`),
+    url: (urls) => urls.get({ params: { workflowId: input.workflowId } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_WORKFLOW_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.get({
@@ -73,14 +71,14 @@ export const fetchEnvironmentWorkflow = Effect.fn("fetchEnvironmentWorkflow")(fu
   });
 });
 
-export const createEnvironmentWorkflow = Effect.fn("createEnvironmentWorkflow")(function* (
+const createEnvironmentWorkflow = Effect.fn("createEnvironmentWorkflow")(function* (
   input: WorkflowRequestContext & WorkflowCreateInput,
 ) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "workflows",
     method: "POST",
-    url: (base) => environmentEndpointUrl(base, "/api/workflows"),
+    url: (urls) => urls.create(),
     timeoutMs: input.timeoutMs ?? DEFAULT_WORKFLOW_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.create({
@@ -101,12 +99,16 @@ const changeEnvironmentWorkflowState = Effect.fn("changeEnvironmentWorkflowState
   input: WorkflowRequestContext &
     WorkflowMutationInput & { readonly operation: WorkflowStateOperation },
 ) {
-  const path = `/api/workflows/${encodeURIComponent(input.workflowId)}/${input.operation}`;
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "workflows",
     method: "POST",
-    url: (base) => environmentEndpointUrl(base, path),
+    url: (urls) =>
+      input.operation === "pause"
+        ? urls.pause({ params: { workflowId: input.workflowId } })
+        : input.operation === "resume"
+          ? urls.resume({ params: { workflowId: input.workflowId } })
+          : urls.cancel({ params: { workflowId: input.workflowId } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_WORKFLOW_TIMEOUT_MS,
     request: ({ client, headers }) =>
       input.operation === "pause"
@@ -136,8 +138,7 @@ const retryEnvironmentWorkflow = Effect.fn("retryEnvironmentWorkflow")(function*
     ...input,
     group: "workflows",
     method: "POST",
-    url: (base) =>
-      environmentEndpointUrl(base, `/api/workflows/${encodeURIComponent(input.workflowId)}/retry`),
+    url: (urls) => urls.retry({ params: { workflowId: input.workflowId } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_WORKFLOW_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.retry({
@@ -155,11 +156,7 @@ const restartEnvironmentWorkflow = Effect.fn("restartEnvironmentWorkflow")(funct
     ...input,
     group: "workflows",
     method: "POST",
-    url: (base) =>
-      environmentEndpointUrl(
-        base,
-        `/api/workflows/${encodeURIComponent(input.workflowId)}/restart`,
-      ),
+    url: (urls) => urls.restart({ params: { workflowId: input.workflowId } }),
     timeoutMs: input.timeoutMs ?? DEFAULT_WORKFLOW_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.restart({

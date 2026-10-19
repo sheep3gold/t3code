@@ -4,17 +4,20 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { type Atom } from "effect/unstable/reactivity";
-import { HttpClient } from "effect/unstable/http";
+import { type Atom } from "effect/reactivity";
+import { HttpClient } from "effect/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
+import {
+  makeForkTranslationHttpApiGroupClient,
+  type RemoteEnvironmentRequestError,
+} from "../rpc/http.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
-import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
-import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
+import { executeAuthenticatedForkHttpRequest } from "./environmentHttpAuth.ts";
 import { createEnvironmentCommand } from "./runtime.ts";
 
 // Translation streams a long upstream chat completion; the server can spend up
@@ -34,14 +37,13 @@ export type TranslateEnvironmentError = RemoteEnvironmentRequestError;
 export const translateEnvironmentTexts = Effect.fn("translateEnvironmentTexts")(function* (
   input: TranslateRequestContext & { readonly texts: ReadonlyArray<string> },
 ) {
-  return yield* executeAuthenticatedEnvironmentHttpRequest({
+  return yield* executeAuthenticatedForkHttpRequest({
     ...input,
-    group: "translate",
     method: "POST",
-    url: (base) => environmentEndpointUrl(base, "/api/translate"),
+    url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/translate"),
     timeoutMs: input.timeoutMs ?? DEFAULT_TRANSLATE_TIMEOUT_MS,
-    request: ({ client, headers }) =>
-      client.translate({ payload: { texts: [...input.texts] }, headers }),
+    groupClient: makeForkTranslationHttpApiGroupClient,
+    request: (client) => client.translate({ payload: { texts: [...input.texts] } }),
   });
 });
 

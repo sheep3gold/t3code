@@ -149,11 +149,6 @@ describe("project grouping toggle", () => {
     expect(projectGroupingModeFromToggle(false, "repository_path")).toBe("separate");
     expect(projectGroupingModeFromToggle(true, "repository_path")).toBe("repository_path");
   });
-
-  it("treats environment grouping as an enabled mode that round-trips", () => {
-    expect(isProjectGroupingEnabled("environment")).toBe(true);
-    expect(projectGroupingModeFromToggle(true, "environment")).toBe("environment");
-  });
 });
 
 describe("formatDiagnosticsDescription", () => {
@@ -195,57 +190,27 @@ describe("formatDiagnosticsDescription", () => {
 });
 
 describe("buildProviderInstanceUpdatePatch", () => {
-  it("promotes an edited default provider into providerInstances and resets the legacy provider", () => {
+  it("replaces one instance and keeps the others", () => {
     const instanceId = ProviderInstanceId.make("codex");
+    const otherId = ProviderInstanceId.make("codex_personal");
+    const other = {
+      driver: ProviderDriverKind.make("codex"),
+      config: { homePath: "/Users/example/.codex-personal" },
+    } satisfies ProviderInstanceConfig;
     const nextInstance = {
       driver: ProviderDriverKind.make("codex"),
       enabled: true,
-      config: {
-        binaryPath: "/opt/t3/codex",
-      },
+      config: { binaryPath: "/opt/t3/codex" },
     } satisfies ProviderInstanceConfig;
 
     const patch = buildProviderInstanceUpdatePatch({
-      settings: {
-        ...DEFAULT_SERVER_SETTINGS,
-        providers: {
-          ...DEFAULT_SERVER_SETTINGS.providers,
-          codex: {
-            ...DEFAULT_SERVER_SETTINGS.providers.codex,
-            binaryPath: "/legacy/codex",
-          },
-        },
-      },
+      settings: { providerInstances: { [otherId]: other } },
       instanceId,
       instance: nextInstance,
-      driver: ProviderDriverKind.make("codex"),
-      isDefault: true,
     });
 
-    expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
-    expect(patch.providers?.codex).toEqual(DEFAULT_SERVER_SETTINGS.providers.codex);
-  });
-
-  it("updates custom instances without touching legacy provider settings", () => {
-    const instanceId = ProviderInstanceId.make("codex_personal");
-    const nextInstance = {
-      driver: ProviderDriverKind.make("codex"),
-      enabled: true,
-      config: {
-        homePath: "/Users/example/.codex-personal",
-      },
-    } satisfies ProviderInstanceConfig;
-
-    const patch = buildProviderInstanceUpdatePatch({
-      settings: DEFAULT_SERVER_SETTINGS,
-      instanceId,
-      instance: nextInstance,
-      driver: ProviderDriverKind.make("codex"),
-      isDefault: false,
-    });
-
-    expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
-    expect(patch.providers).toBeUndefined();
+    expect(patch.providerInstances).toEqual({ [otherId]: other, [instanceId]: nextInstance });
+    expect(patch).not.toHaveProperty("textGenerationModelSelection");
   });
 });
 
@@ -255,14 +220,21 @@ describe("getChangedBrowserSettingLabels", () => {
   });
 
   it("treats a structurally equal viewport as unchanged", () => {
-    // The viewport is a tagged union, so identity comparison would report a
-    // freshly decoded copy of the default as dirty and offer to "restore" it.
     expect(
       getChangedBrowserSettingLabels({
         ...DEFAULT_UNIFIED_SETTINGS,
         browserDefaultViewport: { ...DEFAULT_UNIFIED_SETTINGS.browserDefaultViewport },
       }),
     ).toEqual([]);
+  });
+
+  it("counts a retained custom search URL so restore clears it", () => {
+    expect(
+      getChangedBrowserSettingLabels({
+        ...DEFAULT_UNIFIED_SETTINGS,
+        browserCustomSearchUrl: "https://search.example/?q=%s",
+      }),
+    ).toEqual(["Search engine"]);
   });
 
   it("labels each browser default that differs", () => {
@@ -277,6 +249,7 @@ describe("getChangedBrowserSettingLabels", () => {
         browserRecordingShowMousePresses: true,
         browserLinkTarget: "app",
         browserAutoShowFloatingPreview: !DEFAULT_UNIFIED_SETTINGS.browserAutoShowFloatingPreview,
+        pullRequestLinksOpenInApp: false,
       }),
     ).toEqual([
       "Browser viewport",
@@ -287,6 +260,7 @@ describe("getChangedBrowserSettingLabels", () => {
       "Recording mouse presses",
       "Open links in",
       "Floating preview",
+      "Open pull requests in T3 Code",
     ]);
   });
 });

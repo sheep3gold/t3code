@@ -60,10 +60,27 @@ start_unit() {
 }
 
 cd "$SRC"
+
+# pnpm 11 每次真正安装都会改写 pnpm-lock.yaml 里的可选平台元数据（删掉几行
+# libc:），而且默认每个 pnpm exec / pnpm run 之前都会先校验依赖、不一致就静默
+# 重装一遍。release-hub 下次 rsync 前会拿 /opt/t3code 和 git 比对，lockfile
+# 只要被改过就会被当成仓库外改动，拦下发布。这里两手都做：关掉 run 前的自动
+# 重装（install-dependencies.sh 已经显式装过），并在脚本任何方式退出时（成功、
+# 失败、回滚）把 lockfile 还原成仓库版本。
+export pnpm_config_verify_deps_before_run=false
+lock_snapshot=$(mktemp)
+cp "$SRC/pnpm-lock.yaml" "$lock_snapshot"
+restore_lock() {
+  cp "$lock_snapshot" "$SRC/pnpm-lock.yaml"
+  rm -f "$lock_snapshot"
+}
+trap restore_lock EXIT
+
 install -d -m 0755 "$GENERATED" "$BACKUP_ROOT"
 cp "$SRC"/deploy/spdx-cache/v3.28.0/*.json "$GENERATED"/
 
-pnpm install --frozen-lockfile --prefer-offline
+# CI=true：无 TTY 时 pnpm 需要它才肯清掉 modules 目录（node 版本变化触发）。
+bash "$SRC/deploy/host/install-dependencies.sh"
 # 类型检查不过就不发布：此时还没碰线上文件，release-hub 会停在失败，main 不前进。
 # 单线程：多线程的 tsgo 峰值约 5.3G，这台机器内存吃紧；单线程约 3.3G。
 (cd apps/server && pnpm exec tsc --noEmit --singleThreaded)
@@ -74,6 +91,8 @@ test -s "$SRC/apps/web/dist/index.html"
 test -s "$SRC/apps/server/dist/bin.mjs"
 test -d "$LIVE/apps/web/dist"
 test -d "$LIVE/apps/server/dist"
+
+node "$SRC/deploy/host/check-runtime-externals.mjs" "$SRC" "$LIVE"
 
 # Keep user-scope skill links in sync before touching the running installation.
 python3 "$SRC/deploy/host/install-parent-skills.py"
@@ -101,7 +120,9 @@ rsync -a --delete "$SRC/apps/server/dist/" "$LIVE/apps/server/dist/"
 "$SRC/deploy/host/install-host.sh" all
 start_unit
 
-for _ in $(seq 1 90); do
+# 首次 V2 启动要把 1.5G 的 V1 state.sqlite 复制成 statev2.sqlite 并跑
+# 迁移+导入，远超常规启动时间；健康窗口按 20 分钟给。
+for _ in $(seq 1 600); do
   main_pid=$("${T3CTL[@]}" show -p MainPID --value t3code.service)
   if [ "$main_pid" != "0" ] && [ "$(port_owner)" = "$main_pid" ] &&
     curl --noproxy "*" -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$PORT/"; then
@@ -113,5 +134,5 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 
-echo "t3code did not become healthy within 180 seconds" >&2
+echo "t3code did not become healthy within 20 minutes" >&2
 false

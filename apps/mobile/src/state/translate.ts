@@ -7,7 +7,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { useAtomCommand } from "./use-atom-command";
@@ -43,7 +43,9 @@ export function useThreadTranslation(environmentId: EnvironmentId): MessageTrans
   const [cache, setCache] = useState<ReadonlyMap<string, CacheEntry>>(new Map());
   const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(new Set());
   const cacheRef = useRef(cache);
-  cacheRef.current = cache;
+  useEffect(() => {
+    cacheRef.current = cache;
+  }, [cache]);
   const inFlightRef = useRef(new Set<string>());
 
   const translateMessage = useCallback(

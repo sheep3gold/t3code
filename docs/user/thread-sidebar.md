@@ -13,6 +13,24 @@ an existing worktree, use **New thread in this worktree** from the branch toolba
 When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
 
+### Start without a project
+
+A thread does not need a project. To start one without a project, click **or
+start without a project** under a new thread's heading, pick **No project** from
+the project menu in that heading or from **New thread in...** in the command
+palette, or press `mod+alt+n`. On mobile, pick **No project** from the project
+list. It starts on your current machine; before sending, pick another machine
+from the machine menu to move it there. To move a draft into a project, pick the
+project in the heading.
+
+Each thread without a project works in its own folder under `~/.t3/scratch` (the
+`scratch` folder of your T3 data directory), named after its date, the first words
+of its first message, and a short id, like
+`2026-09-25-convert-these-pngs-to-webp-a1b2c3d4`. Deleting a thread keeps its
+folder, so the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay hidden because
+these folders are not Git repositories. This is unavailable when the data
+directory itself sits inside a Git checkout.
+
 ### Start in the background
 
 In a desktop browser or the desktop app, press `Cmd+Enter` on macOS or `Ctrl+Enter`
@@ -32,7 +50,8 @@ Pin a thread from its menu to keep it above your active work.
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
 state, including its pinned position, and reopens an archived thread you were
-viewing. `mod+z` triggers the most recent Undo when no text field is focused; see
+viewing. Discarding an unsent draft from the sidebar works the same way: Undo brings
+back its text and attachments. `mod+z` triggers the most recent Undo when no text field is focused; see
 [Keybindings](./keybindings.md#commands-with-special-behavior).
 
 On web and desktop, you can also drag files from your computer onto any thread row:
@@ -66,7 +85,7 @@ spot where the thread will land. Drops into either section keep the position you
 mobile, open a thread's menu and choose **Arrange threads**. Drag a handle within or between
 **Pinned** and **Active** to reorder, pin, or unpin. Drop onto the **Settled** divider to
 settle a thread. The dragged card shows the action before you release it. Expand **Snoozed**
-or **Settled** to drag a parked thread back into either live section. Each drop saves; **Done** returns to the thread list.
+or **Settled** to drag a parked thread back into either live section. Each drop saves; close the sheet to return to the thread list.
 **Move up** and **Move down** are also available in the thread menu. The server
 saves the order, so it survives a refresh and appears on your other connected devices.
 
@@ -84,39 +103,26 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
-## Retry interrupted work
+To generate a fresh title from the conversation, open a thread's menu and choose
+**Regenerate title**. The action is unavailable while title generation is in progress
+or when the connected environment needs a server update.
 
-When a provider reports a recoverable connection or process failure, the environment retries the
-thread up to three times with short backoff. It continues from the conversation's last confirmed
-step instead of resending attachments or assuming unfinished work is safe to repeat. Normal stops,
-pending approvals, and permanent provider errors do not trigger automatic retries.
+Agents connected through T3 Code can use the same server-owned metadata workflow to
+rename a thread, regenerate its title, or link and unlink a pull request. These changes
+appear on web, desktop, and mobile without requiring the originating browser to remain
+open.
 
-A failed or interrupted thread shows **Retry** beside its error on web, desktop, and mobile. Retry
-starts a visible follow-up turn asking the agent to inspect what already completed before it
-continues. T3 Code does not call a quiet thread stuck just because it produced no text for a while:
-long builds and tools can legitimately stay silent, so recovery requires an explicit provider exit
-or error signal.
+### Fold working threads (beta)
 
-## Schedule agent work
+Turn on **Settings → General → Working section (beta)** on web and desktop, or **Settings →
+Thread behavior → Working section** on iOS and Android, to move threads that are working or
+monitoring into a collapsed **Working** section below the active list. A thread returns to the top
+of the active list when it finishes, fails, or needs an approval or answer. The Working section
+lists the thread you last sent work to first. Pinned threads stay in the pinned section. Each
+device keeps its own choice.
 
-Agents can use `schedule_thread_task` to run a prompt in the current thread at a future time or on
-a recurring interval. Schedules live on the environment server, survive restarts, and continue when
-web, desktop, and mobile clients are closed. Use `list_thread_schedules`,
-`pause_thread_schedule`, `resume_thread_schedule`, or `delete_thread_schedule` to manage them.
-
-A scheduled run never overlaps an active turn or a pending approval or question; the server defers
-it and tries again. After downtime, a recurring schedule runs once and advances to the next future
-slot instead of replaying every missed interval. One-shot schedules remain visible as completed
-after they run.
-
-Agents can create a sequential multi-step workflow with `workflow_start`. Each step runs as its own
-turn and must finish with `workflow_complete_step` or `workflow_fail_step`; the next pending step
-starts only after the thread is idle. Workflow and step state, attempts, and concise results persist
-across restarts. A running step left orphaned for five minutes is retried from its recorded state,
-up to three attempts, then the workflow stops as failed. `workflow_restart_from` reuses the
-completed prefix and clears the selected step plus every later result before re-executing them. Use
-`workflow_list`, `workflow_get`, `workflow_pause`, `workflow_resume`, `workflow_retry_step`, or
-`workflow_cancel` to manage it.
+While this is on, the active list is ordered by when each thread last came back to you, so you
+cannot drag or move threads within it. Your saved order returns when you turn it off.
 
 ## Settle finished work
 
@@ -124,14 +130,35 @@ Choose **Settle thread** from its menu to move finished work out of the active l
 without deleting the conversation. **Un-settle thread** restores it to active work
 and prevents automatic settlement until new activity resumes the usual rules.
 Manually settling an idle thread dismisses unanswered async questions without
-sending an answer or restarting the agent.
+sending an answer or restarting the agent. Settling also closes the thread's
+terminals that wait at an idle prompt, and keeps their output. A terminal that
+runs a command, such as a dev server, stays open.
+
+To reclaim disk space from settled work, turn on **Run in the thread's worktree when the
+thread settles** for one of the project's actions, or set `"runOnSettle": true` on a
+`t3.json` script, for example `cargo clean`. It runs each time a thread in its own
+worktree settles, manually or automatically, even if a terminal there still runs a
+command such as a dev server. Threads in the project's main checkout skip it. Its terminal
+closes when the command succeeds and stays open when it fails.
+
+On web and desktop, press a thread's **Settle** button and drag up or down to
+settle every thread in that section between it and the one you release on.
+The **Un-settle** and **Wake** buttons work the same way in their sections.
+Press `Escape` while dragging to cancel.
 
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
 thread. Work in progress, pending questions or approvals, and live background work
 prevent automatic settlement. An open pull request does not prevent inactivity
-settlement, but an old closed or merged pull request does not settle work you
-resumed after it closed.
+settlement unless you turn on **Keep threads with a PR** in **Settings → General**,
+but an old closed or merged pull request does not settle work you
+resumed after it closed. Only your own messages count as resuming. A turn that
+finished background work or a pull request watch starts on its own does not.
+
+To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
+choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
+**Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it
+is disabled.
 
 Change these rules in **Settings → General** on web and desktop, or **Settings → Thread behavior** on mobile.
 They continue to run when your apps are closed. On web and desktop, choose an environment at the
@@ -150,12 +177,7 @@ automatic branch links do not appear.
 On web and desktop, right-click a pull request link in a thread and choose
 **Link to thread** to select a different PR. Use **Unlink from thread** on the
 same link to return to the branch PR, if one exists.
-The linked pull request participates in automatic settlement. Pull requests created or linked by an
-agent are also monitored while their thread is active. A new failing CI rollup, changes-requested
-review decision, or merge conflict wakes the thread so the agent can inspect the latest provider
-evidence and address verified findings. Pending checks and review-required states do not wake the
-agent, and each provider-state fingerprint wakes at most once across server restarts. Manually
-linked pull requests remain status-only so adding one for reference never starts the agent.
+The linked pull request participates in automatic settlement.
 
 ## Find and reference work
 
@@ -170,36 +192,39 @@ for custom configuration.
 
 ## Inspect agent work
 
+**Limited** means the provider stopped on a usage or rate limit. The conversation
+keeps the provider's explanation. Retry after the limit resets, or switch to
+another provider instance.
+On web and desktop, press **Resume** in an empty composer to continue a limited
+or interrupted turn manually.
+Queued messages stay saved while the limit blocks the thread. They run after
+the continuation finishes. If the queue was held by a restart, resume it then.
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Auto-resume limited
+threads** in **Settings → General** on web and desktop, or **Settings → Thread
+behavior** on mobile, to schedule limit stops by default.
+The environment must be running when the reset arrives; it resumes overdue
+continuations after a restart. Sending a new message, archiving, or settling the
+thread prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns.
+Snooze and auto-resume are independent: snooze alone wakes the thread without
+sending a message; enabling both wakes and continues it. **Wake now** cancels
+the snooze. Enable **Snooze limited threads** in thread behavior settings to
+snooze limit stops by default. Providers without a reset time offer manual
+retry and the normal snooze choices.
+
 On web and desktop, use **Agents** to follow work delegated to subagents.
+Stop on a thread also stops the subagents it delegated to.
+
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. When such a subagent needs an approval or an answer, the parent
+thread asks for it.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
-
-## Keep durable work state
-
-Agents can use `thread_ledger_record` to keep a compact goal, phase, concrete next step, artifact
-pointers, and progress events outside the conversation transcript. `thread_ledger_read` returns the
-current record. T3 Code injects a bounded ledger snapshot before later turns, so a restarted
-provider or compacted conversation can resume from the recorded step without re-deriving the whole
-history. Changing the phase requires a classified progress event in the same write.
-
-The ledger is for resumable work state, not source code, secrets, or a second copy of the chat. Its
-injected snapshot is capped and carries only the eight most recent events.
-
-Agents can explicitly save reusable knowledge with `memory_add`. Project-scoped entries are visible
-to later threads in the same project; global entries apply across projects in that environment.
-Lessons are injected automatically into later turns, while ordinary memories stay out of context
-until an agent calls `memory_search`. Search uses local deterministic keyword scoring, and
-`memory_remove` deletes only the specified entry ID. T3 Code does not automatically archive whole
-conversations into memory or send project text to an embedding provider.
-
-Agents can save generated text, Markdown, JSON, HTML, and SVG with `artifact_save`. Artifacts are
-shared by threads in the same project and addressed by a stable slug. `artifact_update` creates a
-new immutable version when content changes, `artifact_versions` lists history, and
-`artifact_revert` restores an older version as a new current version without deleting later
-history. `artifact_delete` permanently removes one artifact and all versions. Stored HTML and SVG
-are returned as data and are never executed by the server.
 
 ## Snooze until later
 

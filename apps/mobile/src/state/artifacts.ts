@@ -1,9 +1,15 @@
 import { useAtomValue } from "@effect/atom-react";
 import { createEnvironmentArtifactAtoms } from "@t3tools/client-runtime/state/artifacts";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentArtifactDetail,
+  EnvironmentArtifactSummary,
+  EnvironmentArtifactVersion,
+  EnvironmentId,
+  ProjectId,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { useCallback } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -21,7 +27,9 @@ function formatError(cause: Cause.Cause<unknown>): string {
 export function useArtifacts(environmentId: EnvironmentId, projectId: ProjectId) {
   const atom = artifactEnvironment.list({ environmentId, input: { projectId } });
   const result = useAtomValue(atom);
-  const value = Option.getOrNull(AsyncResult.value(result));
+  const value = Option.getOrNull(AsyncResult.value(result)) as {
+    readonly artifacts: ReadonlyArray<EnvironmentArtifactSummary>;
+  } | null;
   return {
     artifacts: value?.artifacts ?? [],
     error: result._tag === "Failure" ? formatError(result.cause) : null,
@@ -46,8 +54,12 @@ export function useArtifact(
   });
   const detailResult = useAtomValue(detailAtom);
   const versionsResult = useAtomValue(versionsAtom);
-  const detail = Option.getOrNull(AsyncResult.value(detailResult));
-  const versions = Option.getOrNull(AsyncResult.value(versionsResult));
+  const detail = Option.getOrNull(
+    AsyncResult.value(detailResult),
+  ) as EnvironmentArtifactDetail | null;
+  const versions = Option.getOrNull(AsyncResult.value(versionsResult)) as {
+    readonly versions: ReadonlyArray<EnvironmentArtifactVersion>;
+  } | null;
   return {
     detail,
     versions: versions?.versions ?? [],

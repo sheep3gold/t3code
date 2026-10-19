@@ -1,6 +1,6 @@
 // 把桌面端远程环境挑到的端口原样转发到 systemd 管理的唯一 T3 服务。
 // 用法：node t3-port-forward.mjs <listenPort> <targetPort>
-import net from "node:net";
+import * as NodeNet from "node:net";
 
 const listenPort = Number(process.argv[2]);
 const targetPort = Number(process.argv[3]);
@@ -9,8 +9,8 @@ if (!Number.isInteger(listenPort) || !Number.isInteger(targetPort)) {
   process.exit(2);
 }
 
-const server = net.createServer((client) => {
-  const upstream = net.connect(targetPort, "127.0.0.1");
+const server = NodeNet.createServer((client) => {
+  const upstream = NodeNet.connect(targetPort, "127.0.0.1");
   client.pipe(upstream).pipe(client);
   const close = () => {
     client.destroy();

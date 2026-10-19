@@ -18,7 +18,7 @@ import {
   resolveRemoteWebSocketConnectionUrl,
 } from "./remote.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
-import { remoteHttpClientLayer } from "../rpc/http.ts";
+import * as RpcHttp from "../rpc/http.ts";
 
 const isEnvironmentAuthInvalidError = Schema.is(EnvironmentAuthInvalidError);
 
@@ -49,7 +49,8 @@ const hangingFetch = () => {
   return { fetchFn, calls };
 };
 
-const provideRemoteHttp = (fetchFn: typeof fetch) => Effect.provide(remoteHttpClientLayer(fetchFn));
+const provideRemoteHttp = (fetchFn: typeof fetch) =>
+  Effect.provide(RpcHttp.layerRemoteHttpClient(fetchFn));
 
 const expectFetchCall = (
   calls: ReadonlyArray<FetchCall>,
@@ -249,25 +250,6 @@ describe("remote environment authorization", () => {
       expect(websocketUrl.searchParams.get("clientOs")).toBe("unknown");
     }),
   );
-
-  it("carries the mobile install anchor as a connection param", () => {
-    const url = new URL("wss://remote.example.com/ws");
-    appendClientConnectionParams(url, {
-      surface: "mobile",
-      deviceType: "mobile",
-      installedAt: "2026-10-07T08:00:00.000Z",
-    });
-    expect(url.searchParams.get("clientInstalledAt")).toBe("2026-10-07T08:00:00.000Z");
-
-    // Non-mobile surfaces never report an install anchor.
-    const desktopUrl = new URL("wss://remote.example.com/ws");
-    appendClientConnectionParams(desktopUrl, {
-      surface: "web",
-      deviceType: "desktop",
-      installedAt: "2026-10-07T08:00:00.000Z",
-    });
-    expect(desktopUrl.searchParams.get("clientInstalledAt")).toBeNull();
-  });
 
   it.effect("allows a client to explicitly narrow a pairing grant", () =>
     Effect.gen(function* () {

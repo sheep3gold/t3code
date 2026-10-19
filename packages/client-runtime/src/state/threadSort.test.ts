@@ -1,7 +1,8 @@
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  activeThreadAnchorTimestampMs,
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
   hasUnseenThreadCompletion,
@@ -9,13 +10,24 @@ import {
   planPinnedMove,
   planPinnedReorder,
   resolveSettledThreadTimestamp,
-  resolveThreadLastReadAt,
-  shouldSyncThreadRead,
   sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
+  sortSettledThreads,
   sortThreads,
+  type SettledThreadTimestampInput,
   type ThreadSortInput,
 } from "./threadSort.ts";
+
+describe("activeThreadAnchorTimestampMs", () => {
+  it("uses the later unsettle time when an old thread re-enters the active list", () => {
+    expect(
+      activeThreadAnchorTimestampMs({
+        createdAt: "2026-01-01T00:00:00.000Z",
+        unsettledAt: "2026-08-01T00:00:00.000Z",
+      }),
+    ).toBe(Date.parse("2026-08-01T00:00:00.000Z"));
+  });
+});
 
 type TestThread = { readonly id: string } & ThreadSortInput;
 
@@ -36,7 +48,7 @@ describe("resolveSettledThreadTimestamp", () => {
       resolveSettledThreadTimestamp({
         settledAt: "2026-03-09T10:00:00.000Z",
         latestUserMessageAt: "2026-03-09T11:00:00.000Z",
-        latestTurn: null,
+        latestRun: null,
         updatedAt: "2026-03-09T12:00:00.000Z",
       }),
     ).toBe("2026-03-09T10:00:00.000Z");
@@ -47,7 +59,7 @@ describe("resolveSettledThreadTimestamp", () => {
       resolveSettledThreadTimestamp({
         settledAt: "invalid",
         latestUserMessageAt: "2026-03-09T11:00:00.000Z",
-        latestTurn: null,
+        latestRun: null,
         updatedAt: "2026-03-09T12:00:00.000Z",
       }),
     ).toBe("2026-03-09T11:00:00.000Z");
@@ -55,10 +67,107 @@ describe("resolveSettledThreadTimestamp", () => {
       resolveSettledThreadTimestamp({
         settledAt: null,
         latestUserMessageAt: null,
-        latestTurn: null,
+        latestRun: null,
         updatedAt: "2026-03-09T12:00:00.000Z",
       }),
     ).toBe("2026-03-09T12:00:00.000Z");
+  });
+});
+
+describe("sortSettledThreads", () => {
+  const settled = (input: {
+    id: string;
+    settledAt?: string | null;
+    latestUserMessageAt?: string | null;
+    latestRun?: SettledThreadTimestampInput["latestRun"];
+    updatedAt?: string;
+  }) => ({
+    id: input.id,
+    settledAt: input.settledAt ?? null,
+    latestUserMessageAt: input.latestUserMessageAt ?? null,
+    latestRun: input.latestRun ?? null,
+    updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
+  });
+
+  it("orders by settle time, most recently settled first", () => {
+    const sorted = sortSettledThreads([
+      settled({
+        id: "settled-first",
+        settledAt: "2026-03-09T10:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T09:59:00.000Z",
+      }),
+      settled({
+        id: "settled-last",
+        settledAt: "2026-03-09T12:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T08:00:00.000Z",
+      }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["settled-last", "settled-first"]);
+  });
+
+  it("falls back to last activity for auto-settled threads without a settledAt stamp", () => {
+    const sorted = sortSettledThreads([
+      settled({ id: "auto-old", latestUserMessageAt: "2026-03-09T08:00:00.000Z" }),
+      settled({ id: "explicit", settledAt: "2026-03-09T10:00:00.000Z" }),
+      settled({ id: "auto-recent", latestUserMessageAt: "2026-03-09T11:00:00.000Z" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["auto-recent", "explicit", "auto-old"]);
+  });
+
+  it("counts a turn completion as activity for auto-settled threads", () => {
+    const sorted = sortSettledThreads([
+      settled({ id: "message-only", latestUserMessageAt: "2026-03-09T10:04:00.000Z" }),
+      settled({
+        id: "completed-later",
+        latestUserMessageAt: "2026-03-09T10:00:00.000Z",
+        latestRun: {
+          runId: RunId.make("run-1"),
+          status: "completed",
+          assistantMessageId: null,
+          requestedAt: "2026-03-09T10:00:00.000Z",
+          startedAt: "2026-03-09T10:00:00.000Z",
+          completedAt: "2026-03-09T10:30:00.000Z",
+        },
+      }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["completed-later", "message-only"]);
+  });
+
+  it("breaks timestamp ties by id so the order is stable", () => {
+    const sorted = sortSettledThreads([
+      settled({ id: "b", settledAt: "2026-03-09T10:00:00.000Z" }),
+      settled({ id: "a", settledAt: "2026-03-09T10:00:00.000Z" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+
+  it("matches the per-comparison order on a shuffled list with ties", () => {
+    const stamps = [
+      { settledAt: "2026-03-09T10:00:00.000Z" },
+      { settledAt: "invalid", latestUserMessageAt: "2026-03-09T10:00:00.000Z" },
+      { latestUserMessageAt: "2026-03-09T11:00:00.000Z" },
+      { updatedAt: "2026-03-09T09:00:00.000Z" },
+      { updatedAt: "invalid" },
+    ];
+    const threads = Array.from({ length: 30 }, (_, index) => {
+      const row = (index * 7) % 30;
+      return { ...settled({ id: `thread-${row % 3}`, ...stamps[row % 5] }), row };
+    });
+    const timestampMs = (thread: SettledThreadTimestampInput) => {
+      const timestamp = resolveSettledThreadTimestamp(thread);
+      return timestamp === null ? 0 : Date.parse(timestamp);
+    };
+    const expected = threads.toSorted(
+      (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
+    );
+
+    expect(sortSettledThreads(threads).map((thread) => thread.row)).toEqual(
+      expected.map((thread) => thread.row),
+    );
   });
 });
 
@@ -415,23 +524,23 @@ describe("sortActiveThreadsByOrderKey", () => {
       {
         id: "seen-new",
         createdAt: "2026-03-09T12:00:00.000Z",
-        latestTurn: { completedAt: "2026-03-09T12:30:00.000Z" },
+        latestRun: { completedAt: "2026-03-09T12:30:00.000Z" },
       },
       {
         id: "unseen-old",
         createdAt: "2026-03-09T08:00:00.000Z",
-        latestTurn: { completedAt: "2026-03-09T08:30:00.000Z" },
+        latestRun: { completedAt: "2026-03-09T08:30:00.000Z" },
       },
       {
         id: "unseen-newer",
         createdAt: "2026-03-09T11:00:00.000Z",
-        latestTurn: { completedAt: "2026-03-09T11:30:00.000Z" },
+        latestRun: { completedAt: "2026-03-09T11:30:00.000Z" },
       },
       {
         id: "working",
         createdAt: "2026-03-09T07:00:00.000Z",
         session: { status: "running" },
-        latestTurn: { completedAt: "2026-03-09T13:00:00.000Z" },
+        latestRun: { completedAt: "2026-03-09T13:00:00.000Z" },
       },
     ];
     const lastVisitedAtById = new Map([
@@ -442,7 +551,7 @@ describe("sortActiveThreadsByOrderKey", () => {
     ]);
     const sorted = sortActiveThreadsByOrderKey(threads, {
       isUnreadCompleted: (thread) =>
-        hasUnseenThreadCompletion(thread.latestTurn, lastVisitedAtById.get(thread.id) ?? null),
+        hasUnseenThreadCompletion(thread.latestRun, lastVisitedAtById.get(thread.id) ?? null),
     });
     // Running work outranks an unseen completion on the same thread.
     expect(sorted.map((thread) => thread.id)).toEqual([
@@ -467,7 +576,7 @@ describe("sortActiveThreadsByOrderKey", () => {
       {
         id: "created-mid-turn",
         createdAt: "2026-03-09T10:00:00.000Z",
-        latestTurn: { completedAt: "2026-03-09T12:30:00.000Z" },
+        latestRun: { completedAt: "2026-03-09T12:30:00.000Z" },
       },
       {
         id: "arranged-idle",
@@ -530,60 +639,5 @@ describe("sortActiveThreadsByOrderKey", () => {
     const keys = new Map(assignments.map((assignment) => [assignment.id, assignment.orderKey]));
     const updated = threads.map((thread) => ({ ...thread, activeOrderKey: keys.get(thread.id) }));
     expect(sortActiveThreadsByOrderKey(updated).map((thread) => thread.id)).toEqual(orderedIds);
-  });
-});
-
-describe("resolveThreadLastReadAt", () => {
-  it("prefers the server stamp so reads on other devices apply here", () => {
-    expect(
-      resolveThreadLastReadAt(
-        { lastReadAt: "2026-01-01T00:09:00.000Z" },
-        "2026-01-01T00:01:00.000Z",
-      ),
-    ).toBe("2026-01-01T00:09:00.000Z");
-    // Mark unread on another device rewinds below this device's own visit.
-    expect(
-      resolveThreadLastReadAt(
-        { lastReadAt: "2026-01-01T00:01:00.000Z" },
-        "2026-01-01T00:09:00.000Z",
-      ),
-    ).toBe("2026-01-01T00:01:00.000Z");
-  });
-
-  it("falls back to the local stamp without a server stamp", () => {
-    expect(resolveThreadLastReadAt({ lastReadAt: null }, "2026-01-01T00:01:00.000Z")).toBe(
-      "2026-01-01T00:01:00.000Z",
-    );
-    expect(resolveThreadLastReadAt({}, "2026-01-01T00:01:00.000Z")).toBe(
-      "2026-01-01T00:01:00.000Z",
-    );
-    expect(resolveThreadLastReadAt({}, undefined)).toBeNull();
-  });
-
-  it("clears the unseen completion once another device read it", () => {
-    const latestTurn = { completedAt: "2026-01-01T00:05:00.000Z" };
-    const staleLocalVisit = "2026-01-01T00:01:00.000Z";
-    expect(hasUnseenThreadCompletion(latestTurn, staleLocalVisit)).toBe(true);
-    expect(
-      hasUnseenThreadCompletion(
-        latestTurn,
-        resolveThreadLastReadAt({ lastReadAt: "2026-01-01T00:05:00.000Z" }, staleLocalVisit),
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("shouldSyncThreadRead", () => {
-  const readAt = "2026-01-01T00:05:00.000Z";
-  it("syncs only completions the server has not recorded yet", () => {
-    expect(shouldSyncThreadRead({ lastReadAt: null }, readAt)).toBe(true);
-    expect(shouldSyncThreadRead({ lastReadAt: "2026-01-01T00:01:00.000Z" }, readAt)).toBe(true);
-    expect(shouldSyncThreadRead({ lastReadAt: readAt }, readAt)).toBe(false);
-    expect(shouldSyncThreadRead({ lastReadAt: "2026-01-01T00:09:00.000Z" }, readAt)).toBe(false);
-  });
-
-  it("never syncs to servers without shared read state or with a malformed stamp", () => {
-    expect(shouldSyncThreadRead({}, readAt)).toBe(false);
-    expect(shouldSyncThreadRead({ lastReadAt: null }, "not-a-date")).toBe(false);
   });
 });

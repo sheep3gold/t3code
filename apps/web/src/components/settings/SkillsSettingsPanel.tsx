@@ -1,8 +1,12 @@
-import { type EnvironmentId, type ProviderInstanceId } from "@t3tools/contracts";
+import {
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+  type ProviderInstanceId,
+} from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { Cause, Option } from "effect";
 import { ChevronRightIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -24,6 +28,7 @@ import {
 } from "../ui/alert-dialog";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { SkillEditorDialog } from "./SkillEditorDialog";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 /**
@@ -38,7 +43,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
  */
 export function SkillsSettingsPanel({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const settings = useEnvironmentSettings(environmentId);
+  const canToggle = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const canUpsert = useAtomValue(serverEnvironment.skillUpsert.permissionAtom(environmentId));
+  const canDelete = useAtomValue(serverEnvironment.skillDelete.permissionAtom(environmentId));
   const skillDelete = useAtomCommand(serverEnvironment.skillDelete, { reportFailure: false });
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
@@ -53,46 +61,35 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
   } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SkillRow | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const onEditorOpenChange = useCallback((next: boolean) => {
+  const onEditorOpenChange = (next: boolean) => {
     if (!next) setEditor(null);
-  }, []);
+  };
 
   const disabledSkills = settings.disabledSkills;
-  const disabledSkillNames = useMemo(
-    () => new Set(disabledSkills.map((name) => name.trim().toLowerCase())),
-    [disabledSkills],
-  );
-  const skillRows = useMemo(() => collectSkillRows(providers), [providers]);
+  const disabledSkillNames = new Set(disabledSkills.map((name) => name.trim().toLowerCase()));
+  const skillRows = collectSkillRows(providers);
   // Disabled entries nothing currently discovers stay listed so the user can
   // turn them back on without re-adding the skill first.
-  const undiscoveredDisabled = useMemo(
-    () =>
-      disabledSkills
-        .filter(
-          (name) =>
-            !skillRows.some((row) => row.name.trim().toLowerCase() === name.trim().toLowerCase()),
-        )
-        .map(
-          (name) =>
-            ({
-              name,
-              description: undefined,
-              providerLabels: [],
-              editableInstanceId: undefined,
-            }) satisfies SkillRow,
-        ),
-    [disabledSkills, skillRows],
-  );
+  const undiscoveredDisabled = disabledSkills
+    .filter(
+      (name) =>
+        !skillRows.some((row) => row.name.trim().toLowerCase() === name.trim().toLowerCase()),
+    )
+    .map(
+      (name) =>
+        ({
+          name,
+          description: undefined,
+          providerLabels: [],
+          editableInstanceId: undefined,
+        }) satisfies SkillRow,
+    );
 
-  const filteredRows = useMemo(() => filterSkillRows(skillRows, query), [skillRows, query]);
-  const filteredUndiscovered = useMemo(
-    () => filterSkillRows(undiscoveredDisabled, query),
-    [undiscoveredDisabled, query],
-  );
+  const filteredRows = filterSkillRows(skillRows, query);
+  const filteredUndiscovered = filterSkillRows(undiscoveredDisabled, query);
 
-  const claudeInstances = useMemo(
-    () => providers.filter((provider) => provider.driver === "claudeAgent" && provider.enabled),
-    [providers],
+  const claudeInstances = providers.filter(
+    (provider) => provider.driver === "claudeAgent" && provider.enabled,
   );
   const newSkillInstanceId =
     claudeInstances.length === 1
@@ -172,6 +169,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
             <div className="me-3 shrink-0 sm:me-4">
               <Switch
                 checked={!disabled}
+                disabled={!canToggle}
                 onCheckedChange={(checked) => setSkillDisabled(row.name, !checked)}
                 aria-label={`Enable skill ${row.name}`}
               />
@@ -180,7 +178,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
           <CollapsiblePanel>
             {open ? (
               <div className="px-9 pt-1 pb-4 sm:px-10">
-                <p className="max-w-[72ch] whitespace-pre-wrap text-[13px] leading-[1.5] text-muted-foreground">
+                <p className="max-w-[72ch] whitespace-pre-wrap text-sm text-muted-foreground">
                   {detailText}
                 </p>
                 {row.editableInstanceId !== undefined ? (
@@ -188,6 +186,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
                     <Button
                       variant="outline"
                       size="compact"
+                      disabled={!canUpsert}
                       onClick={() =>
                         setEditor({ instanceId: row.editableInstanceId!, name: row.name })
                       }
@@ -197,6 +196,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
                     <Button
                       variant="destructive-outline"
                       size="compact"
+                      disabled={!canDelete}
                       onClick={() => setDeleteTarget(row)}
                     >
                       <Trash2Icon aria-hidden /> Delete
@@ -216,7 +216,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
       <SettingsSection title="Skills">
         <p className="px-3 pb-1 text-xs text-muted-foreground sm:px-4">
           Skills providers discovered on this environment. Turning one off hides it from the `$`
-          menu and blocks `$name` mentions from dispatching it, across every provider. Claude user
+          menu across providers. Claude sends typed `$name` mentions as plain text. Claude user
           skills can be edited and deleted here; the change lands in every project's `$` menu.
         </p>
         <div className="flex items-center gap-2 px-3 pb-3 pt-2 sm:px-4">
@@ -252,7 +252,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
             <Button
               variant="outline"
               size="compact"
-              disabled={!newSkillInstanceId}
+              disabled={!newSkillInstanceId || !canUpsert}
               onClick={() => {
                 if (newSkillInstanceId) setEditor({ instanceId: newSkillInstanceId });
               }}

@@ -10,8 +10,8 @@ import type { EnvironmentThreadSchedule } from "@t3tools/contracts";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, View } from "react-native";
 
-import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { useThreadShells } from "../../state/entities";
 import { scheduleEnvironment, useSchedules } from "../../state/schedules";
 import { useAtomCommand } from "../../state/use-atom-command";

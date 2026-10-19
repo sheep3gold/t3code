@@ -35,15 +35,12 @@ describe("Usage page preferences", () => {
     }
   });
 
-  it("preserves legacy preferences while round-tripping hidden providers", () => {
-    values.set(key, '{"metric":"tokens","windowDays":7}');
-    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 7 });
-    saveUsagePagePreferences({
-      metric: "tokens",
-      windowDays: 7,
-      hiddenProviders: ["grok", "claude"],
-    });
-    expect(readUsagePagePreferences().hiddenProviders).toEqual(["grok", "claude"]);
+  it("round-trips hidden providers and reads older saves without them", () => {
+    saveUsagePagePreferences({ metric: "cost", windowDays: 7, hiddenProviders: ["codex"] });
+    expect(readUsagePagePreferences().hiddenProviders).toEqual(["codex"]);
+
+    values.set(key, '{"metric":"tokens","windowDays":30}');
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 30 });
   });
 
   it.each([

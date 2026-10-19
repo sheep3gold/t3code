@@ -2,14 +2,13 @@ import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { type Atom } from "effect/unstable/reactivity";
-import { HttpClient } from "effect/unstable/http";
+import { type Atom } from "effect/reactivity";
+import { HttpClient } from "effect/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 import { createEnvironmentCommand, createEnvironmentQueryAtomFamily } from "./runtime.ts";
@@ -56,7 +55,7 @@ const fetchMemories = Effect.fn("fetchEnvironmentMemories")(function* (
     ...input,
     group: "memoryLedger",
     method: "GET",
-    url: (base) => environmentEndpointUrl(base, "/api/memories"),
+    url: (urls) => urls.listMemories(),
     timeoutMs: TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.listMemories({ payload: { projectId: input.projectId }, headers }),
@@ -70,8 +69,7 @@ const fetchLedger = Effect.fn("fetchEnvironmentLedger")(function* (
     ...input,
     group: "memoryLedger",
     method: "GET",
-    url: (base) =>
-      environmentEndpointUrl(base, `/api/ledgers/${encodeURIComponent(input.threadId)}`),
+    url: (urls) => urls.getLedger({ params: { threadId: input.threadId } }),
     timeoutMs: TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.getLedger({
@@ -136,7 +134,7 @@ export function createEnvironmentMemoryLedgerAtoms<R, E>(
             ...context,
             group: "memoryLedger",
             method: "POST",
-            url: (base) => environmentEndpointUrl(base, "/api/memories"),
+            url: (urls) => urls.createMemory(),
             timeoutMs: TIMEOUT_MS,
             request: ({ client, headers }) =>
               client.createMemory({
@@ -154,8 +152,7 @@ export function createEnvironmentMemoryLedgerAtoms<R, E>(
             ...context,
             group: "memoryLedger",
             method: "PATCH",
-            url: (base) =>
-              environmentEndpointUrl(base, `/api/memories/${encodeURIComponent(input.memoryId)}`),
+            url: (urls) => urls.updateMemory({ params: { memoryId: input.memoryId } }),
             timeoutMs: TIMEOUT_MS,
             request: ({ client, headers }) =>
               client.updateMemory({
@@ -183,8 +180,7 @@ export function createEnvironmentMemoryLedgerAtoms<R, E>(
             ...context,
             group: "memoryLedger",
             method: "DELETE",
-            url: (base) =>
-              environmentEndpointUrl(base, `/api/memories/${encodeURIComponent(input.memoryId)}`),
+            url: (urls) => urls.removeMemory({ params: { memoryId: input.memoryId } }),
             timeoutMs: TIMEOUT_MS,
             request: ({ client, headers }) =>
               client.removeMemory({
@@ -203,8 +199,7 @@ export function createEnvironmentMemoryLedgerAtoms<R, E>(
             ...context,
             group: "memoryLedger",
             method: "PUT",
-            url: (base) =>
-              environmentEndpointUrl(base, `/api/ledgers/${encodeURIComponent(input.threadId)}`),
+            url: (urls) => urls.updateLedger({ params: { threadId: input.threadId } }),
             timeoutMs: TIMEOUT_MS,
             request: ({ client, headers }) =>
               client.updateLedger({
@@ -227,8 +222,7 @@ export function createEnvironmentMemoryLedgerAtoms<R, E>(
             ...context,
             group: "memoryLedger",
             method: "DELETE",
-            url: (base) =>
-              environmentEndpointUrl(base, `/api/ledgers/${encodeURIComponent(input.threadId)}`),
+            url: (urls) => urls.clearLedger({ params: { threadId: input.threadId } }),
             timeoutMs: TIMEOUT_MS,
             request: ({ client, headers }) =>
               client.clearLedger({

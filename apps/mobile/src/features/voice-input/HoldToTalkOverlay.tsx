@@ -11,8 +11,8 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 
-import { SymbolView } from "../../components/AppSymbol";
-import { AppText as Text } from "../../components/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
 import { CompactVoiceWaveform } from "./ComposerDictationControl";
 

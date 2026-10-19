@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
-import * as HttpServerRespondable from "effect/unstable/http/HttpServerRespondable";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 /**
  * Chat translation proxy contract. `POST /api/translate` forwards natural-language
@@ -46,3 +46,29 @@ export class EnvironmentTranslateUpstreamError extends Schema.TaggedError<Enviro
     });
   }
 }
+
+// Keep fork routes separate from the upstream API to limit conflicts during later upgrades.
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import {
+  EnvironmentAuthInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+} from "./environmentHttp.ts";
+class TranslationGroup extends HttpApiGroup.make("translate").add(
+  HttpApiEndpoint.post("translate", "/api/translate", {
+    payload: EnvironmentTranslatePayload,
+    success: EnvironmentTranslateResult,
+    error: [
+      EnvironmentAuthInvalidError,
+      EnvironmentScopeRequiredError,
+      EnvironmentInternalError,
+      EnvironmentTranslateUnavailableError,
+      EnvironmentTranslateUpstreamError,
+    ],
+  }),
+) {}
+export class ForkTranslationHttpApi extends HttpApi.make("fork-translation").add(
+  TranslationGroup,
+) {}

@@ -284,6 +284,10 @@ jobs:
     concurrency:
       group: desktop-macos-preview-${{ needs.resolve.outputs.pr_number }}-build
       cancel-in-progress: true
+    # release-desktop.yml asks for actions: read (its Windows builds list artifacts).
+    permissions:
+      actions: read
+      contents: read
     uses: ./.github/workflows/release-desktop.yml
     secrets:
       CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -302,7 +306,7 @@ jobs:
       clerk_cli_oauth_client_id: ${{ needs.resolve.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.resolve.outputs.relay_url }}
       label: macOS arm64 preview
-      runner: macos-26
+      runner: blacksmith-12vcpu-macos-26
       platform: mac
       target: dmg
       arch: arm64
@@ -318,7 +322,7 @@ jobs:
     name: Publish anonymous download
     needs: [resolve, build]
     if: needs.resolve.outputs.eligible == 'true' && needs.build.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     # Its own group, so a publish never cancels a newer commit's signing job
     # (they would share the build group) and is never cancelled mid-upload.

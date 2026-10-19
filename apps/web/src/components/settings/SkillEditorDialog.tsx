@@ -1,7 +1,7 @@
 import { type EnvironmentId, type ProviderInstanceId, type ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { Cause, Option } from "effect";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { getDefaultProviderInstanceModel } from "../../providerInstances";
@@ -82,6 +82,7 @@ export function SkillEditorDialog({
   readonly instanceId: ProviderInstanceId;
   readonly initial?: { readonly name: string } | undefined;
 }) {
+  const canUpsert = useAtomValue(serverEnvironment.skillUpsert.permissionAtom(environmentId));
   const skillRead = useAtomCommand(serverEnvironment.skillRead, { reportFailure: false });
   const skillUpsert = useAtomCommand(serverEnvironment.skillUpsert, { reportFailure: false });
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
@@ -134,7 +135,7 @@ export function SkillEditorDialog({
     };
   }, [open, editingName, environmentId, instanceId, skillRead, onOpenChange]);
 
-  const reset = useCallback(() => {
+  const reset = () => {
     setName(editingName ?? "");
     setDescription("");
     setBody("");
@@ -142,26 +143,36 @@ export function SkillEditorDialog({
     setOptimizeInstruction("");
     setOptimizeThreadId(null);
     setOptimizing(false);
-  }, [editingName]);
+  };
 
   // Watch the optimize thread for the assistant's answer.
   const optimizeThread = useEnvironmentThread(environmentId, optimizeThreadId);
-  const optimizeReply = useMemo(() => {
+  const optimizeReply = (() => {
     if (!optimizing) return null;
-    const thread = Option.getOrNull(optimizeThread.data);
-    const latestTurn = thread?.latestTurn;
-    if (!thread || !latestTurn) return null;
-    if (latestTurn.state === "running") return null;
-    if (latestTurn.state !== "completed") return { failed: true as const };
-    const assistantMessage = thread.messages.find(
-      (message) => message.role === "assistant" && message.id === latestTurn.assistantMessageId,
+    const projection = Option.getOrNull(optimizeThread.data);
+    // The optimize thread is created for this one request, so it has a single run.
+    const run = projection?.runs.at(-1);
+    if (!projection || !run) return null;
+    if (
+      run.status === "preparing" ||
+      run.status === "queued" ||
+      run.status === "starting" ||
+      run.status === "running" ||
+      run.status === "waiting"
+    ) {
+      return null;
+    }
+    if (run.status !== "completed") return { failed: true as const };
+    const assistantMessage = projection.messages.findLast(
+      (message) => message.role === "assistant" && message.runId === run.id && !message.streaming,
     );
     if (!assistantMessage) return { failed: true as const };
     return { failed: false as const, text: assistantMessage.text };
-  }, [optimizing, optimizeThread.data]);
+  })();
 
   useEffect(() => {
     if (!optimizeReply) return;
+    // oxlint-disable-next-line react/set-state-in-effect -- The reply arrives from the thread stream and also raises a toast, which may not run during render.
     setOptimizing(false);
     setOptimizeThreadId(null);
     if (optimizeReply.failed) {
@@ -195,7 +206,8 @@ export function SkillEditorDialog({
 
   const nameTrimmed = name.trim();
   const nameValid = SKILL_NAME_PATTERN.test(nameTrimmed);
-  const canSave = nameValid && body.trim().length > 0 && !saving && !loading && !optimizing;
+  const canSave =
+    canUpsert && nameValid && body.trim().length > 0 && !saving && !loading && !optimizing;
 
   const save = async () => {
     if (!canSave) return;

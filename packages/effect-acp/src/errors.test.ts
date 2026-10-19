@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as RpcClientError from "effect/unstable/rpc/RpcClientError";
+import * as RpcClientError from "effect/rpc/RpcClientError";
 
 import * as AcpSchema from "./_generated/schema.gen.ts";
 import { callRpc, runHandler } from "./_internal/shared.ts";
@@ -13,6 +13,19 @@ const decodeNestedNumberPayload = Schema.decodeUnknownEffect(
 const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("effect-acp errors", () => {
+  it("shows an agent's string error data after its generic message", () => {
+    const quota = new AcpError.AcpRequestError({
+      code: -32603,
+      errorMessage: "Internal error",
+      data: "The monthly usage limit has been reached",
+    });
+    expect(quota.message).toBe("Internal error: The monthly usage limit has been reached");
+    expect(
+      new AcpError.AcpRequestError({ code: -32603, errorMessage: "Internal error", data: { a: 1 } })
+        .message,
+    ).toBe("Internal error");
+  });
+
   it.effect("retains RPC method and cause without deriving the message from the cause", () => {
     const rootCause = new Error("connection details that must not become the public message");
     const failure = new RpcClientError.RpcClientError({
@@ -159,6 +172,33 @@ describe("effect-acp errors", () => {
       expect(protocolError.message).not.toContain(secret);
       expect(encodeUnknownJson(protocolDiagnostics)).not.toContain(secret);
       expect("detail" in protocolError).toBe(false);
+    }),
+  );
+
+  it.effect("summarizes schema issues by path without payload values", () =>
+    Effect.gen(function* () {
+      const secret = "acp-summary-secret";
+      const cause = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({
+          update: Schema.Struct({ used: Schema.Number, size: Schema.Number }),
+          env: Schema.Record(Schema.String, Schema.Number),
+        }),
+      )({ update: { size: secret }, env: { [`${secret} key`]: secret } }, { errors: "all" }).pipe(
+        Effect.flip,
+      );
+      const error = AcpError.AcpProtocolParseError.fromSchemaError(
+        "decode-notification-payload",
+        "session/update",
+        cause,
+      );
+
+      expect(error.issueSummary).toBe(
+        "update.used missing, update.size wrong type, env.* wrong type",
+      );
+      expect(error.message).toBe(
+        "ACP protocol operation 'decode-notification-payload' failed for method 'session/update': update.used missing, update.size wrong type, env.* wrong type.",
+      );
+      expect(error.message).not.toContain(secret);
     }),
   );
 });
