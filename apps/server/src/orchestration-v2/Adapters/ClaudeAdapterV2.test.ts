@@ -1174,11 +1174,13 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
     },
     {},
   ).pipe(
-    Effect.provide(ServerSettings.layerTest()),
     Effect.provide(
-      ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3-claude-binary-path-",
-      }),
+      Layer.mergeAll(
+        ServerSettings.layerTest(),
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3-claude-binary-path-",
+        }),
+      ),
     ),
     Effect.provideService(ClaudeAdapterV2.ClaudeAgentSdkQueryRunner, {
       allocateSessionId: Effect.succeed("native-thread-claude-binary-path"),
