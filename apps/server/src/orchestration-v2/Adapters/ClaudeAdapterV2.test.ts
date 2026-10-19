@@ -1,3 +1,4 @@
+import * as ServerSettings from "../../serverSettings.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- workflow fixtures use files and the fake Claude CLI uses Node streams
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
@@ -1173,6 +1174,7 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
     },
     {},
   ).pipe(
+    Effect.provide(ServerSettings.layerTest()),
     Effect.provide(
       ServerConfig.layerTest(process.cwd(), {
         prefix: "t3-claude-binary-path-",

@@ -1,3 +1,4 @@
+import * as ServerSettings from "../../serverSettings.ts";
 import {
   forkSession,
   query,
@@ -1074,6 +1075,7 @@ function layerClaudeProviderAdapterRegistryReplay(
         IdAllocator.layer,
         NodeServices.layer,
         layerServerConfig,
+        ServerSettings.layerTest().pipe(Layer.orDie),
       ),
     ),
   );

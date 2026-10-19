@@ -64,7 +64,7 @@ install -d -m 0755 "$GENERATED" "$BACKUP_ROOT"
 cp "$SRC"/deploy/spdx-cache/v3.28.0/*.json "$GENERATED"/
 
 # CI=true：无 TTY 时 pnpm 需要它才肯清掉 modules 目录（node 版本变化触发）。
-CI=true pnpm install --frozen-lockfile --prefer-offline
+bash "$SRC/deploy/host/install-dependencies.sh"
 # 类型检查不过就不发布：此时还没碰线上文件，release-hub 会停在失败，main 不前进。
 # 单线程：多线程的 tsgo 峰值约 5.3G，这台机器内存吃紧；单线程约 3.3G。
 (cd apps/server && pnpm exec tsc --noEmit --singleThreaded)

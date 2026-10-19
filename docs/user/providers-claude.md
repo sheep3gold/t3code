@@ -76,6 +76,12 @@ can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill
 tool, which refuses skills reserved for manual invocation.
 
+Manage config-directory skills under **Settings → Skills**: search, create, edit,
+or delete a skill, or ask the current provider to rewrite its instructions for
+review before saving. Turning a skill off there hides it from every provider's
+`$` menu, and a typed `$name` is sent to Claude as plain text. Project skills and
+skills from other providers can be turned off but not edited.
+
 ## OpenRouter
 
 Create a Claude instance with its own config directory, such as
