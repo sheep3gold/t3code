@@ -117,6 +117,7 @@ import {
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
+import { useThreadVisitedState } from "./use-thread-visited-state";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -414,6 +415,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents);
+  // Reading a finished thread clears its unseen-completion lift in the list.
+  // The visit is stamped at the turn's completion time — not now — so it
+  // clears exactly the completion on screen (markThreadVisitedPreferences
+  // never moves the stamp backwards).
+  const { markThreadVisited } = useThreadVisitedState();
+  const latestTurnCompletedAt = props.selectedThread.latestRun?.completedAt ?? null;
+  useEffect(() => {
+    if (latestTurnCompletedAt === null) return;
+    markThreadVisited({ threadKey: selectedThreadKey, visitedAt: latestTurnCompletedAt });
+  }, [markThreadVisited, selectedThreadKey, latestTurnCompletedAt]);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const isProviderSubagent = isProviderNativeSubagentThread(props.selectedThread.source);
   const editingRunId = props.queuedRunEdit?.runId ?? null;

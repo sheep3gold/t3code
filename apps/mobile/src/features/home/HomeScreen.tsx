@@ -76,6 +76,7 @@ import {
   type ThreadListV2ListItem,
 } from "../threads/threadListV2";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
+import { useThreadVisitedState } from "../threads/use-thread-visited-state";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
@@ -518,6 +519,8 @@ export function HomeScreen(props: HomeScreenProps) {
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
+  const { threadLastVisitedAtById } = useThreadVisitedState();
+  // The queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   useFocusEffect(
@@ -598,6 +601,7 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey,
+      threadLastVisitedAtById,
     });
   }, [
     workingShelfEnabled,
@@ -616,6 +620,7 @@ export function HomeScreen(props: HomeScreenProps) {
     props.selectedEnvironmentId,
     props.threads,
     matchedThreadKeys,
+    threadLastVisitedAtById,
     v2ScopedProjectGroup,
   ]);
   const nextSnoozeWakeAt = threadListV2Layout.nextSnoozeWakeAt;
