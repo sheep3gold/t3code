@@ -1165,6 +1165,18 @@ export function createServerEnvironmentAtoms<R, E>(
           ]),
       },
     }),
+    skillRead: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:skill-read",
+      tag: WS_METHODS.serverSkillRead,
+    }),
+    skillUpsert: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:skill-upsert",
+      tag: WS_METHODS.serverSkillUpsert,
+    }),
+    skillDelete: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:skill-delete",
+      tag: WS_METHODS.serverSkillDelete,
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,

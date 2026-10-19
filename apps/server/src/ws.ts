@@ -178,6 +178,7 @@ import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { withDisabledSkillsFiltered } from "./fork/skills/disabledSkillNames.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
@@ -1755,13 +1756,16 @@ const layerWsRpc = (
       const loadServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
         Effect.gen(function* () {
           const keybindingsConfig = yield* keybindings.loadConfigState;
-          const currentProviders = yield* providerRegistry.getProviders;
-          const providers = options.usageLimitsCommand
-            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
-            : currentProviders;
           const settings = ServerSettings.redactServerSettingsForClient(
             yield* serverSettings.getSettings,
           );
+          const currentProviders = withDisabledSkillsFiltered(
+            yield* providerRegistry.getProviders,
+            settings.disabledSkills,
+          );
+          const providers = options.usageLimitsCommand
+            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
+            : currentProviders;
           const environment = yield* serverEnvironment.getDescriptor;
           const auth = yield* serverAuth.getDescriptor();
           const scratchWorkspaceRoot = yield* managedFolders.scratchRoot;
@@ -2323,7 +2327,15 @@ const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
-            return { providers };
+            return {
+              providers: withDisabledSkillsFiltered(
+                providers,
+                yield* serverSettings.getSettings.pipe(
+                  Effect.map((settings) => settings.disabledSkills),
+                  Effect.orElseSucceed(() => []),
+                ),
+              ),
+            };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
@@ -3101,9 +3113,25 @@ const layerWsRpc = (
                 // The registry stream carries changes only. Seed it with the current
                 // providers so a source refresh that lands before any provider change
                 // still pairs up and reaches the client.
-                Stream.concat(
-                  Stream.fromEffect(providerRegistry.getProviders),
-                  providerRegistry.streamChanges,
+                // Zipped with settings so a Skills toggle republishes the filtered
+                // list even though no provider probe changed.
+                Stream.zipLatestWith(
+                  Stream.concat(
+                    Stream.fromEffect(providerRegistry.getProviders),
+                    providerRegistry.streamChanges,
+                  ),
+                  Stream.concat(
+                    Stream.fromEffect(
+                      serverSettings.getSettings.pipe(
+                        Effect.map((settings) => settings.disabledSkills),
+                        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+                      ),
+                    ),
+                    serverSettings.streamChanges.pipe(
+                      Stream.map((settings) => settings.disabledSkills),
+                    ),
+                  ),
+                  withDisabledSkillsFiltered,
                 ),
                 usageLimitSources.streamChanges.pipe(
                   Stream.changesWith(

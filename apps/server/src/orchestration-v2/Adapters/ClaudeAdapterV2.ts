@@ -1,4 +1,6 @@
+import * as ServerSettings from "../../serverSettings.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { disabledSkillNameSet, isSkillNameDisabled } from "../../fork/skills/disabledSkillNames.ts";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
 import {
   dynamicToolTitle,
@@ -3330,6 +3332,7 @@ export function claudeProposedPlan(input: unknown): string | null {
 }
 
 export interface ClaudeAdapterV2Options {
+  readonly serverSettings?: ServerSettings.ServerSettingsService["Service"];
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
   readonly environment: NodeJS.ProcessEnv;
@@ -3367,13 +3370,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       cwd ?? undefined,
       adapterOptions.environment,
     ).pipe(
-      Effect.map(
-        (skills) =>
-          new Set(
+      Effect.flatMap((skills) =>
+        Effect.gen(function* () {
+          const disabled = disabledSkillNameSet(
+            adapterOptions.serverSettings
+              ? (yield* adapterOptions.serverSettings.getSettings).disabledSkills
+              : [],
+          );
+          return new Set(
             skills
-              .filter((skill) => skill.enabled && skill.userInvocable !== false)
+              .filter(
+                (skill) =>
+                  skill.enabled &&
+                  skill.userInvocable !== false &&
+                  // A skill disabled in Settings keeps its `$name` as literal text.
+                  !isSkillNameDisabled(skill.name, disabled),
+              )
               .map((skill) => skill.name),
-          ),
+          );
+        }),
       ),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -9133,7 +9148,8 @@ export type ClaudeAdapterV2DriverEnv =
   | IdAllocator.IdAllocatorV2
   | McpProviderSessions.McpProviderSessions
   | Path.Path
-  | ServerConfig.ServerConfig;
+  | ServerConfig.ServerConfig
+  | ServerSettings.ServerSettingsService;
 
 export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
   function* (
@@ -9146,6 +9162,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const queryRunner = yield* ClaudeAgentSdkQueryRunner;
     const serverConfig = yield* ServerConfig.ServerConfig;
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const baseEnvironment = yield* mergeProviderInstanceEnvironment(environment, hostEnvironment);
     const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
@@ -9158,6 +9175,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     return yield* makeClaudeAdapterV2({
       instanceId,
       settings: { ...config, enabled, binaryPath },
+      serverSettings,
       environment: claudeEnvironment,
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
@@ -9201,11 +9219,13 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const queryRunner = yield* ClaudeAgentSdkQueryRunner;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
 
   return yield* makeClaudeAdapterV2({
     instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
     settings: DEFAULT_CLAUDE_SETTINGS,
+    serverSettings,
     environment: hostEnvironment,
     attachmentsDir: serverConfig.attachmentsDir,
     fileSystem,
@@ -9227,4 +9247,5 @@ const layer: Layer.Layer<
   | McpProviderSessions.McpProviderSessions
   | Path.Path
   | ServerConfig.ServerConfig
+  | ServerSettings.ServerSettingsService
 > = Layer.effect(ProviderAdapter.ProviderAdapterV2, makeDefaultClaudeAdapterV2());

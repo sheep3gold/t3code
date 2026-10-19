@@ -52,6 +52,19 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
+  it("replaces the disabled skills list as a whole", () => {
+    expect(DEFAULT_SERVER_SETTINGS.disabledSkills).toEqual([]);
+    const saved = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      disabledSkills: ["review", "release"],
+    });
+    expect(saved.disabledSkills).toEqual(["review", "release"]);
+    expect(applyServerSettingsPatch(saved, { disabledSkills: ["release"] }).disabledSkills).toEqual(
+      ["release"],
+    );
+    expect(applyServerSettingsPatch(saved, { disabledSkills: [] }).disabledSkills).toEqual([]);
+    expect(applyServerSettingsPatch(saved, {}).disabledSkills).toEqual(["review", "release"]);
+  });
+
   it("changes a cleanup rule without replacing the machine's other rules", () => {
     const enabled = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       storageCleanup: { worktreeAfterDays: 8, worktreeOnMerge: true, logsAfterDays: 30 },

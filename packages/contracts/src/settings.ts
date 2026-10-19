@@ -1219,6 +1219,15 @@ export const ServerSettings = Schema.Struct({
   usageModelAliases: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+
+  /**
+   * Skills the user turned off, matched by name case-insensitively across every
+   * provider instance. The server drops them from published provider snapshots
+   * and leaves typed Claude `$name` mentions as plain text.
+   */
+  disabledSkills: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1480,6 +1489,9 @@ export const ServerSettingsPatch = Schema.Struct({
   usageModelAliases: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(TrimmedNonEmptyString)),
   ),
+
+  /** Whole-list replacement: the Skills page sends the full disabled set on each edit. */
+  disabledSkills: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
