@@ -818,19 +818,19 @@ describe("buildThreadListV2Items", () => {
     expect(items.map((item) => item.thread.id)).toEqual(["newer-created", "older-created"]);
   });
 
-  it("sorts settled threads by their persisted settlement timestamp", () => {
+  it("sorts settled threads by their last session, not when they were settled", () => {
     const { items } = buildThreadListV2Items({
       threads: [
         makeThread({
-          id: ThreadId.make("settled-newer"),
-          title: "Settled newer",
+          id: ThreadId.make("settled-later"),
+          title: "Settled later",
           settledOverride: "settled",
           settledAt: "2026-06-01T12:00:00.000Z",
           latestUserMessageAt: "2026-06-01T08:00:00.000Z",
         }),
         makeThread({
-          id: ThreadId.make("settled-older"),
-          title: "Settled older",
+          id: ThreadId.make("settled-earlier"),
+          title: "Settled earlier",
           settledOverride: "settled",
           settledAt: "2026-06-01T10:00:00.000Z",
           latestUserMessageAt: "2026-06-01T09:00:00.000Z",
@@ -841,7 +841,7 @@ describe("buildThreadListV2Items", () => {
       now: NOW,
     });
 
-    expect(items.map((item) => item.thread.id)).toEqual(["settled-newer", "settled-older"]);
+    expect(items.map((item) => item.thread.id)).toEqual(["settled-earlier", "settled-later"]);
   });
 
   it("keeps settled threads in the tail and filters by search query", () => {
@@ -888,12 +888,12 @@ describe("buildThreadListV2Items", () => {
     expect(items.map((item) => item.thread.id)).toEqual(["content-match"]);
   });
 
-  it("lifts unseen completions to the top of the active block", () => {
+  it("puts a running thread above newer finished ones", () => {
     const { items } = buildThreadListV2Items({
       threads: [
         makeThread({
-          id: ThreadId.make("seen-newer"),
-          title: "Seen",
+          id: ThreadId.make("finished-newer"),
+          title: "Finished",
           createdAt: "2026-06-01T12:00:00.000Z",
           latestRun: {
             runId: RunId.make("run-1"),
@@ -904,58 +904,25 @@ describe("buildThreadListV2Items", () => {
           } as EnvironmentThreadShell["latestRun"],
         }),
         makeThread({
-          id: ThreadId.make("unseen-older"),
-          title: "Unseen",
+          id: ThreadId.make("running-older"),
+          title: "Running",
           createdAt: "2026-06-01T08:00:00.000Z",
-          latestRun: {
-            runId: RunId.make("run-2"),
-            status: "completed",
-            requestedAt: "2026-06-01T08:00:00.000Z",
-            startedAt: "2026-06-01T08:00:01.000Z",
-            completedAt: "2026-06-01T08:30:00.000Z",
-          } as EnvironmentThreadShell["latestRun"],
+          runtime: {
+            status: "running",
+            activeRunId: RunId.make("run-2"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            providerName: null,
+            lastError: null,
+            updatedAt: "2026-06-01T08:00:01.000Z",
+          },
         }),
       ],
       environmentId: null,
       searchQuery: "",
       now: NOW,
-      threadLastVisitedAtById: {
-        [`${environmentId}:seen-newer`]: "2026-06-01T13:00:00.000Z",
-        [`${environmentId}:unseen-older`]: "2026-06-01T08:00:00.000Z",
-      },
     });
 
-    expect(items.map((item) => item.thread.id)).toEqual(["unseen-older", "seen-newer"]);
-  });
-
-  it("never-visited threads count as read, like web", () => {
-    const { items } = buildThreadListV2Items({
-      threads: [
-        makeThread({
-          id: ThreadId.make("older-created"),
-          title: "Older",
-          createdAt: "2026-06-01T08:00:00.000Z",
-          latestRun: {
-            runId: RunId.make("run-1"),
-            status: "completed",
-            requestedAt: "2026-06-01T08:00:00.000Z",
-            startedAt: "2026-06-01T08:00:01.000Z",
-            completedAt: "2026-06-01T08:30:00.000Z",
-          } as EnvironmentThreadShell["latestRun"],
-        }),
-        makeThread({
-          id: ThreadId.make("newer-created"),
-          title: "Newer",
-          createdAt: "2026-06-01T12:00:00.000Z",
-        }),
-      ],
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-      threadLastVisitedAtById: {},
-    });
-
-    expect(items.map((item) => item.thread.id)).toEqual(["newer-created", "older-created"]);
+    expect(items.map((item) => item.thread.id)).toEqual(["running-older", "finished-newer"]);
   });
 
   it("scopes the flat list to one project", () => {

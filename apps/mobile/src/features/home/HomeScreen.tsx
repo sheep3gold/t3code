@@ -76,7 +76,6 @@ import {
   type ThreadListV2ListItem,
 } from "../threads/threadListV2";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
-import { useThreadVisitedState } from "../threads/use-thread-visited-state";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
@@ -447,7 +446,6 @@ export function HomeScreen(props: HomeScreenProps) {
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
-  const { threadLastVisitedAtById } = useThreadVisitedState();
   // The list's clock is state: the compiler caches anything computed from it on
   // its other inputs, so a render-time `new Date()` would stop moving. The minute
   // interval and the snooze-wake timer below both advance it.
@@ -519,7 +517,6 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey,
-      threadLastVisitedAtById,
     });
   })();
   const nextSnoozeWakeAt = threadListV2Layout.nextSnoozeWakeAt;

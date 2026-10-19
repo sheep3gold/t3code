@@ -18,7 +18,6 @@ import {
   sortWorkingThreadsBySend,
 } from "@t3tools/client-runtime/state/thread-inbox";
 import {
-  hasUnseenThreadCompletion,
   sortActiveThreadsByOrderKey,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
@@ -184,9 +183,8 @@ function parseTimestampMs(isoDate: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** The active order shared by web and native: new/reopened rows, then the
-    saved arrangement. Callers that track read state pass
-    `isUnreadCompleted` so unseen completions lead the section. */
+/** The active order shared by web and native: working rows, then the rest
+    by last activity, then the saved arrangement. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
@@ -197,8 +195,8 @@ export function sortThreadsForListV2<
     readonly latestRun?: { readonly completedAt?: string | null | undefined } | null | undefined;
     readonly latestUserMessageAt?: string | null | undefined;
   },
->(threads: readonly T[], options?: { readonly isUnreadCompleted?: (thread: T) => boolean }): T[] {
-  return sortActiveThreadsByOrderKey(threads, options);
+>(threads: readonly T[]): T[] {
+  return sortActiveThreadsByOrderKey(threads);
 }
 
 export function getThreadListV2OrderedSection(input: {
@@ -569,9 +567,6 @@ export function buildThreadListV2Items(input: {
   readonly settledShelfExpanded?: boolean;
   readonly selectedThreadKey?: string | null;
   readonly queuedThreadKeys?: ReadonlySet<string>;
-  /** Device-local read state. A turn completed after the visit stamp keeps
-      its row at the top of the active block until the user opens it. */
-  readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -645,21 +640,9 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const isUnreadCompleted = (thread: (typeof active)[number]) =>
-    hasUnseenThreadCompletion(
-      thread.latestRun,
-      input.threadLastVisitedAtById?.[`${thread.environmentId}:${thread.id}`] ?? null,
-    );
-  // The unread-completion tier comes from sortThreadsForListV2; the inbox
-  // return stamp only reorders rows within each tier, never across them.
-  const tieredActive = applyPendingThreadOrder(
-    sortThreadsForListV2(active, { isUnreadCompleted }),
-    "active",
-    pending,
-  );
   const orderedActive = workingShelfEnabled
-    ? sortInboxThreadsByReturn(tieredActive, input.inboxReturnAt)
-    : tieredActive;
+    ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
+    : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
   const orderedWorking = sortWorkingThreadsBySend(working);
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>

@@ -1,11 +1,9 @@
-import { ProjectId, RunId } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  activeThreadAnchorTimestampMs,
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
-  hasUnseenThreadCompletion,
   pinOrderKeyBetween,
   planPinnedMove,
   planPinnedReorder,
@@ -17,17 +15,7 @@ import {
   type SettledThreadTimestampInput,
   type ThreadSortInput,
 } from "./threadSort.ts";
-
-describe("activeThreadAnchorTimestampMs", () => {
-  it("uses the later unsettle time when an old thread re-enters the active list", () => {
-    expect(
-      activeThreadAnchorTimestampMs({
-        createdAt: "2026-01-01T00:00:00.000Z",
-        unsettledAt: "2026-08-01T00:00:00.000Z",
-      }),
-    ).toBe(Date.parse("2026-08-01T00:00:00.000Z"));
-  });
-});
+import type { ThreadRuntimeSummary } from "./models.ts";
 
 type TestThread = { readonly id: string } & ThreadSortInput;
 
@@ -43,11 +31,22 @@ function makeThread(overrides: Partial<TestThread> = {}): TestThread {
 }
 
 describe("resolveSettledThreadTimestamp", () => {
-  it("prefers the persisted settlement stamp over later activity", () => {
+  it("uses the last session over the settlement stamp", () => {
+    expect(
+      resolveSettledThreadTimestamp({
+        settledAt: "2026-03-09T14:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T11:00:00.000Z",
+        latestRun: null,
+        updatedAt: "2026-03-09T12:00:00.000Z",
+      }),
+    ).toBe("2026-03-09T11:00:00.000Z");
+  });
+
+  it("uses the settlement stamp only when the thread has no activity", () => {
     expect(
       resolveSettledThreadTimestamp({
         settledAt: "2026-03-09T10:00:00.000Z",
-        latestUserMessageAt: "2026-03-09T11:00:00.000Z",
+        latestUserMessageAt: null,
         latestRun: null,
         updatedAt: "2026-03-09T12:00:00.000Z",
       }),
@@ -89,7 +88,7 @@ describe("sortSettledThreads", () => {
     updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
   });
 
-  it("orders by settle time, most recently settled first", () => {
+  it("orders by last session, not by when threads were settled", () => {
     const sorted = sortSettledThreads([
       settled({
         id: "settled-first",
@@ -103,7 +102,8 @@ describe("sortSettledThreads", () => {
       }),
     ]);
 
-    expect(sorted.map((thread) => thread.id)).toEqual(["settled-last", "settled-first"]);
+    // Settling in bulk must not lift an old thread above a recent one.
+    expect(sorted.map((thread) => thread.id)).toEqual(["settled-first", "settled-last"]);
   });
 
   it("falls back to last activity for auto-settled threads without a settledAt stamp", () => {
@@ -395,6 +395,15 @@ describe("generateSpreadPinOrderKeys", () => {
 });
 
 describe("sortActiveThreadsByOrderKey", () => {
+  const runtime = (status: ThreadRuntimeSummary["status"]): ThreadRuntimeSummary => ({
+    status,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: null,
+    lastError: null,
+    updatedAt: "2026-03-09T00:00:00.000Z",
+  });
+
   it("keeps new and reopened threads ahead of the saved order", () => {
     const sorted = sortActiveThreadsByOrderKey([
       {
@@ -471,95 +480,57 @@ describe("sortActiveThreadsByOrderKey", () => {
     }
   });
 
-  it("lifts working threads above both groups, keeping relative order", () => {
+  it("puts working threads first, each group newest activity first", () => {
     const sorted = sortActiveThreadsByOrderKey([
-      {
-        id: "idle-new",
-        createdAt: "2026-03-09T12:00:00.000Z",
-        session: { status: "stopped" },
-      },
+      { id: "idle-new", createdAt: "2026-03-09T12:00:00.000Z", runtime: runtime("idle") },
       {
         id: "working-old",
         createdAt: "2026-03-09T08:00:00.000Z",
-        session: { status: "running" },
+        latestUserMessageAt: "2026-03-09T09:00:00.000Z",
+        runtime: runtime("running"),
       },
       {
         id: "working-newer",
-        createdAt: "2026-03-09T11:00:00.000Z",
-        backgroundLiveness: "working",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T10:00:00.000Z",
+        runtime: runtime("waiting"),
+      },
+      {
+        id: "just-finished",
+        createdAt: "2026-03-09T07:00:00.000Z",
+        latestRun: { completedAt: "2026-03-09T12:30:00.000Z" },
+        runtime: runtime("idle"),
       },
       {
         id: "arranged-idle",
         createdAt: "2026-03-09T09:00:00.000Z",
         activeOrderKey: "f",
-        session: { status: "stopped" },
+        runtime: runtime("idle"),
       },
       {
         id: "arranged-working",
         createdAt: "2026-03-09T07:00:00.000Z",
         activeOrderKey: "t",
-        session: { status: "starting" },
+        runtime: runtime("starting"),
       },
     ]);
     expect(sorted.map((thread) => thread.id)).toEqual([
       "working-newer",
       "working-old",
       "arranged-working",
+      "just-finished",
       "idle-new",
       "arranged-idle",
     ]);
   });
 
-  it("does not lift monitoring or failed sessions", () => {
+  it("does not treat finished or failed runs as working", () => {
     const sorted = sortActiveThreadsByOrderKey([
-      { id: "monitoring", createdAt: "2026-03-09T09:00:00.000Z", backgroundLiveness: "monitoring" },
-      { id: "failed", createdAt: "2026-03-09T08:00:00.000Z", session: { status: "error" } },
-      { id: "stopped", createdAt: "2026-03-09T07:00:00.000Z", session: { status: "stopped" } },
+      { id: "older", createdAt: "2026-03-09T07:00:00.000Z", runtime: runtime("completed") },
+      { id: "failed", createdAt: "2026-03-09T09:00:00.000Z", runtime: runtime("failed") },
+      { id: "no-runtime", createdAt: "2026-03-09T08:00:00.000Z" },
     ]);
-    expect(sorted.map((thread) => thread.id)).toEqual(["monitoring", "failed", "stopped"]);
-  });
-
-  it("lifts unseen completions above the rest while preserving their relative order", () => {
-    const threads = [
-      {
-        id: "seen-new",
-        createdAt: "2026-03-09T12:00:00.000Z",
-        latestRun: { completedAt: "2026-03-09T12:30:00.000Z" },
-      },
-      {
-        id: "unseen-old",
-        createdAt: "2026-03-09T08:00:00.000Z",
-        latestRun: { completedAt: "2026-03-09T08:30:00.000Z" },
-      },
-      {
-        id: "unseen-newer",
-        createdAt: "2026-03-09T11:00:00.000Z",
-        latestRun: { completedAt: "2026-03-09T11:30:00.000Z" },
-      },
-      {
-        id: "working",
-        createdAt: "2026-03-09T07:00:00.000Z",
-        session: { status: "running" },
-        latestRun: { completedAt: "2026-03-09T13:00:00.000Z" },
-      },
-    ];
-    const lastVisitedAtById = new Map([
-      ["seen-new", "2026-03-09T13:00:00.000Z"],
-      ["unseen-old", "2026-03-09T08:00:00.000Z"],
-      ["unseen-newer", "2026-03-09T11:00:00.000Z"],
-      ["working", "2026-03-09T06:00:00.000Z"],
-    ]);
-    const sorted = sortActiveThreadsByOrderKey(threads, {
-      isUnreadCompleted: (thread) =>
-        hasUnseenThreadCompletion(thread.latestRun, lastVisitedAtById.get(thread.id) ?? null),
-    });
-    // Running work outranks an unseen completion on the same thread.
-    expect(sorted.map((thread) => thread.id)).toEqual([
-      "unseen-newer",
-      "unseen-old",
-      "working",
-      "seen-new",
-    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual(["failed", "no-runtime", "older"]);
   });
 
   it("orders the rest by last activity instead of creation time", () => {
@@ -592,18 +563,6 @@ describe("sortActiveThreadsByOrderKey", () => {
       "created-new-idle",
       "arranged-idle",
     ]);
-  });
-
-  it("treats a missing visit as read and a malformed one as unseen", () => {
-    const latestTurn = { completedAt: "2026-03-09T12:00:00.000Z" };
-    expect(hasUnseenThreadCompletion(latestTurn, null)).toBe(false);
-    expect(hasUnseenThreadCompletion(latestTurn, "garbage")).toBe(true);
-    expect(hasUnseenThreadCompletion(null, "2026-03-09T11:00:00.000Z")).toBe(false);
-    expect(hasUnseenThreadCompletion({ completedAt: "garbage" }, "2026-03-09T11:00:00.000Z")).toBe(
-      false,
-    );
-    expect(hasUnseenThreadCompletion(latestTurn, "2026-03-09T12:00:00.000Z")).toBe(false);
-    expect(hasUnseenThreadCompletion(latestTurn, "2026-03-09T11:59:59.999Z")).toBe(true);
   });
 
   it("moves a keyless thread into the arranged run with one write", () => {
