@@ -135,11 +135,13 @@ export function useThreadTranslation(input: {
   const retryTimersRef = useRef(new Map<string, number>());
   const generationRef = useRef(0);
   const environmentIdRef = useRef(environmentId);
-  environmentIdRef.current = environmentId;
 
   useEffect(() => {
     cacheRef.current = cache;
   }, [cache]);
+  useEffect(() => {
+    environmentIdRef.current = environmentId;
+  }, [environmentId]);
 
   // Switching threads abandons in-flight bookkeeping; timers are cancelled so
   // a retry from the previous thread cannot write state after the switch.
