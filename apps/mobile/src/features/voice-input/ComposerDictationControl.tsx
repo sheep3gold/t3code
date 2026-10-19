@@ -21,6 +21,7 @@ import Animated, {
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
+import { GestureDetector, type GestureType } from "react-native-gesture-handler";
 import { cn } from "../../lib/cn";
 import type { VoiceComposerPresentation } from "./voiceInputPresentation";
 import { VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
@@ -156,9 +157,11 @@ export function ComposerDictationToolbar(props: {
 
 const WaveformBar = memo(function WaveformBar(props: {
   readonly audioLevels: SharedValue<number[]>;
+  readonly height?: number;
   readonly sampleIndex: number;
 }) {
   const { audioLevels, sampleIndex } = props;
+  const height = props.height ?? WAVEFORM_BAR_HEIGHT;
   const animatedStyle = useAnimatedStyle(() => {
     const level = audioLevels.value[sampleIndex] ?? 0;
     return {
@@ -166,8 +169,7 @@ const WaveformBar = memo(function WaveformBar(props: {
       transform: [
         {
           scaleY: withTiming(
-            (WAVEFORM_MIN_BAR_HEIGHT + level * (WAVEFORM_BAR_HEIGHT - WAVEFORM_MIN_BAR_HEIGHT)) /
-              WAVEFORM_BAR_HEIGHT,
+            (WAVEFORM_MIN_BAR_HEIGHT + level * (height - WAVEFORM_MIN_BAR_HEIGHT)) / height,
             WAVEFORM_TIMING,
           ),
         },
@@ -178,7 +180,7 @@ const WaveformBar = memo(function WaveformBar(props: {
   return (
     <Animated.View
       className="w-0.5 rounded-full bg-foreground"
-      style={[{ height: WAVEFORM_BAR_HEIGHT }, animatedStyle]}
+      style={[{ height }, animatedStyle]}
     />
   );
 });
@@ -218,7 +220,33 @@ const VoiceWaveform = memo(function VoiceWaveform(props: {
   );
 });
 
+const COMPACT_WAVEFORM_BAR_COUNT = 8;
+const COMPACT_WAVEFORM_BAR_HEIGHT = 14;
+
+export const CompactVoiceWaveform = memo(function CompactVoiceWaveform(props: {
+  readonly audioLevels: SharedValue<number[]>;
+}) {
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      className="flex-row items-center gap-0.5"
+      style={{ height: COMPACT_WAVEFORM_BAR_HEIGHT }}
+    >
+      {Array.from({ length: COMPACT_WAVEFORM_BAR_COUNT }, (_, index) => (
+        <WaveformBar
+          key={index}
+          audioLevels={props.audioLevels}
+          height={COMPACT_WAVEFORM_BAR_HEIGHT}
+          sampleIndex={VOICE_WAVEFORM_SAMPLE_COUNT - COMPACT_WAVEFORM_BAR_COUNT + index}
+        />
+      ))}
+    </View>
+  );
+});
+
 function VoiceActionButton(props: {
+  readonly accessibilityHint?: string;
   readonly accessibilityLabel: string;
   readonly disabled?: boolean;
   readonly icon: AppSymbolName;
@@ -235,6 +263,7 @@ function VoiceActionButton(props: {
 
   return (
     <Pressable
+      accessibilityHint={props.accessibilityHint}
       accessibilityLabel={props.accessibilityLabel}
       accessibilityRole="button"
       accessibilityState={{ busy: props.loading, disabled: props.disabled }}
@@ -257,7 +286,7 @@ function VoiceActionButton(props: {
         ) : null}
         <View className="absolute inset-0 items-center justify-center">
           {props.loading ? (
-            <ActivityIndicator size="small" colorClassName="accent-icon-muted" />
+            <ActivityIndicator size="small" />
           ) : (
             <SymbolView
               name={props.icon}
@@ -371,6 +400,8 @@ export function ComposerDictationPrimaryAction(props: {
   readonly onStart: () => void;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+  /** When set, holding the mic face records and releasing transcribes. */
+  readonly holdGesture?: GestureType;
 }) {
   if (props.presentation.trailingAction === "confirm") {
     return (
@@ -389,7 +420,12 @@ export function ComposerDictationPrimaryAction(props: {
     );
   }
 
-  return <ComposerDictationStartAction {...props} />;
+  return (
+    <ComposerDictationStartAction
+      {...props}
+      accessibilityHint="Hold to talk, release to transcribe. Double-tap to toggle dictation."
+    />
+  );
 }
 
 export function ComposerDictationStartAction(props: {
@@ -398,11 +434,15 @@ export function ComposerDictationStartAction(props: {
   readonly disabled?: boolean;
   readonly onStart: () => void;
   readonly onCancel: () => void;
+  /** When set, holding this button records and releasing transcribes. */
+  readonly holdGesture?: GestureType;
+  readonly accessibilityHint?: string;
 }) {
   if (!props.isAvailable) return null;
   const openSettings = props.state.phase === "error" && props.state.errorAction === "settings";
-  return (
+  const button = (
     <VoiceActionButton
+      accessibilityHint={props.accessibilityHint}
       accessibilityLabel={openSettings ? "Open microphone settings" : "Start dictation"}
       disabled={props.disabled}
       icon="mic"
@@ -415,5 +455,10 @@ export function ComposerDictationStartAction(props: {
           : props.onStart
       }
     />
+  );
+  return props.holdGesture ? (
+    <GestureDetector gesture={props.holdGesture}>{button}</GestureDetector>
+  ) : (
+    button
   );
 }
