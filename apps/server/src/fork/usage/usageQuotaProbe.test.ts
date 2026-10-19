@@ -273,6 +273,73 @@ describe("usageQuotaProbe", () => {
     }).pipe(Effect.scoped, Effect.provide(layers)),
   );
 
+  // The legacy→ACP migration renamed the driver to acpRegistry and moved
+  // dataDir into the instance environment; the probe must keep up.
+  it.live("minimax probe still runs for the migrated acpRegistry instance via MINIMAX_DATA_DIR", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dataDir = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(
+        path.join(dataDir, "config.yaml"),
+        minimaxYaml("sk-cp-acp"),
+      );
+      const settings = {
+        providerInstances: {
+          minimax: {
+            driver: "acpRegistry",
+            environment: [{ name: "MINIMAX_DATA_DIR", value: dataDir }],
+          },
+        },
+      } as never;
+      const limits = yield* readInstanceUsageLimits(settings, "minimax");
+      assert.isUndefined(limits?.unavailable);
+      assert.strictEqual(limits?.windows.length, 2);
+      assert.deepStrictEqual(requests, [
+        {
+          url: "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+          authorization: "Bearer sk-cp-acp",
+        },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClient(
+          {
+            base_resp: { status_code: 0, status_msg: "success" },
+            model_remains: [
+              {
+                model_name: "general",
+                current_interval_status: 3,
+                current_weekly_status: 3,
+              },
+            ],
+          },
+          requests,
+        ),
+      ),
+    );
+  });
+
+  it.live("factory probe is selected for the migrated acpRegistry instance", () =>
+    Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const settings = {
+        providerInstances: { factory: { driver: "acpRegistry" } },
+      } as never;
+      // No etcd env and no FACTORY_API_KEY: the probe must be selected (not
+      // "unsupported") and stop at the missing-key guard. Pointing the etcd
+      // env at the real resolver would reach live etcd and the Factory API,
+      // so the env-variable path stays covered by the minimax test above.
+      const limits = yield* readInstanceUsageLimits(settings, "factory");
+      assert.isDefined(limits);
+      assert.strictEqual(limits?.unavailable?.reason, "probeFailed");
+      assert.include(limits?.unavailable?.message ?? "", "缺少可用的 API key");
+    }).pipe(Effect.scoped, Effect.provide(layers)),
+  );
+
   it.live("antigravity probe reads the instance profile under stateDir", () =>
     Effect.gen(function* () {
       clearUsageQuotaProbeCache();
