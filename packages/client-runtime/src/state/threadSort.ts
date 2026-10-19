@@ -1,6 +1,10 @@
 import type { ProjectId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
-import type { EnvironmentThreadShell } from "./models.ts";
+import {
+  threadRuntimeIsActive,
+  type EnvironmentThreadShell,
+  type ThreadRuntimeSummary,
+} from "./models.ts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
@@ -25,11 +29,11 @@ export type SettledThreadTimestampInput = Pick<
   "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"
 >;
 
+/** Settled rows show and sort by the thread's last session, not by when it
+    was settled: settling is often done in bulk, which would stamp a batch of
+    old threads with the same recent time. settledAt only covers threads
+    with no recorded activity. */
 export function resolveSettledThreadTimestamp(thread: SettledThreadTimestampInput): string | null {
-  if (thread.settledAt != null && toSortableTimestamp(thread.settledAt) !== null) {
-    return thread.settledAt;
-  }
-
   let latest: string | null = null;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const candidate of [
@@ -45,6 +49,9 @@ export function resolveSettledThreadTimestamp(thread: SettledThreadTimestampInpu
     }
   }
   if (latest !== null) return latest;
+  if (thread.settledAt != null && toSortableTimestamp(thread.settledAt) !== null) {
+    return thread.settledAt;
+  }
   return toSortableTimestamp(thread.updatedAt) === null ? null : thread.updatedAt;
 }
 
@@ -111,16 +118,6 @@ export function getThreadSortTimestamp(
     );
   }
   return getLatestUserMessageTimestamp(thread);
-}
-
-export function activeThreadAnchorTimestampMs(thread: {
-  readonly createdAt: string;
-  readonly unsettledAt?: string | null | undefined;
-}): number {
-  return Math.max(
-    toSortableTimestamp(thread.createdAt) ?? 0,
-    toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
-  );
 }
 
 export function sortThreads<T extends { readonly id: string } & ThreadSortInput>(
@@ -295,23 +292,12 @@ export function sortPinnedThreadsByOrderKey<
   return [...keyed, ...keyless];
 }
 
-/**
- * Working tier of the active list. A thread reads as working while its
- * session is running/starting or native background work outlives the turn
- * (see backgroundLiveness). Resolved per-call because callers (the client
- * shell subscription) hand back frozen shells whose liveness changes with
- * every server push.
- */
+/** Working tier of the active list: the thread's runtime has a run in
+    flight (preparing through waiting). Read from the V2 runtime summary,
+    the same source the working shelf uses. */
 export type ActiveThreadWorkingInput = {
-  readonly session?: { readonly status: string } | null | undefined;
-  readonly backgroundLiveness?: "working" | "monitoring" | null | undefined;
+  readonly runtime?: ThreadRuntimeSummary | null | undefined;
 };
-
-function activeThreadWorkingPriority(thread: ActiveThreadWorkingInput): 0 | 1 {
-  const status = thread.session?.status;
-  if (status === "running" || status === "starting") return 1;
-  return thread.backgroundLiveness === "working" ? 1 : 0;
-}
 
 /** Activity stamps for the rest of the active list. updatedAt is
     deliberately NOT one of them: the server bumps it on any metadata write
@@ -329,24 +315,6 @@ export type ActiveThreadActivityInput = {
     | null
     | undefined;
 };
-
-/** True when the latest turn completed after the user last looked at the
-    thread. A missing visit counts as read — never-visited threads must not
-    flood the top of the list on a fresh device — while a malformed visit
-    timestamp counts as unseen so corrupt local data cannot eat the signal. */
-export function hasUnseenThreadCompletion(
-  latestRun: { readonly completedAt?: string | null | undefined } | null | undefined,
-  lastVisitedAt: string | null | undefined,
-): boolean {
-  const completedAt = latestRun?.completedAt;
-  if (!completedAt) return false;
-  const completedMs = toSortableTimestamp(completedAt);
-  if (completedMs === null) return false;
-  if (!lastVisitedAt) return false;
-  const visitedMs = toSortableTimestamp(lastVisitedAt);
-  if (visitedMs === null) return true;
-  return completedMs > visitedMs;
-}
 
 /** The timestamp "rest" rows sort by inside the active block: the newest of
     the thread's activity stamps (latest user message, latest turn) and its
@@ -376,13 +344,10 @@ function activeThreadActivityMs(
 }
 
 /**
- * Attention tiers of the active list, one sort shared by web and mobile:
- * completions the user has not opened yet lead, then running work. Both
- * tiers keep the base order (creation/re-entry anchor, saved arrangement)
- * so rows do not shuffle while the user watches. Everything else follows
- * last activity, newest first, and manually arranged keys keep their run
- * at the bottom of the block. Read state is device-local, so callers pass
- * an `isUnreadCompleted` predicate; without it nothing is unread.
+ * Active list order, one sort shared by web and mobile: running work leads,
+ * then everything else. Both groups follow last activity, newest first, so a
+ * just-finished thread sits right under the working ones. Manually arranged
+ * keys keep their run at the bottom of the block.
  */
 export function sortActiveThreadsByOrderKey<
   T extends {
@@ -393,54 +358,28 @@ export function sortActiveThreadsByOrderKey<
     readonly environmentId?: string | undefined;
   } & ActiveThreadWorkingInput &
     ActiveThreadActivityInput,
->(threads: readonly T[], options?: { readonly isUnreadCompleted?: (thread: T) => boolean }): T[] {
+>(threads: readonly T[]): T[] {
   if (threads.length < 2) return [...threads];
-  const timestamps = new Map<T, number>();
-  for (const thread of threads) {
-    if (thread.activeOrderKey == null) {
-      timestamps.set(thread, activeThreadAnchorTimestampMs(thread));
-    }
-  }
   const identityTiebreak = (left: T, right: T) =>
     left.id.localeCompare(right.id) ||
     (left.environmentId ?? "").localeCompare(right.environmentId ?? "");
-  // Base order: keyless threads by creation/re-entry anchor, arranged keys below.
-  const base = [...threads].sort((left, right) => {
-    const leftKey = left.activeOrderKey;
-    const rightKey = right.activeOrderKey;
-    if (leftKey == null && rightKey != null) return -1;
-    if (leftKey != null && rightKey == null) return 1;
-    let order = 0;
-    if (leftKey != null && rightKey != null) {
-      order = leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-    } else {
-      order = timestamps.get(right)! - timestamps.get(left)!;
-    }
-    return order || identityTiebreak(left, right);
-  });
-  // Stable partition by attention tier: running work outranks an older
-  // unseen completion on the same thread (the newer result supersedes it).
-  const unreadCompleted: T[] = [];
+  const activity = new Map(threads.map((thread) => [thread, activeThreadActivityMs(thread)]));
+  const byActivity = (left: T, right: T) =>
+    activity.get(right)! - activity.get(left)! || identityTiebreak(left, right);
   const working: T[] = [];
   const rest: T[] = [];
-  for (const thread of base) {
-    if (activeThreadWorkingPriority(thread) === 1) {
-      working.push(thread);
-    } else if (options?.isUnreadCompleted?.(thread) === true) {
-      unreadCompleted.push(thread);
-    } else {
-      rest.push(thread);
-    }
+  const keyed: T[] = [];
+  for (const thread of threads) {
+    if (threadRuntimeIsActive(thread.runtime)) working.push(thread);
+    else if (thread.activeOrderKey != null) keyed.push(thread);
+    else rest.push(thread);
   }
-  const restUnkeyed = rest
-    .filter((thread) => thread.activeOrderKey == null)
-    .sort(
-      (left, right) =>
-        activeThreadActivityMs(right) - activeThreadActivityMs(left) ||
-        identityTiebreak(left, right),
-    );
-  const restKeyed = rest.filter((thread) => thread.activeOrderKey != null);
-  return [...unreadCompleted, ...working, ...restUnkeyed, ...restKeyed];
+  keyed.sort((left, right) => {
+    const leftKey = left.activeOrderKey!;
+    const rightKey = right.activeOrderKey!;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : identityTiebreak(left, right);
+  });
+  return [...working.sort(byActivity), ...rest.sort(byActivity), ...keyed];
 }
 
 export function planPinnedMove(input: {
