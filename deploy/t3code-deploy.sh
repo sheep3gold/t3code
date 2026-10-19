@@ -60,6 +60,22 @@ start_unit() {
 }
 
 cd "$SRC"
+
+# pnpm 11 每次真正安装都会改写 pnpm-lock.yaml 里的可选平台元数据（删掉几行
+# libc:），而且默认每个 pnpm exec / pnpm run 之前都会先校验依赖、不一致就静默
+# 重装一遍。release-hub 下次 rsync 前会拿 /opt/t3code 和 git 比对，lockfile
+# 只要被改过就会被当成仓库外改动，拦下发布。这里两手都做：关掉 run 前的自动
+# 重装（install-dependencies.sh 已经显式装过），并在脚本任何方式退出时（成功、
+# 失败、回滚）把 lockfile 还原成仓库版本。
+export pnpm_config_verify_deps_before_run=false
+lock_snapshot=$(mktemp)
+cp "$SRC/pnpm-lock.yaml" "$lock_snapshot"
+restore_lock() {
+  cp "$lock_snapshot" "$SRC/pnpm-lock.yaml"
+  rm -f "$lock_snapshot"
+}
+trap restore_lock EXIT
+
 install -d -m 0755 "$GENERATED" "$BACKUP_ROOT"
 cp "$SRC"/deploy/spdx-cache/v3.28.0/*.json "$GENERATED"/
 
