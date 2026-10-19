@@ -21,6 +21,7 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -885,6 +886,76 @@ describe("buildThreadListV2Items", () => {
     });
 
     expect(items.map((item) => item.thread.id)).toEqual(["content-match"]);
+  });
+
+  it("lifts unseen completions to the top of the active block", () => {
+    const { items } = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("seen-newer"),
+          title: "Seen",
+          createdAt: "2026-06-01T12:00:00.000Z",
+          latestRun: {
+            runId: RunId.make("run-1"),
+            status: "completed",
+            requestedAt: "2026-06-01T12:00:00.000Z",
+            startedAt: "2026-06-01T12:00:01.000Z",
+            completedAt: "2026-06-01T12:30:00.000Z",
+          } as EnvironmentThreadShell["latestRun"],
+        }),
+        makeThread({
+          id: ThreadId.make("unseen-older"),
+          title: "Unseen",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestRun: {
+            runId: RunId.make("run-2"),
+            status: "completed",
+            requestedAt: "2026-06-01T08:00:00.000Z",
+            startedAt: "2026-06-01T08:00:01.000Z",
+            completedAt: "2026-06-01T08:30:00.000Z",
+          } as EnvironmentThreadShell["latestRun"],
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      threadLastVisitedAtById: {
+        [`${environmentId}:seen-newer`]: "2026-06-01T13:00:00.000Z",
+        [`${environmentId}:unseen-older`]: "2026-06-01T08:00:00.000Z",
+      },
+    });
+
+    expect(items.map((item) => item.thread.id)).toEqual(["unseen-older", "seen-newer"]);
+  });
+
+  it("never-visited threads count as read, like web", () => {
+    const { items } = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("older-created"),
+          title: "Older",
+          createdAt: "2026-06-01T08:00:00.000Z",
+          latestRun: {
+            runId: RunId.make("run-1"),
+            status: "completed",
+            requestedAt: "2026-06-01T08:00:00.000Z",
+            startedAt: "2026-06-01T08:00:01.000Z",
+            completedAt: "2026-06-01T08:30:00.000Z",
+          } as EnvironmentThreadShell["latestRun"],
+        }),
+        makeThread({
+          id: ThreadId.make("newer-created"),
+          title: "Newer",
+          createdAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      threadLastVisitedAtById: {},
+    });
+
+    expect(items.map((item) => item.thread.id)).toEqual(["newer-created", "older-created"]);
   });
 
   it("scopes the flat list to one project", () => {

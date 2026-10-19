@@ -31,6 +31,7 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects, useNavigationThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
+import { useThreadVisitedState } from "./use-thread-visited-state";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -257,6 +258,7 @@ function ThreadNavigationSidebarPane(
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
+  const { threadLastVisitedAtById } = useThreadVisitedState();
   // The list's clock is state: the compiler caches anything computed from it on
   // its other inputs, so a render-time `new Date()` would stop moving. The minute
   // interval and the snooze-wake timer below both advance it.
@@ -328,6 +330,7 @@ function ThreadNavigationSidebarPane(
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: props.selectedThreadKey ?? null,
+      threadLastVisitedAtById,
     });
   })();
   const nextSnoozeWakeAt = threadListV2Layout.nextSnoozeWakeAt;
