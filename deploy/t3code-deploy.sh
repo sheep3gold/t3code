@@ -76,6 +76,8 @@ test -s "$SRC/apps/server/dist/bin.mjs"
 test -d "$LIVE/apps/web/dist"
 test -d "$LIVE/apps/server/dist"
 
+node "$SRC/deploy/host/check-runtime-externals.mjs" "$SRC" "$LIVE"
+
 # Keep user-scope skill links in sync before touching the running installation.
 python3 "$SRC/deploy/host/install-parent-skills.py"
 
