@@ -22,6 +22,7 @@ import Animated, {
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { GestureDetector, type GestureType } from "react-native-gesture-handler";
 import { cn } from "../../lib/cn";
 import type { VoiceComposerPresentation } from "./voiceInputPresentation";
 import { VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
@@ -262,6 +263,7 @@ export function DictationElapsedTime(props: {
 }
 
 function VoiceActionButton(props: {
+  readonly accessibilityHint?: string;
   readonly accessibilityLabel: string;
   readonly disabled?: boolean;
   readonly icon: AppSymbolName;
@@ -278,6 +280,7 @@ function VoiceActionButton(props: {
 
   return (
     <Pressable
+      accessibilityHint={props.accessibilityHint}
       accessibilityLabel={props.accessibilityLabel}
       accessibilityRole="button"
       accessibilityState={{ busy: props.loading, disabled: props.disabled }}
@@ -410,6 +413,8 @@ export function ComposerDictationPrimaryAction(props: {
   readonly onStart: () => void;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+  /** When set, holding the mic face records and releasing transcribes. */
+  readonly holdGesture?: GestureType;
 }) {
   if (props.presentation.trailingAction === "confirm") {
     return (
@@ -428,7 +433,12 @@ export function ComposerDictationPrimaryAction(props: {
     );
   }
 
-  return <ComposerDictationStartAction {...props} />;
+  return (
+    <ComposerDictationStartAction
+      {...props}
+      accessibilityHint="Hold to talk, release to transcribe. Double-tap to toggle dictation."
+    />
+  );
 }
 
 export function ComposerDictationStartAction(props: {
@@ -437,11 +447,15 @@ export function ComposerDictationStartAction(props: {
   readonly disabled?: boolean;
   readonly onStart: () => void;
   readonly onCancel: () => void;
+  /** When set, holding this button records and releasing transcribes. */
+  readonly holdGesture?: GestureType;
+  readonly accessibilityHint?: string;
 }) {
   if (!props.isAvailable) return null;
   const openSettings = props.state.phase === "error" && props.state.errorAction === "settings";
-  return (
+  const button = (
     <VoiceActionButton
+      accessibilityHint={props.accessibilityHint}
       accessibilityLabel={openSettings ? "Open microphone settings" : "Start dictation"}
       disabled={props.disabled}
       icon="mic"
@@ -454,5 +468,10 @@ export function ComposerDictationStartAction(props: {
           : props.onStart
       }
     />
+  );
+  return props.holdGesture ? (
+    <GestureDetector gesture={props.holdGesture}>{button}</GestureDetector>
+  ) : (
+    button
   );
 }

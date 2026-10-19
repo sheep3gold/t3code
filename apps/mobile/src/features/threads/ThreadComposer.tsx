@@ -116,6 +116,8 @@ import {
   ComposerDictationStatus,
   ComposerDictationToolbar,
 } from "../voice-input/ComposerDictationControl";
+import { useHoldToTalk } from "../voice-input/useHoldToTalk";
+import { HoldToTalkOverlay } from "../voice-input/HoldToTalkOverlay";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
 import {
@@ -475,6 +477,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     voiceInput.state,
     voiceInput.elapsedSeconds,
   );
+  const holdToTalk = useHoldToTalk(voiceInput);
   const isVoiceInputPresented = voicePresentation.statusLabel !== null;
   const isExpanded = isFocused || settingsSheetPresentation.keepsComposerExpanded;
   const showsCompactDictation = isVoiceInputPresented && !isExpanded;
@@ -1011,6 +1014,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   isAvailable={voiceInput.isAvailable}
                   onStart={voiceInput.start}
                   onCancel={voiceInput.cancel}
+                  holdGesture={holdToTalk.gesture}
+                  accessibilityHint="Hold to talk, release to transcribe."
                 />
                 {showStopAction ? (
                   <ComposerActionButton
@@ -1106,6 +1111,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onStart={voiceInput.start}
                     onConfirm={voiceInput.stop}
                     onCancel={voiceInput.cancel}
+                    holdGesture={holdToTalk.gesture}
                   />
                   {showStopAction ? (
                     <ComposerActionButton
@@ -1136,6 +1142,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         ) : null}
       </Animated.View>
 
+      {holdToTalk.showOverlay ? (
+        <HoldToTalkOverlay
+          cancelArmed={holdToTalk.cancelArmed}
+          elapsedSeconds={voiceInput.elapsedSeconds}
+          audioLevels={voiceInput.audioLevels}
+          gestureY={holdToTalk.gestureY}
+          slideDistance={holdToTalk.slideDistance}
+        />
+      ) : null}
       <VideoPreviewModal source={previewVideo} onRequestClose={closePreview} />
       <FilePreviewModal source={previewFile} onRequestClose={closePreview} />
     </Animated.View>
