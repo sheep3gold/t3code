@@ -89,8 +89,13 @@ export function useWorktreeSetup(input: {
     readonly routeThreadRef: ScopedThreadRef;
     readonly latestSnapshot: WorktreeSetupSnapshot | null | undefined;
   }>({ routeThreadRef, latestSnapshot: null });
-  if (heldFor.routeThreadRef !== routeThreadRef || heldFor.latestSnapshot !== latestSnapshot) {
-    const routeChanged = heldFor.routeThreadRef !== routeThreadRef;
+  // Compare by id, not object identity: routeThreadRef is recreated on every
+  // render, so a reference comparison would treat every render as a route
+  // change and loop forever.
+  const routeChanged =
+    heldFor.routeThreadRef.environmentId !== routeThreadRef.environmentId ||
+    heldFor.routeThreadRef.threadId !== routeThreadRef.threadId;
+  if (routeChanged || heldFor.latestSnapshot !== latestSnapshot) {
     setHeldFor({ routeThreadRef, latestSnapshot });
     if (routeChanged) {
       setHeldSnapshot(null);
