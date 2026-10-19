@@ -78,6 +78,8 @@ import {
   ComposerDictationStatus,
   ComposerDictationToolbar,
 } from "../voice-input/ComposerDictationControl";
+import { HoldToTalkOverlay } from "../voice-input/HoldToTalkOverlay";
+import { useHoldToTalk } from "../voice-input/useHoldToTalk";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
 import {
@@ -510,6 +512,10 @@ export function NewTaskDraftScreen(props: {
   const voicePresentation = resolveVoiceComposerPresentation(
     voiceInput.state,
     voiceInput.elapsedSeconds,
+  );
+  const holdToTalk = useHoldToTalk(
+    voiceInput,
+    isIncomingShareTransferPending || isImportingShare || flow.submitting,
   );
   const isVoiceInputPresented = voicePresentation.statusLabel !== null;
   const preventRemove =
@@ -1766,6 +1772,7 @@ export function NewTaskDraftScreen(props: {
                 onStart={voiceInput.start}
                 onConfirm={voiceInput.stop}
                 onCancel={voiceInput.cancel}
+                holdGesture={holdToTalk.gesture}
               />
               {voicePresentation.showsSend ? (
                 <ComposerActionButton
@@ -1796,6 +1803,15 @@ export function NewTaskDraftScreen(props: {
           </ComposerDictationToolbar>
         </Animated.View>
       </ComposerSurface>
+      {holdToTalk.showOverlay ? (
+        <HoldToTalkOverlay
+          cancelArmed={holdToTalk.cancelArmed}
+          elapsedSeconds={voiceInput.elapsedSeconds}
+          audioLevels={voiceInput.audioLevels}
+          gestureY={holdToTalk.gestureY}
+          slideDistance={holdToTalk.slideDistance}
+        />
+      ) : null}
       <VideoPreviewModal source={previewVideo} onRequestClose={closeMediaPreview} />
       <FilePreviewModal source={previewFile} onRequestClose={closeMediaPreview} />
     </View>
