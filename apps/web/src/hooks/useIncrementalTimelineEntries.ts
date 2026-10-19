@@ -6,13 +6,11 @@ import {
 } from "../session-logic";
 
 function sameInput(left: TimelineEntriesInput, right: TimelineEntriesInput): boolean {
-  // anchoredMessages/attachmentUrlById are rebuilt each render; compare by size,
-  // not identity (see the reference-comparison loop in useIncrementalTimelineEntries).
   return (
     left.visibleTurnItems === right.visibleTurnItems &&
     left.optimisticMessages === right.optimisticMessages &&
-    left.anchoredMessages.length === right.anchoredMessages.length &&
-    left.attachmentUrlById.size === right.attachmentUrlById.size &&
+    left.anchoredMessages === right.anchoredMessages &&
+    left.attachmentUrlById === right.attachmentUrlById &&
     left.attempts === right.attempts &&
     left.nodes === right.nodes &&
     left.plans === right.plans

@@ -142,11 +142,9 @@ import { Atom } from "effect/reactivity";
 import {
   Fragment,
   type SetStateAction,
-  useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -2821,7 +2819,7 @@ export default function ChatView(props: ChatViewProps) {
    * user should not be able to click. Skipped while streaming so a half-emitted
    * marker line does not render broken chips that then jump.
    */
-  const activeOptionLabels = useMemo<ReadonlyArray<string>>(() => {
+  const activeOptionLabels = ((): ReadonlyArray<string> => {
     for (let i = timelineMessages.length - 1; i >= 0; i -= 1) {
       const message = timelineMessages[i];
       if (!message || message.role !== "assistant") continue;
@@ -2829,19 +2827,16 @@ export default function ChatView(props: ChatViewProps) {
       return parseAssistantOptions(message.text ?? "")?.options ?? [];
     }
     return [];
-  }, [timelineMessages]);
+  })();
   /** Selection state must follow the composer live, so subscribe to the draft text. */
   const composerPromptForOptions = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.prompt ?? "",
   );
-  const handleOptionToggle = useCallback(
-    (label: string) => {
-      const store = useComposerDraftStore.getState();
-      const current = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
-      store.setPrompt(composerDraftTarget, toggleOptionInPrompt(current, label));
-    },
-    [composerDraftTarget],
-  );
+  const handleOptionToggle = (label: string) => {
+    const store = useComposerDraftStore.getState();
+    const current = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
+    store.setPrompt(composerDraftTarget, toggleOptionInPrompt(current, label));
+  };
 
   const paintOnlyDisplayedTimeline = isPaintOnlyThreadTimeline(
     displayedTimeline.displayThreadKey,
@@ -3381,12 +3376,9 @@ export default function ChatView(props: ChatViewProps) {
    * message path, so the user's own draft is left untouched and mid-turn it
    * queues for the next tool boundary instead of being dropped.
    */
-  const handleOptionSend = useCallback(
-    (label: string) => {
-      void sendAppMessageStable(label);
-    },
-    [sendAppMessageStable],
-  );
+  const handleOptionSend = (label: string) => {
+    void sendAppMessageStable(label);
+  };
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
   const addTerminalContextToDraft = (selection: TerminalContextSelection) => {
     composerRef.current?.addTerminalContext(selection);
