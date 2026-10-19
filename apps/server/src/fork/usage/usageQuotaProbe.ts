@@ -1087,6 +1087,21 @@ export const antigravityProfileDirectory = (stateDir: string, instanceKey: strin
     NodeCrypto.createHash("sha256").update(instanceKey).digest("hex"),
   );
 
+/**
+ * The legacy→ACP migration (legacyForkProviderInstances) moves each config
+ * value into the instance environment, so probes read both spellings. Matching
+ * is by instance key because those instances now ride the `acpRegistry` driver.
+ */
+const instanceEnvVariable = (settings: ServerSettings, instanceKey: string, name: string) => {
+  const instance = settings.providerInstances[instanceKey as never];
+  for (const entry of instance?.environment ?? []) {
+    if (entry.name === name && typeof entry.value === "string" && entry.value.trim().length > 0) {
+      return entry.value.trim();
+    }
+  }
+  return null;
+};
+
 const probeForInstance = (
   settings: ServerSettings,
   instanceKey: string,
@@ -1096,6 +1111,7 @@ const probeForInstance = (
   readonly home: string | null;
   readonly etcdKey?: string;
 } | null => {
+  const instance = settings.providerInstances[instanceKey as never];
   if (instanceKey === "claude_glm")
     return { kind: "glm", home: instanceHome(settings, instanceKey) };
   if (instanceKey === "claude_xjp") {
@@ -1106,26 +1122,33 @@ const probeForInstance = (
     return { kind: "kimi", home: instanceHome(settings, instanceKey) };
   if (instanceKey === "claude_deepseek")
     return { kind: "deepseek", home: instanceHome(settings, instanceKey) };
-  const instance = settings.providerInstances[instanceKey as never];
   if (instance?.driver === "antigravity") {
     return {
       kind: "antigravity",
       home: stateDir === undefined ? null : antigravityProfileDirectory(stateDir, instanceKey),
     };
   }
-  if (instance?.driver === "minimax") {
-    const dataDir = ((instance.config ?? {}) as { dataDir?: unknown }).dataDir;
+  if (instance !== undefined && (instanceKey === "minimax" || instance.driver === "minimax")) {
+    const configDataDir = ((instance?.config ?? {}) as { dataDir?: unknown }).dataDir;
+    const dataDir =
+      typeof configDataDir === "string" && configDataDir.trim().length > 0
+        ? configDataDir.trim()
+        : instanceEnvVariable(settings, instanceKey, "MINIMAX_DATA_DIR");
     return {
       kind: "minimax",
-      home: typeof dataDir === "string" && dataDir.trim().length > 0 ? dataDir.trim() : null,
+      home: dataDir,
     };
   }
-  if (instance?.driver === "factory") {
-    const etcdKey = ((instance.config ?? {}) as { apiKeyEtcdKey?: unknown }).apiKeyEtcdKey;
+  if (instance !== undefined && (instanceKey === "factory" || instance.driver === "factory")) {
+    const configEtcdKey = ((instance?.config ?? {}) as { apiKeyEtcdKey?: unknown }).apiKeyEtcdKey;
+    const etcdKey =
+      typeof configEtcdKey === "string" && configEtcdKey.trim().length > 0
+        ? configEtcdKey.trim()
+        : (instanceEnvVariable(settings, instanceKey, "T3_FACTORY_API_KEY_ETCD_KEY") ?? undefined);
     return {
       kind: "factory",
       home: null,
-      ...(typeof etcdKey === "string" ? { etcdKey } : {}),
+      ...(etcdKey !== undefined ? { etcdKey } : {}),
     };
   }
   return null;
