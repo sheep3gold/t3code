@@ -11,6 +11,7 @@ set -Eeuo pipefail
 HOST_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RUNTIME_ROOT=${T3_RUNTIME_ROOT:-/home/ubuntu/.t3/runtime/versions}
 USER_UNIT_DIR=${T3_USER_UNIT_DIR:-/home/ubuntu/.config/systemd/user}
+USER_BIN_DIR=${T3_USER_BIN_DIR:-/home/ubuntu/.local/bin}
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 LAUNCHER_MARKER="# t3 launcher 拦截层"
 
@@ -68,10 +69,21 @@ install_units() {
   rm -f /home/ubuntu/.t3/t3code-portwatch.sh /home/ubuntu/.t3/t3-port-forward.mjs
 }
 
+# provider 实例按命令名启动的包装脚本（如 t3-factory-droid-acp），装到
+# t3code.service 的 PATH 里；缺了它，对应 provider 在设置页显示 Not found。
+install_bins() {
+  local f
+  [ -d "$HOST_DIR/bin" ] || return 0
+  while IFS= read -r f; do
+    install_file "$f" "$USER_BIN_DIR/$(basename "$f")" 0755 || true
+  done < <(find "$HOST_DIR/bin" -maxdepth 1 -type f | sort)
+}
+
 case "${1:-}" in
 launcher) install_launcher ;;
 all)
   install_launcher
+  install_bins
   install_units
   ;;
 *)
