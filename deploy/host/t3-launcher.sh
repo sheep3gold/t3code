@@ -114,4 +114,16 @@ serve | start)
     ;;
 esac
 
+case "${1:-}" in
+# auth 必须走 selfbuilt：桌面端通过 SSH 跑 `t3 auth pairing create` 拿
+# bootstrap token，官方 0.0.42 二进制写 V1 库 state.sqlite，而 selfbuilt
+# 服务端只认 statev2.sqlite，配对会 401 invalid_credential。
+auth)
+    if [ -f "$SELFBUILT" ] && [ -x "$NODE" ]; then
+        exec "$NODE" "$SELFBUILT" "$@"
+    fi
+    ;;
+esac
+
 exec "$OFFICIAL" "$@"
+
