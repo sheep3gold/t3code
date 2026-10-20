@@ -11,6 +11,30 @@ import type {
 
 import * as Config from "effect/Config";
 
+const KNOWN_MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
+  "claude-opus-4-8": 1_000_000,
+  "claude-opus-4-7": 1_000_000,
+  "claude-opus-4-6": 1_000_000,
+  "claude-sonnet-4-6": 1_000_000,
+  "claude-opus-5-5": 200_000,
+  "claude-sonnet-5-5": 200_000,
+  "claude-opus-5": 200_000,
+  "claude-sonnet-5": 200_000,
+  "claude-haiku-4-5": 200_000,
+};
+
+/** Window for model slugs the provider adapter does not report. */
+export function knownModelContextWindowTokens(slug: string): number | undefined {
+  const normalized = slug.trim().toLowerCase();
+  if (normalized in KNOWN_MODEL_CONTEXT_WINDOWS) {
+    return KNOWN_MODEL_CONTEXT_WINDOWS[normalized];
+  }
+  for (const [key, window] of Object.entries(KNOWN_MODEL_CONTEXT_WINDOWS)) {
+    if (normalized.startsWith(`${key}-`)) return window;
+  }
+  return undefined;
+}
+
 export const DEFAULT_HANDOFF_TOKEN_CAP = 16_000;
 const HANDOFF_BYTE_CAP = 64_000;
 export const handoffTokenCapConfig = Config.Int("T3CODE_CONTEXT_HANDOFF_TOKEN_CAP").pipe(
@@ -178,7 +202,7 @@ export function historicalMessage(
   };
 }
 
-function renderHistoricalMessage(message: OrchestrationV2HistoricalMessage): string {
+export function renderHistoricalMessage(message: OrchestrationV2HistoricalMessage): string {
   return `[Historical ${message.role}; ${message.kind}; thread=${message.threadId}; run=${message.runId ?? "imported"}; item=${message.itemId}; provider-thread=${message.providerThreadId ?? "none"}; status=${message.status}${message.runStatus === undefined ? "" : `; run-status=${message.runStatus}`}]\n${message.text}`;
 }
 
@@ -218,6 +242,53 @@ export function historyCost(
       Buffer.byteLength(JSON.stringify(renderHistory(messages, context))),
     ) + 256
   );
+}
+
+/**
+ * True when the reported or known window cannot hold the native transcript
+ * plus the pending handoffs. Unknown windows are trusted: adapters without a
+ * catalog enforce their own limits.
+ */
+export function modelWindowOverflows(input: {
+  readonly userText: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly nativeContextEstimate: number;
+  readonly handoffMinCost: number;
+  readonly modelContextWindow: number | undefined;
+}): boolean {
+  const usage = input.providerThread.contextUsage;
+  const native = usage?.usedTokens ?? input.nativeContextEstimate;
+  const current =
+    Buffer.byteLength(JSON.stringify(input.userText)) + attachmentTokenAllowance(input.attachments);
+  const window = input.modelContextWindow;
+  if (window !== undefined) {
+    return native + current + input.handoffMinCost + 16_000 > window;
+  }
+  // Unknown window: trust the adapter until usage shows the native thread is
+  // already past the byte cap any handoff could fit into.
+  return native + current + input.handoffMinCost + 16_000 > HANDOFF_BYTE_CAP;
+}
+
+/**
+ * Irreducible cost of delivering a context handoff: the coverage header plus
+ * the messages the stored history retained after trimming. Used to decide
+ * whether the selected model's window can hold the handoff at all.
+ */
+export function handoffMinCost(handoff: OrchestrationV2ContextHandoff): number {
+  const coverage =
+    handoff.history?.coverage ??
+    `From thread ${handoff.threadId}, runs ${handoff.coveredRunOrdinals.from}-${handoff.coveredRunOrdinals.to}. Recover history with t3_thread_read, view=activity; paginate with afterPosition, and use itemId/textOffset for long items.`;
+  const messageCost = (handoff.history?.messages ?? []).reduce(
+    (total, message) =>
+      total +
+      Math.max(
+        Buffer.byteLength(JSON.stringify(renderHistoricalMessage(message))) + 4,
+        Buffer.byteLength(JSON.stringify(historyResponseItems([message], "")[1])) + 1,
+      ),
+    0,
+  );
+  return historyCost([], coverage) + messageCost;
 }
 
 export function selectHistory(input: {

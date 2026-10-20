@@ -62,7 +62,7 @@ import {
   ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
-import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { modelSelectionsEqual, readCustomModelEntries } from "@t3tools/shared/model";
 import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
@@ -93,6 +93,12 @@ import {
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { notificationTurnItem } from "@t3tools/provider-core/server/notification";
+import {
+  handoffMinCost,
+  knownModelContextWindowTokens,
+  modelWindowOverflows,
+} from "@t3tools/provider-core/server/handoffBudget";
+import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../provider/ClaudeModelCatalog.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -965,6 +971,108 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         })),
         Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
       );
+
+  // Budget check for the dispatch's selected model. When the window cannot
+  // hold the pending handoffs, move the run to another model on the same
+  // provider whose window fits, instead of failing the turn.
+  // Budget check for the dispatch's selected model. When the window cannot
+  // hold the pending handoffs, move the run to another model on the same
+  // provider whose window fits, instead of failing the turn.
+  const modelSelectionForHandoffBudget = Effect.fn("orchestrationV2.handoffBudgetFallback")(
+    function* (input: {
+      readonly selection: ModelSelection;
+      readonly text: string;
+      readonly attachments: ReadonlyArray<ChatAttachment>;
+      readonly providerThread: OrchestrationV2ProviderThread;
+      readonly providerSessionId: ProviderSessionId;
+      readonly driver: string;
+      readonly threadId: ThreadId;
+      readonly cwd?: string | null;
+    }) {
+      const contextHandoffs = yield* projectionStore
+        .getThreadRecords(input.threadId, ["contextHandoffs"])
+        .pipe(
+          Effect.map((records) => records.contextHandoffs),
+          Effect.orDie,
+        );
+      const pendingHandoffs = contextHandoffs.filter(
+        (handoff) =>
+          handoff.status === "ready" && handoff.toProviderThreadId === input.providerThread.id,
+      );
+      if (pendingHandoffs.length === 0) return input.selection;
+      const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const customEntries = readCustomModelEntries(
+        (
+          settings.providerInstances[input.selection.instanceId]?.config as
+            | { customModels?: unknown }
+            | undefined
+        )?.customModels,
+      );
+      const windowFor = (selection: ModelSelection) =>
+        Effect.gen(function* () {
+          const session = yield* providerSessions.get(input.providerSessionId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.catchCause(() => Effect.succeed(undefined)),
+          );
+          const sessionWindow = session?.getModelContextWindow?.(selection, input.cwd);
+          if (sessionWindow !== undefined) return sessionWindow;
+          const fromSettings = customEntries.find(
+            (entry) => entry.slug === selection.model,
+          )?.contextWindowTokens;
+          if (fromSettings !== null && fromSettings !== undefined) return fromSettings;
+          return knownModelContextWindowTokens(selection.model);
+        });
+      const minCost = pendingHandoffs.reduce((sum, handoff) => sum + handoffMinCost(handoff), 0);
+      const fits = (window: number | undefined) =>
+        !modelWindowOverflows({
+          userText: input.text,
+          attachments: input.attachments,
+          providerThread: input.providerThread,
+          nativeContextEstimate: 0,
+          handoffMinCost: minCost,
+          modelContextWindow: window,
+        });
+      const currentWindow = yield* windowFor(input.selection);
+      if (fits(currentWindow)) return input.selection;
+      const seen = new Set<string>([input.selection.model]);
+      let best: { selection: ModelSelection; window: number } | undefined;
+      const consider = (slug: string, window: number | undefined) => {
+        if (seen.has(slug)) return;
+        seen.add(slug);
+        if (window === undefined || !fits(window)) return;
+        if (best === undefined || window > best.window) {
+          best = { selection: { ...input.selection, model: slug }, window };
+        }
+      };
+      for (const entry of customEntries) {
+        consider(entry.slug, yield* windowFor({ ...input.selection, model: entry.slug }));
+      }
+      if (input.driver === "claudeAgent") {
+        for (const catalogModel of BUNDLED_CLAUDE_MODEL_CATALOG.models) {
+          consider(
+            catalogModel.model.slug,
+            yield* windowFor({ ...input.selection, model: catalogModel.model.slug }),
+          );
+        }
+      }
+      // Gateway and catalog variants carry a capability suffix. When the
+      // adapter knows a window for `${model}-large`, that variant is a
+      // candidate too.
+      const largeSlug = `${input.selection.model}-large`;
+      consider(largeSlug, yield* windowFor({ ...input.selection, model: largeSlug }));
+      if (best !== undefined) {
+        yield* Effect.logWarning(
+          "Selected model window cannot hold the pending context handoffs; switching models",
+          {
+            providerInstanceId: input.selection.instanceId,
+            from: input.selection.model,
+            to: best.selection.model,
+          },
+        );
+      }
+      return best?.selection ?? input.selection;
+    },
+  );
 
   const readHandoffItems = (threadId: ThreadId, runIds?: ReadonlyArray<RunId | null>) =>
     projectionStore
@@ -4779,7 +4887,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ]);
         projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       }
-      const modelSelection = command.modelSelection ?? projection.thread.modelSelection;
+      let modelSelection = command.modelSelection ?? projection.thread.modelSelection;
       let dispatchMode = resolveMessageDispatchIntent(
         projection,
         command.dispatchMode,
@@ -5109,41 +5217,74 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           createdAt: now,
           updatedAt: now,
         };
+        const effectiveSelection =
+          queuedProviderThread.providerSessionId === null
+            ? modelSelection
+            : yield* modelSelectionForHandoffBudget({
+                selection: modelSelection,
+                text: command.text,
+                attachments: command.attachments,
+                providerThread: queuedProviderThread,
+                providerSessionId: queuedProviderThread.providerSessionId,
+                driver: queuedAdapter.driver,
+                threadId: command.threadId,
+              }).pipe(mapDispatchError(command));
+        const modelSelectionAdjusted = !modelSelectionsEqual(modelSelection, effectiveSelection);
+        const finalSelection = effectiveSelection;
+        if (modelSelectionAdjusted) {
+          yield* emit(
+            events,
+            command,
+          )({
+            type: "thread.model-selection-updated",
+            threadId: command.threadId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              ...projection.thread,
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection: finalSelection,
+              updatedAt: now,
+            },
+          });
+        }
         const attemptId = idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 });
         const rootNodeId = idAllocator.derive.rootNode({ runId });
         const checkpointScope =
           queueBehindRun.status === "preparing" || worktreeMissingRun !== undefined
             ? null
-            : yield* runtimePolicy.resolve({ thread: projection.thread, modelSelection }).pipe(
-                Effect.flatMap((resolvedRuntimePolicy) =>
-                  checkpointService.prepareRootRunScope({
-                    threadId: command.threadId,
-                    runId,
-                    rootNodeId,
-                    providerThreadId: queuedProviderThread.id,
-                    cwd:
-                      resolvedRuntimePolicy.cwd ??
-                      selectedProviderSession?.cwd ??
-                      projection.thread.worktreePath ??
-                      process.cwd(),
-                    createdAt: now,
-                  }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestratorDispatchError({
-                      commandId: command.commandId,
-                      commandType: command.type,
-                      cause,
+            : yield* runtimePolicy
+                .resolve({ thread: projection.thread, modelSelection: finalSelection })
+                .pipe(
+                  Effect.flatMap((resolvedRuntimePolicy) =>
+                    checkpointService.prepareRootRunScope({
+                      threadId: command.threadId,
+                      runId,
+                      rootNodeId,
+                      providerThreadId: queuedProviderThread.id,
+                      cwd:
+                        resolvedRuntimePolicy.cwd ??
+                        selectedProviderSession?.cwd ??
+                        projection.thread.worktreePath ??
+                        process.cwd(),
+                      createdAt: now,
                     }),
-                ),
-              );
+                  ),
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestratorDispatchError({
+                        commandId: command.commandId,
+                        commandType: command.type,
+                        cause,
+                      }),
+                  ),
+                );
         const run: OrchestrationV2Run = {
           id: runId,
           threadId: command.threadId,
           ordinal,
           providerInstanceId: modelSelection.instanceId,
-          modelSelection,
+          modelSelection: finalSelection,
           providerThreadId: queuedProviderThread.id,
           userMessageId: command.messageId,
           rootNodeId,
@@ -5317,6 +5458,49 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         }
         return;
+      }
+      // Budget check for the dispatch's selected model. When the window
+      // cannot hold the pending handoffs, move the run to another model on
+      // the same provider whose window fits, instead of failing the turn.
+      const budgetAdapter = yield* providerAdapters
+        .get(modelSelection.instanceId)
+        .pipe(mapDispatchError(command));
+      const budgetThread =
+        activeProviderThread ??
+        projection.providerThreads.findLast(
+          (candidate) => candidate.providerInstanceId === modelSelection.instanceId,
+        );
+      if (budgetThread !== undefined && budgetThread.providerSessionId !== null) {
+        const effectiveSelection = yield* modelSelectionForHandoffBudget({
+          selection: modelSelection,
+          text: command.text,
+          attachments: command.attachments,
+          providerThread: budgetThread,
+          providerSessionId: budgetThread.providerSessionId,
+          driver: budgetAdapter.driver,
+          threadId: command.threadId,
+          cwd: projection.thread.worktreePath,
+        }).pipe(mapDispatchError(command));
+        if (!modelSelectionsEqual(modelSelection, effectiveSelection)) {
+          const adjustNow = yield* DateTime.now;
+          yield* emit(
+            events,
+            command,
+          )({
+            type: "thread.model-selection-updated",
+            threadId: command.threadId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: adjustNow,
+            payload: {
+              ...projection.thread,
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection: effectiveSelection,
+              updatedAt: adjustNow,
+            },
+          });
+          projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+          modelSelection = effectiveSelection;
+        }
       }
       const pendingForkTransfer = pendingForkTransferForThread(projection);
       const pendingMergeBackSourceThreadIds = new Set(
