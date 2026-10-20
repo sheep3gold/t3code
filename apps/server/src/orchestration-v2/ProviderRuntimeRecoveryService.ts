@@ -228,16 +228,36 @@ export const make = Effect.gen(function* () {
         }
         runs.push(run);
       }
+      // A live provider callback cannot survive process loss. Keep its question
+      // answerable as a new message rather than discarding the user's choices.
+      const recoverableQuestions = projection.runtimeRequests.filter(
+        (request) =>
+          request.status === "pending" &&
+          request.kind === "user_input" &&
+          request.responseCapability.type === "live" &&
+          projection.turnItems.some(
+            (item) =>
+              item.type === "user_input_request" &&
+              item.requestId === request.id &&
+              (item.status === "pending" || item.status === "running" || item.status === "waiting"),
+          ),
+      );
+      const recoverableQuestionIds = new Set(recoverableQuestions.map((request) => request.id));
       const messageRequestNodeIds = new Set(
         projection.runtimeRequests
           .filter(
             (request) =>
-              request.status === "pending" && request.responseCapability.type === "message",
+              request.status === "pending" &&
+              (request.responseCapability.type === "message" ||
+                recoverableQuestionIds.has(request.id)),
           )
           .map((request) => request.nodeId),
       );
       const requests = projection.runtimeRequests.filter(
-        (request) => request.status === "pending" && request.responseCapability.type !== "message",
+        (request) =>
+          request.status === "pending" &&
+          request.responseCapability.type !== "message" &&
+          !recoverableQuestionIds.has(request.id),
       );
       // Delegated task rows, items and nodes stay open: the child settles them.
       const delegatedTaskNodeIds = new Set<string>([
@@ -332,6 +352,16 @@ export const make = Effect.gen(function* () {
           providerInstanceId: run.providerInstanceId,
           occurredAt: now,
           payload: { ...run, queueHeld: true },
+        });
+      }
+      for (const request of recoverableQuestions) {
+        events.push({
+          id: yield* allocateEventId(),
+          type: "runtime-request.updated",
+          threadId: projection.thread.id,
+          nodeId: request.nodeId,
+          occurredAt: now,
+          payload: { ...request, responseCapability: { type: "message" } },
         });
       }
       for (const request of requests) {

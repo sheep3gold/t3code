@@ -229,6 +229,100 @@ it.effect("preserves async questions across startup and shutdown", () => {
   }).pipe(Effect.provide(layer));
 });
 
+it.effect.each(["startup", "shutdown"] as const)(
+  "keeps a live question answerable after $0 while cancelling its provider turn",
+  (trigger) => {
+    const threadId = ThreadId.make(`question-recovery-${trigger}`);
+    const runId = RunId.make(`question-run-${trigger}`);
+    const nodeId = NodeId.make(`question-node-${trigger}`);
+    const requestId = RuntimeRequestId.make(`question-request-${trigger}`);
+    const providerSessionId = ProviderSessionId.make(`question-session-${trigger}`);
+    const projection = {
+      thread: { id: threadId },
+      runtimeRequests: [
+        {
+          id: requestId,
+          kind: "user_input",
+          nodeId,
+          status: "pending",
+          responseCapability: { type: "live", providerSessionId },
+        },
+      ],
+      providerSessions: [],
+      providerThreads: [],
+      providerTurns: [],
+      runs: [
+        {
+          id: runId,
+          status: "running",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        },
+      ],
+      attempts: [],
+      nodes: [{ id: nodeId, runId, status: "waiting" }],
+      subagents: [],
+      messages: [],
+      turnItems: [
+        {
+          id: TurnItemId.make(`question-item-${trigger}`),
+          type: "user_input_request",
+          requestId,
+          runId,
+          nodeId,
+          status: "waiting",
+          questions: [{ id: "choice", question: "Which option?", options: [] }],
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+    let committed: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null = null;
+    const layer = ProviderRuntimeRecovery.layer.pipe(
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getRecoveryThreadIds: () => Effect.succeed([threadId]),
+            getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          }),
+          Layer.mock(EventSink.EventSinkV2)({
+            commitCommand: (input) => {
+              committed = input;
+              return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
+            },
+          }),
+          IdAllocator.layer,
+          Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
+            runRecoveryOnce: Effect.succeed(false),
+          }),
+          Layer.mock(EffectOutbox.EffectOutboxV2)({
+            reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+          }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const summary =
+        yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile(trigger);
+      assert.equal(summary.closedRequests, 0);
+      const changes = committed?.events ?? [];
+      const request = changes.find((event) => event.type === "runtime-request.updated");
+      assert.equal(request?.type, "runtime-request.updated");
+      if (request?.type === "runtime-request.updated") {
+        assert.equal(request.payload.status, "pending");
+        assert.equal(request.payload.responseCapability.type, "message");
+      }
+      assert.isTrue(
+        changes.some(
+          (event) => event.type === "run.updated" && event.payload.status === "cancelled",
+        ),
+      );
+      assert.isFalse(
+        changes.some((event) => event.type === "node.updated" && event.nodeId === nodeId),
+      );
+      assert.isFalse(changes.some((event) => event.type === "turn-item.updated"));
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect("uses the same reconciliation path to cancel runtime requests during shutdown", () => {
   const threadId = ThreadId.make("thread_shutdown_requests");
   let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
