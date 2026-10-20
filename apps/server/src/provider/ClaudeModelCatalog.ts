@@ -100,7 +100,8 @@ export function scopeClaudeModelCatalog(
   const builtInSlugs = new Set(builtInModels.map((entry) => entry.model.slug));
   const customCatalogModels: Array<ClaudeCatalogModel> = [];
   for (const entry of customEntries) {
-    if (!entry.capabilities || builtInSlugs.has(entry.slug)) continue;
+    if (builtInSlugs.has(entry.slug)) continue;
+    if (!entry.capabilities && entry.contextWindowTokens === null) continue;
     customCatalogModels.push({
       model: {
         slug: entry.slug,
@@ -108,7 +109,10 @@ export function scopeClaudeModelCatalog(
         isCustom: true,
         capabilities: entry.capabilities,
       },
-      runtime: {},
+      runtime:
+        entry.contextWindowTokens !== null
+          ? { fixedContextWindowTokens: entry.contextWindowTokens }
+          : {},
       compatibility: {},
     });
   }

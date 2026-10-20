@@ -254,4 +254,23 @@ describe("Claude model catalog", () => {
       ["claude-synthetic-next", "claude-custom-tuned"],
     );
   });
+
+  it("carries custom-model context window tokens into the catalog runtime", () => {
+    const catalog = scopeClaudeModelCatalog(catalogFromManifest(manifest()), [
+      { slug: "gateway-auto", name: "Auto", contextWindowTokens: 200_000 },
+    ]);
+
+    assert.strictEqual(
+      resolveClaudeCatalogContextWindowTokens(catalog, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "gateway-auto",
+        options: [],
+      }),
+      200_000,
+    );
+    assert.deepStrictEqual(
+      resolveClaudeModelsForVersion(catalog, "3.2.0").map((model) => model.slug),
+      ["claude-synthetic-next", "gateway-auto"],
+    );
+  });
 });

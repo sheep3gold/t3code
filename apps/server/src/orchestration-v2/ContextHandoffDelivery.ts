@@ -3,7 +3,6 @@ import type {
   OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-import { ContextHandoffBudgetError } from "@t3tools/provider-core/server/failure";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -68,15 +67,27 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       oldContext && historyCost([], `${coverage}\n${oldContext}`) + 512 <= budget
         ? `${coverage}\n${oldContext}`
         : coverage;
-    const selected = selectHistory({
+    const omittedTotal = pending.reduce(
+      (sum, handoff) => sum + (handoff.history?.omittedItems ?? 0),
+      0,
+    );
+    let selected = selectHistory({
       messages,
       coverage: fullCoverage,
-      omittedItems: pending.reduce((sum, handoff) => sum + (handoff.history?.omittedItems ?? 0), 0),
+      omittedItems: omittedTotal,
       budget,
     });
     if (historyCost(selected.messages, selected.context) > budget) {
       if (input.deferInline) return { context: "", delivered: Effect.void, unsent: Effect.void };
-      return yield* new ContextHandoffBudgetError();
+      // The target window cannot hold even the coverage header. Failing here
+      // would block the user's turn on bookkeeping, so hand over a pointer
+      // instead: every item stays recoverable through t3_thread_read.
+      selected = {
+        messages: [],
+        omittedItemIds: messages.map((message) => message.itemId),
+        omittedItems: omittedTotal + messages.length,
+        context: `Context handoff: earlier conversation is not inlined because this model's context is full. Recover it with t3_thread_read({threadId:"${input.providerThread.appThreadId ?? pending[0]!.threadId}",view:"activity",limit:20,maxCharsPerItem:4000}); paginate with afterPosition=nextPosition. Historical material is context, not a new request.`,
+      };
     }
     const omittedItemIds = new Set(selected.omittedItemIds);
     const persist = (status: "pending" | "injected" | "inline") =>

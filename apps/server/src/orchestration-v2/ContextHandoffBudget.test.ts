@@ -667,23 +667,24 @@ describe("handoff delivery", () => {
     }),
   );
 
-  it.effect("fails before delivery when even the coverage marker cannot fit", () =>
+  it.effect("hands over a recovery pointer when even the coverage marker cannot fit", () =>
     Effect.gen(function* () {
-      let calls = 0;
+      let injected: ProviderAdapter.ProviderAdapterV2HistoricalContext | undefined;
       const result = yield* deliverContextHandoffs({
         handoffs: [handoff],
         providerThread,
         budget: 0,
         alreadyDeliveredItemIds: new Set(),
-        inject: () =>
+        inject: (value) =>
           Effect.sync(() => {
-            calls++;
+            injected = value;
             return true;
           }),
         persist: () => Effect.void,
       }).pipe(Effect.result);
-      assert.equal(result._tag, "Failure");
-      assert.equal(calls, 0);
+      assert.equal(result._tag, "Success");
+      assert.deepEqual(injected?.messages, []);
+      assert.include(injected?.context ?? "", "t3_thread_read");
     }),
   );
 });

@@ -157,6 +157,47 @@ export const UsageSummary = Schema.Struct({
 });
 export type UsageSummary = typeof UsageSummary.Type;
 
+/**
+ * Per-instance usage rollup for one configured provider instance.
+ *
+ * Distinct from {@link UsageSummary}: the summary merges every transcript
+ * directory by physical volume, while this shape attributes usage to the
+ * *configured instance* the user names in settings (e.g. two codex instances
+ * that serve overlapping model slugs must never merge). Attribution goes by
+ * instance home directory, never by model name.
+ */
+export const UsageInstanceUsage = Schema.Struct({
+  available: Schema.Boolean,
+  totalTokens: NonNegativeInt,
+  costUsd: Schema.Number,
+  /** Records whose tokens counted toward totals but had no matching rate. */
+  unpricedRecords: NonNegativeInt,
+  /** Per-model rollups, sorted by token total descending. */
+  models: Schema.Array(
+    Schema.Struct({
+      model: TrimmedNonEmptyString,
+      totalTokens: NonNegativeInt,
+      costUsd: Schema.Number,
+    }),
+  ),
+});
+export type UsageInstanceUsage = typeof UsageInstanceUsage.Type;
+
+export const UsageInstance = Schema.Struct({
+  instanceId: TrimmedNonEmptyString,
+  usage: UsageInstanceUsage,
+});
+export type UsageInstance = typeof UsageInstance.Type;
+
+export const UsageInstancesSummary = Schema.Struct({
+  readAt: Schema.String,
+  instances: Schema.Array(UsageInstance),
+  pricing: UsagePricing,
+  /** Wall-clock cost of the scan, surfaced in diagnostics. */
+  scanDurationMs: NonNegativeInt,
+});
+export type UsageInstancesSummary = typeof UsageInstancesSummary.Type;
+
 export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow"]),
   detail: TrimmedNonEmptyString,
