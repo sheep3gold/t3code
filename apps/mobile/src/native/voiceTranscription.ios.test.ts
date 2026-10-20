@@ -24,6 +24,12 @@ vi.mock("expo-file-system", () => ({
   },
 }));
 
+vi.mock("react-native", () => ({
+  Settings: { get: vi.fn(() => null) },
+}));
+
+import { Settings } from "react-native";
+
 import { getLocalVoiceTranscriber } from "./voiceTranscription.ios";
 
 const audio = new ArrayBuffer(4);
@@ -56,6 +62,24 @@ afterEach(() => {
 });
 
 describe("getLocalVoiceTranscriber", () => {
+  it("prefers the iOS system language over the Hermes Intl locale", async () => {
+    vi.mocked(Settings.get).mockImplementation((key: string) =>
+      key === "AppleLocale" ? "zh_Hans_CN" : null,
+    );
+    const transcriber = getLocalVoiceTranscriber()!;
+    const prepared = await transcriber.prepare({ signal: new AbortController().signal });
+    expect(mocks.isAvailable).toHaveBeenCalledWith("zh-Hans-CN");
+    expect(mocks.prepare).toHaveBeenCalledWith("zh-Hans-CN");
+  });
+
+  it("falls back to AppleLanguages when AppleLocale is missing", () => {
+    vi.mocked(Settings.get).mockImplementation((key: string) =>
+      key === "AppleLanguages" ? ["zh-Hans-CN", "en-US"] : null,
+    );
+    getLocalVoiceTranscriber();
+    expect(mocks.isAvailable).toHaveBeenCalledWith("zh-Hans-CN");
+  });
+
   it("keeps the selected language and Apple's resolved locale when the device language changes", async () => {
     const resolvedOptions = Intl.DateTimeFormat().resolvedOptions();
     const deviceLocale = vi
