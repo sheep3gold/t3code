@@ -6413,8 +6413,12 @@ describe("UsageLimitRecoveryWorker fallback model", () => {
     const commands = limitFallbackCommands(makeShell({}), fallback);
     assert.lengthOf(commands, 2);
     const modelCommand = commands[0]!;
-    assert.equal(modelCommand.type, "thread.model-selection.set");
-    if (modelCommand.type === "thread.model-selection.set")
+    // The fallback lives on another instance, so the switch is a provider.switch.
+    assert.equal(modelCommand.type, "provider.switch");
+    if (
+      modelCommand.type === "provider.switch" ||
+      modelCommand.type === "thread.model-selection.set"
+    )
       assert.deepEqual(modelCommand.modelSelection, fallback);
     const resumeCommand = commands[1]!;
     assert.equal(resumeCommand.type, "message.dispatch");

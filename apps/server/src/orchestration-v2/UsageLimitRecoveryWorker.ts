@@ -1,5 +1,6 @@
 import { CommandId, MessageId, type OrchestrationV2Command } from "@t3tools/contracts";
 import type { ModelSelection } from "@t3tools/contracts";
+import { modelSelectionCommandType, modelSelectionsEqual } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -71,26 +72,13 @@ export function limitRecoveryCommand(
   };
 }
 
-function sameModelSelection(current: ModelSelection, fallback: ModelSelection): boolean {
-  if (current.instanceId !== fallback.instanceId || current.model !== fallback.model) return false;
-  const currentOptions = current.options ?? [];
-  const fallbackOptions = fallback.options ?? [];
-  return (
-    currentOptions.length === fallbackOptions.length &&
-    fallbackOptions.every(
-      (option, index) =>
-        currentOptions[index]?.id === option.id && currentOptions[index]?.value === option.value,
-    )
-  );
-}
-
 /**
  * When a fallback model is configured, a usage-limit stop switches the thread
  * to that model and resumes immediately, without waiting for the reported
- * reset time. Two sweeps: the first switches the model, the second (which sees
- * the thread already on the fallback model) resumes the run. A thread already
- * on the fallback model that stops again gets no further commands, so a
- * limited fallback model cannot start a switch loop.
+ * reset time. Both commands go out in one sweep; command serialization lands
+ * the model switch before the resume dispatch runs. A thread already on the
+ * fallback model that stops again gets no further commands, so a limited
+ * fallback model cannot start a switch loop.
  */
 export function limitFallbackCommands(
   thread: ProjectionStore.ProjectionLimitRecoveryCandidate,
@@ -105,12 +93,14 @@ export function limitFallbackCommands(
     thread.pendingRuntimeRequest !== null
   )
     return [];
-  const onFallback = sameModelSelection(thread.modelSelection, fallback);
+  const onFallback = modelSelectionsEqual(thread.modelSelection, fallback);
   if (onFallback) return [];
   const identity = `${thread.id}:${thread.latestRunId}`;
   return [
     {
-      type: "thread.model-selection.set",
+      // The contract picks provider.switch when the fallback lives on another
+      // provider instance; both commands carry the same modelSelection field.
+      type: modelSelectionCommandType(thread.providerInstanceId, fallback),
       commandId: CommandId.make(`limit-fallback-model:${identity}`),
       threadId: thread.id,
       modelSelection: fallback,
