@@ -1,9 +1,12 @@
-import { afterEach, expect, it, vi } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthSessionId } from "@t3tools/contracts";
+import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import { Etag, HttpClient, HttpClientResponse, HttpPlatform, HttpRouter } from "effect/http";
+import { afterEach, expect, vi } from "vite-plus/test";
 import * as EnvironmentAuth from "../../auth/EnvironmentAuth.ts";
 import * as TranslationHttp from "./http.ts";
 
@@ -16,17 +19,21 @@ async function translate(
     configured?: boolean;
     malformed?: boolean;
     fail?: boolean;
+    /** Unset T3CODE_TRANSLATE_API_KEY and serve the key from ~/.t3 instead. */
+    envFileKey?: string;
   } = {},
 ) {
   vi.stubEnv(
     "T3CODE_TRANSLATE_API_KEY",
-    options.configured === false ? "" : "test-translation-key",
+    options.envFileKey !== undefined || options.configured === false ? "" : "test-translation-key",
   );
   vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", "https://translation.example.test/v1");
   const upstreamInputs: Array<ReadonlyArray<string>> = [];
   const http = HttpClient.make((request) =>
     Effect.sync(() => {
-      expect(request.headers.authorization).toBe("Bearer test-translation-key");
+      expect(request.headers.authorization).toBe(
+        `Bearer ${options.envFileKey ?? "test-translation-key"}`,
+      );
       expect(request.headers["x-mg-tier"]).toBeUndefined();
       expect(request.url).toBe("https://translation.example.test/v1/chat/completions");
       if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON request body");
@@ -107,6 +114,23 @@ it("returns unavailable without making an upstream request when unconfigured", a
   expect(result.status).toBe(503);
   expect(result.upstreamInputs).toHaveLength(0);
 });
+
+it.effect("falls back to the key in ~/.t3/t3code-translate.env when the env var is unset", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* fileSystem.makeTempDirectoryScoped();
+    yield* fileSystem.makeDirectory(path.join(home, ".t3"));
+    yield* fileSystem.writeFileString(
+      path.join(home, ".t3", "t3code-translate.env"),
+      "# rendered for this machine\nT3CODE_TRANSLATE_API_KEY=sk-from-file\n",
+    );
+    vi.stubEnv("HOME", home);
+    const result = yield* Effect.tryPromise(() => translate({ envFileKey: "sk-from-file" }));
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.text)).toEqual({ translations: ["你好 `code`", "already"] });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it("splits and rejoins a long message without changing paragraph or code structure", async () => {
   const text = Array(8).fill("Hello ".repeat(150)).join("\n\n") + "\n\n`code`";
