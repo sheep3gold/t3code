@@ -36,6 +36,9 @@ const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
 /** Longest trailing window the daily history fold serves. */
 const PROVIDER_USAGE_HISTORY_MAX_DAYS = 90;
 
+/** Trailing window the summary attributes to each configured instance. */
+const PROVIDER_USAGE_SUMMARY_DAYS = 7;
+
 /** Days bucket into this zone so a turn lands on the day the user experienced. */
 const PROVIDER_USAGE_HISTORY_TIME_ZONE = "Asia/Shanghai";
 
@@ -183,17 +186,32 @@ export const layerProviderUsageSummaryRoute = HttpRouter.add(
           readAt: readAtNow,
         });
       }
-      const limits =
-        settings === null
-          ? undefined
-          : yield* readInstanceUsageLimits(settings, provider.instanceId, {
-              refresh,
-              stateDir,
-            }).pipe(Effect.orElseSucceed(() => undefined));
+      // Attribution is best-effort: a scan failure must not blank the quota
+      // windows the caller can still use.
+      const [limits, instancesSummary] = yield* Effect.all(
+        [
+          settings === null
+            ? Effect.succeed(undefined)
+            : readInstanceUsageLimits(settings, provider.instanceId, {
+                refresh,
+                stateDir,
+              }).pipe(Effect.orElseSucceed(() => undefined)),
+          usageService.readInstances({ days: PROVIDER_USAGE_SUMMARY_DAYS }).pipe(
+            Effect.catch((error: UsageReadError) =>
+              Effect.logWarning("Provider usage attribution scan failed", {
+                detail: error.detail,
+              }).pipe(Effect.as(null)),
+            ),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const usage = instancesSummary?.instances.find((entry) => entry.instanceId === instanceParam)
+        ?.usage ?? { available: false };
       return HttpServerResponse.jsonUnsafe({
         provider: {
           ...providerIdentity(provider),
-          usage: { available: false },
+          usage,
           usageLimits: limits ??
             provider.usageLimits ?? {
               checkedAt: readAtNow,
@@ -206,8 +224,20 @@ export const layerProviderUsageSummaryRoute = HttpRouter.add(
     }
 
     // Every card at once, for clients that render the whole page in one shot.
-    // Upstream's `UsageService` has no per-instance attribution method, so the
-    // summary here is the transcript scan alone; probes still fill the windows.
+    // The instance scan attributes trailing-window usage per configured home;
+    // probes fill the rate-limit windows alongside it.
+    const instancesSummary = yield* usageService
+      .readInstances({ days: PROVIDER_USAGE_SUMMARY_DAYS })
+      .pipe(
+        Effect.catch((error: UsageReadError) =>
+          Effect.logWarning("Provider usage attribution scan failed", {
+            detail: error.detail,
+          }).pipe(Effect.as(null)),
+        ),
+      );
+    const usageByInstance = new Map(
+      (instancesSummary?.instances ?? []).map((instance) => [instance.instanceId, instance.usage]),
+    );
     const instanceLimits = yield* Effect.forEach(
       providers,
       (provider) =>
@@ -224,6 +254,10 @@ export const layerProviderUsageSummaryRoute = HttpRouter.add(
     );
     const limitsById = new Map(instanceLimits);
 
+    const presentUsages = providers.flatMap(
+      (provider) => usageByInstance.get(provider.instanceId) ?? [],
+    );
+
     return HttpServerResponse.jsonUnsafe({
       providers: [
         ...providers.map((provider) => ({
@@ -232,7 +266,7 @@ export const layerProviderUsageSummaryRoute = HttpRouter.add(
           displayName: provider.displayName ?? provider.driver,
           modelCount: provider.models.length,
           state: provider.status,
-          usage: { available: false },
+          usage: usageByInstance.get(provider.instanceId) ?? { available: false },
           usageLimits: limitsById.get(provider.instanceId) ??
             provider.usageLimits ?? {
               checkedAt: readAtNow,
@@ -250,6 +284,11 @@ export const layerProviderUsageSummaryRoute = HttpRouter.add(
           usageLimits: entry.usageLimits,
         })),
       ],
+      totals: {
+        totalTokens: presentUsages.reduce((sum, usage) => sum + usage.totalTokens, 0),
+        costUsd: presentUsages.reduce((sum, usage) => sum + usage.costUsd, 0),
+        available: presentUsages.length > 0,
+      },
       readAt: readAtNow,
     });
   }),

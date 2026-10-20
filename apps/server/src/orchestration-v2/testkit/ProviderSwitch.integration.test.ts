@@ -725,19 +725,15 @@ describe("orchestration v2 provider switching", () => {
           }
           if (reasoningScenario && replaceNative) {
             const replaced = yield* orchestrator.getThreadProjection(threadId);
-            assert.equal(
-              replaced.runs.at(-1)?.status,
-              scenario.includes("small") ? "failed" : "completed",
-            );
+            // A window too small for the handoff no longer fails the turn:
+            // the target runs with a recovery pointer instead.
+            assert.equal(replaced.runs.at(-1)?.status, "completed");
             const target = replaced.providerThreads.find(
               (thread) => thread.providerInstanceId === CLAUDE_MODEL_SELECTION.instanceId,
             )!;
             assert.isNull(target.contextUsage);
             assert.equal(yield* Ref.get(generation), 2);
-            assert.equal(
-              (yield* Ref.get(capturedTurns)).at(-1)!.driver,
-              scenario.includes("small") ? CODEX_DRIVER : CLAUDE_DRIVER,
-            );
+            assert.equal((yield* Ref.get(capturedTurns)).at(-1)!.driver, CLAUDE_DRIVER);
             return;
           }
           if (replaceNative) {
@@ -2934,6 +2930,161 @@ describe("orchestration v2 provider switching", () => {
         assert.include(turns[2]?.text ?? "", "claude switched response");
         assert.include(turns[2]?.text ?? "", returnPrompt);
         assert.equal(turns[0]?.providerThreadId, turns[2]?.providerThreadId);
+      }),
+    ),
+  );
+
+  it.live("binds a fresh native thread when the target context cannot hold the handoff", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("provider-switch");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const codexNativeThreadGeneration = yield* Ref.make(0);
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: CODEX_DRIVER,
+            capabilities: CodexProviderCapabilitiesV2,
+            modelSelection: CODEX_MODEL_SELECTION,
+            responseByRunOrdinal: {
+              1: "codex before switch",
+              3: "codex after return",
+            },
+            capturedTurns,
+            // The returning target's native thread is nearly full: resuming it
+            // would leave no room for the delta handoff.
+            tokenUsageByRunOrdinal: { 1: { usedTokens: 120_000, maxTokens: 128_000 } },
+            nativeThreadGeneration: codexNativeThreadGeneration,
+          }),
+          makeTestAdapter({
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            driver: CLAUDE_DRIVER,
+            capabilities: ClaudeProviderCapabilitiesV2,
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            responseByRunOrdinal: { 2: "claude switched response" },
+            capturedTurns,
+          }),
+        ]);
+        const commands = [
+          {
+            type: "thread.create",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("command:provider-switch:create"),
+            threadId,
+            projectId,
+            title: "Provider switch",
+            modelSelection: CODEX_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          },
+          {
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("command:provider-switch:codex"),
+            threadId,
+            messageId: MessageId.make("message:provider-switch:codex"),
+            text: firstPrompt,
+            attachments: [],
+            modelSelection: CODEX_MODEL_SELECTION,
+            dispatchMode: { type: "start_immediately" },
+          },
+          {
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("command:provider-switch:claude"),
+            threadId,
+            messageId: MessageId.make("message:provider-switch:claude"),
+            text: claudePrompt,
+            attachments: [],
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            dispatchMode: { type: "start_immediately" },
+          },
+          {
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("command:provider-switch:return"),
+            threadId,
+            messageId: MessageId.make("message:provider-switch:return"),
+            text: returnPrompt,
+            attachments: [],
+            modelSelection: CODEX_MODEL_SELECTION,
+            dispatchMode: { type: "start_immediately" },
+          },
+        ] satisfies ReadonlyArray<OrchestrationV2Command>;
+
+        const projection = yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          yield* orchestrator.dispatch(commands[0]!);
+          yield* orchestrator.dispatch(commands[1]!);
+          yield* waitForIdle(threadId);
+          yield* orchestrator.dispatch(commands[2]!);
+          assert.deepEqual(
+            (yield* orchestrator.getThreadProjection(threadId)).thread.modelSelection,
+            CLAUDE_MODEL_SELECTION,
+          );
+          yield* waitForIdle(threadId);
+          const codexSession = (yield* orchestrator.getThreadProjection(
+            threadId,
+          )).providerSessions.find(
+            (session) => session.providerInstanceId === CODEX_MODEL_SELECTION.instanceId,
+          )!;
+          yield* orchestrator.dispatch({
+            type: "provider-session.detach",
+            commandId: CommandId.make("command:provider-switch:stop-codex"),
+            threadId,
+            providerSessionId: codexSession.id,
+          });
+          yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+          yield* orchestrator.dispatch(commands[3]!);
+          assert.deepEqual(
+            (yield* orchestrator.getThreadProjection(threadId)).thread.modelSelection,
+            CODEX_MODEL_SELECTION,
+          );
+          return yield* waitForIdle(threadId);
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "provider-switch",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: {
+                    type: "readOnly",
+                    access: { type: "fullAccess" },
+                    networkAccess: false,
+                  },
+                },
+              },
+              layerRegistry,
+            ),
+          ),
+        );
+        const turns = yield* Ref.get(capturedTurns);
+
+        assert.deepEqual(
+          projection.runs.map((run) => [run.providerInstanceId, run.status]),
+          [
+            ["codex", "completed"],
+            ["claudeAgent", "completed"],
+            ["codex", "completed"],
+          ],
+        );
+        // Resume was skipped and a second native thread was bound.
+        assert.equal(yield* Ref.get(codexNativeThreadGeneration), 2);
+        const last = projection.contextHandoffs.at(-1);
+        assert.equal(last?.strategy, "full_thread_summary");
+        assert.equal(last?.delivery?.status, "inline");
+        assert.equal(last?.delivery?.nativeThreadId, `codex:${threadId}:1`);
+        assert.include(turns[2]?.text ?? "", "codex before switch");
+        assert.include(turns[2]?.text ?? "", "claude switched response");
+        assert.include(turns[2]?.text ?? "", returnPrompt);
       }),
     ),
   );

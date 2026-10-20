@@ -108,6 +108,7 @@ export const CustomModelEntry = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: Schema.optional(TrimmedNonEmptyString),
   capabilities: Schema.optional(ModelCapabilities),
+  contextWindowTokens: Schema.optional(Schema.Number),
 });
 export type CustomModelEntry = typeof CustomModelEntry.Type;
 

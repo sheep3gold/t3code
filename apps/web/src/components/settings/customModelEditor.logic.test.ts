@@ -15,6 +15,7 @@ const draft = (overrides: Partial<CustomModelDraft>): CustomModelDraft => ({
   slug: "my-model",
   name: "",
   descriptors: [],
+  contextWindowTokens: null,
   ...overrides,
 });
 
@@ -57,6 +58,7 @@ describe("customModelEditor.logic", () => {
           { id: "fastMode", label: "Fast Mode", type: "boolean" },
         ],
       },
+      contextWindowTokens: null,
     });
 
     const reopened = draftFromDefinition(definition);
@@ -169,7 +171,7 @@ describe("customModelEditor.logic", () => {
     ).toBe(false);
     const cursorCopy = descriptorsFromCapabilities(capabilities, ProviderDriverKind.make("cursor"));
     expect(cursorCopy.map((option) => option.id)).toEqual(["contextWindow", "thinking"]);
-    const authored = { slug: "custom", name: "Custom", capabilities };
+    const authored = { slug: "custom", name: "Custom", capabilities, contextWindowTokens: null };
     expect(
       definitionFromDraft(draftFromDefinition(authored)).capabilities?.optionDescriptors?.[0],
     ).toMatchObject(capabilities.optionDescriptors![0]!);
@@ -222,8 +224,18 @@ describe("customModelEditor.logic", () => {
       slug: "my-model",
       name: "my-model",
       capabilities: null,
+      contextWindowTokens: null,
     });
-    expect(draftFromDefinition({ slug: "x", name: "x", capabilities: null }).name).toBe("");
+    expect(
+      draftFromDefinition({ slug: "x", name: "x", capabilities: null, contextWindowTokens: null })
+        .name,
+    ).toBe("");
+  });
+
+  it("preserves contextWindowTokens through the draft round-trip", () => {
+    const definition = definitionFromDraft(draft({ contextWindowTokens: 200_000 }));
+    expect(definition.contextWindowTokens).toBe(200_000);
+    expect(draftFromDefinition(definition).contextWindowTokens).toBe(200_000);
   });
 
   it("rejects duplicate ids, blank ids, and selects without choices", () => {
