@@ -1,4 +1,4 @@
-import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { modelSelectionsEqual, readCustomModelEntries } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   CommandId,
@@ -85,6 +85,10 @@ export class ProviderTurnStartServiceV2 extends Context.Service<
   ProviderTurnStartServiceV2Shape
 >()("t3/orchestration-v2/ProviderTurnStartService/ProviderTurnStartServiceV2") {}
 
+// Below this many tokens of handoff room the target would only get a recovery
+// pointer; a fresh native thread with the full portable summary is better.
+const MIN_USEFUL_HANDOFF_TOKENS = 4_000;
+
 export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   never,
@@ -112,6 +116,26 @@ export const layer: Layer.Layer<
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    // Window declared on the instance's custom model (`contextWindowTokens`),
+    // for slugs the driver catalog does not know, such as a gateway's `auto`.
+    const customModelContextWindow = (
+      instanceId: string,
+      model: string | undefined,
+    ): Effect.Effect<number | undefined> =>
+      model === undefined
+        ? Effect.succeed(undefined)
+        : serverSettings.getSettings.pipe(
+            Effect.map((settings) => {
+              const config = settings.providerInstances[instanceId as never]?.config as
+                | { readonly customModels?: unknown }
+                | undefined;
+              return (
+                readCustomModelEntries(config?.customModels).find((entry) => entry.slug === model)
+                  ?.contextWindowTokens ?? undefined
+              );
+            }),
+            Effect.orElseSucceed(() => undefined),
+          );
     const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
@@ -657,15 +681,46 @@ export const layer: Layer.Layer<
             handoff.delivery?.nativeThreadId === providerThread.nativeThreadRef?.nativeId &&
             handoff.delivery?.status === "pending",
         );
+        // A native thread that is already (nearly) full cannot take the pending
+        // handoff. Resuming it would only leave room for a recovery pointer, so
+        // bind a fresh native thread instead and hand it the whole thread as a
+        // portable summary. The turn then runs with real history, not an error.
+        const nativeFull = yield* Effect.gen(function* () {
+          if (effectiveHandoffs.length === 0 || message === undefined) return false;
+          const measured =
+            latestNativeContextUsage(projection, providerThread)?.usage ??
+            providerThread.contextUsage;
+          if (measured == null) return false;
+          const window =
+            session.getModelContextWindow?.(run.modelSelection, resolvedRuntimePolicy.cwd) ??
+            (yield* customModelContextWindow(run.providerInstanceId, run.modelSelection?.model));
+          const tokenCap = yield* handoffTokenCapConfig.pipe(
+            Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
+          );
+          const budget = handoffBudget({
+            tokenCap,
+            modelContextWindow: window,
+            userText: projectComposerContextForProvider({
+              text: message.text,
+              records: message.context?.records ?? [],
+            }),
+            attachments: message.attachments,
+            providerThread: { ...providerThread, contextUsage: measured },
+            nativeContextEstimate: 0,
+          });
+          return budget < Math.min(tokenCap, MIN_USEFUL_HANDOFF_TOKENS);
+        });
         const resumed = yield* Effect.result(
-          uncertainDelivery
+          uncertainDelivery || nativeFull
             ? Effect.fail(
                 new ProviderAdapter.ProviderAdapterTurnStartError({
                   driver: session.driver,
                   threadId: projection.thread.id,
                   providerThreadId: providerThread.id,
                   runId,
-                  cause: "Uncertain native history injection",
+                  cause: nativeFull
+                    ? "Native context cannot hold the pending handoff"
+                    : "Uncertain native history injection",
                 }),
               )
             : session.resumeThread({
@@ -683,7 +738,11 @@ export const layer: Layer.Layer<
           driver: session.driver,
           providerThreadId: providerThread.id,
           runId,
-          reason: uncertainDelivery ? "uncertain_history_delivery" : "resume_failed",
+          reason: uncertainDelivery
+            ? "uncertain_history_delivery"
+            : nativeFull
+              ? "native_context_full"
+              : "resume_failed",
           errorTag: resumed.failure._tag,
         });
         const replacement = yield* loadFromProvider(
@@ -795,10 +854,9 @@ export const layer: Layer.Layer<
         sameSelection ||
         (previousSelection !== undefined &&
           session.canReuseContextUsage?.(previousSelection, run.modelSelection) === true);
-      const knownModelWindow = session.getModelContextWindow?.(
-        run.modelSelection,
-        resolvedRuntimePolicy.cwd,
-      );
+      const knownModelWindow =
+        session.getModelContextWindow?.(run.modelSelection, resolvedRuntimePolicy.cwd) ??
+        (yield* customModelContextWindow(run.providerInstanceId, run.modelSelection?.model));
       const handoffUsage = contextUsageForHandoff({
         sameNativeThread,
         sameSelection,
