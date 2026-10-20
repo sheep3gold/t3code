@@ -121,7 +121,10 @@ export const executeAuthenticatedForkHttpRequest = <Client, A, E, R>(input: {
   readonly groupClient: (
     httpBaseUrl: string,
   ) => Effect.Effect<Client, never, HttpClient.HttpClient>;
-  readonly request: (client: Client) => Effect.Effect<A, E, R>;
+  readonly request: (input: {
+    readonly client: Client;
+    readonly headers: EnvironmentHttpAuthHeaders;
+  }) => Effect.Effect<A, E, R>;
 }): Effect.Effect<A, RemoteEnvironmentRequestError, R | HttpClient.HttpClient> =>
   input.prepared.httpAuthorization?._tag === "Dpop"
     ? executeForkRequest(input).pipe(
@@ -177,7 +180,7 @@ const executeForkRequest = Effect.fnUntraced(function* <Client, A, E, R>(
       const result = yield* executeEnvironmentHttpRequest(
         requestUrl,
         input.timeoutMs,
-        withEnvironmentCredentials(authorization, input.request(client)),
+        withEnvironmentCredentials(authorization, input.request({ client, headers })),
       ).pipe(Effect.result);
 
       if (Result.isFailure(result)) {

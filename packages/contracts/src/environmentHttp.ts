@@ -74,7 +74,7 @@ import {
   RelayLinkProofRequest,
 } from "./relay.ts";
 
-const OptionalBearerHeaders = Schema.Struct({
+export const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
   dpop: Schema.optionalKey(Schema.String),
 });
