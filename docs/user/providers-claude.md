@@ -71,7 +71,8 @@ Claude skills come from the config directory's `skills` folder and the project's
 `.claude/skills` folder. If both define the same name, the config-directory copy
 wins. Skills disabled in Claude's settings do not appear in the composer.
 
-Use `$` in the composer to select a skill. Skills marked `disable-model-invocation`
+Use `$` in the composer to select a skill. Enabled installed Claude plugins also
+contribute skills under names such as `plugin:review`. Skills marked `disable-model-invocation`
 can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill
 tool, which refuses skills reserved for manual invocation.
@@ -81,6 +82,13 @@ or delete a skill, or ask the current provider to rewrite its instructions for
 review before saving. Turning a skill off there hides it from every provider's
 `$` menu, and a typed `$name` is sent to Claude as plain text. Project skills and
 skills from other providers can be turned off but not edited.
+
+## Task lists
+
+To show Claude task lists in the web and desktop apps, add
+`CLAUDE_CODE_ENABLE_TODO_TOOLS=1` under **Variables** in the Claude instance's
+**Environment** section in **Settings > Providers**. Unfinished tasks stay visible
+between turns in the same Claude session.
 
 ## OpenRouter
 

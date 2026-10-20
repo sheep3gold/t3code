@@ -32,7 +32,9 @@ import { useResolveClassNames } from "uniwind";
 import { AppText as Text } from "./components/ui/AppText";
 import { androidWorkspaceDestinationAnimation } from "./lib/android-workspace-navigation";
 import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
+import { WorkspaceConnectionStatusProvider } from "./features/home/WorkspaceConnectionTitle";
 import { WorkspaceRootScreen } from "./features/workspace/WorkspaceRootScreen";
+import { AndroidWorkspaceSettings } from "./features/workspace/AndroidWorkspaceSettings";
 import { AndroidWorkspaceTabsProvider } from "./features/workspace/AndroidWorkspaceTabsProvider";
 import {
   PullRequestRouteScreen,
@@ -174,7 +176,9 @@ const GLASS_HEADER_OPTIONS: AppScreenOptions = {
   unstable_navigationItemStyle: NATIVE_LIQUID_GLASS_SUPPORTED ? "editor" : undefined,
 };
 
-const PULL_REQUEST_HEADER_OPTIONS: AppScreenOptions = {
+// Hiding Android's native header after mount can leave detail panes measured short.
+// These screens render their own Material toolbar, so hide it from the first layout.
+const DETAIL_HEADER_OPTIONS: AppScreenOptions = {
   ...GLASS_HEADER_OPTIONS,
   headerShown: Platform.OS !== "android",
 };
@@ -222,6 +226,9 @@ const SettingsContentStack = createV5SheetStackNavigator({
       linking: "",
       options: {
         title: "Settings",
+        // Android draws its own app bar here. Hidden only from inside the screen, the native one
+        // showed for the first frame of the Settings tab and pushed the page down.
+        headerShown: Platform.OS !== "android",
       },
     }),
     SettingsEnvironments: createNativeStackScreen({
@@ -580,7 +587,12 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
 ]);
 
 function workspaceLocationFromState(state: NavigationState) {
-  const routes = state.routes.filter((route) => !WORKSPACE_OVERLAY_ROUTES.has(route.name));
+  // Android opens Settings as a workspace page rather than an overlay, so the layout sees it.
+  const routes = state.routes.filter(
+    (route) =>
+      !WORKSPACE_OVERLAY_ROUTES.has(route.name) ||
+      (Platform.OS === "android" && route.name === "SettingsSheet"),
+  );
   const effectiveState =
     routes.length > 0 && routes.length !== state.routes.length
       ? ({ ...state, routes, index: routes.length - 1 } as NavigationState)
@@ -636,16 +648,18 @@ function RootStackLayout(props: {
       <ThreadOutboxDrainWorker />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ExistingThreadSettingsRouteProvider>
-        <AndroidWorkspaceTabsProvider>
-          <AdaptiveWorkspaceLayout
-            pathname={workspaceLocation.pathname}
-            workspaceRouteKey={workspaceLocation.routeKey}
-            selectedPullRequestKey={selectedPullRequestKey(props.state)}
-          >
-            {props.children}
-            <HardwareKeyboardCommandOverlay />
-          </AdaptiveWorkspaceLayout>
-        </AndroidWorkspaceTabsProvider>
+        <WorkspaceConnectionStatusProvider>
+          <AndroidWorkspaceTabsProvider state={props.state}>
+            <AdaptiveWorkspaceLayout
+              pathname={workspaceLocation.pathname}
+              workspaceRouteKey={workspaceLocation.routeKey}
+              selectedPullRequestKey={selectedPullRequestKey(props.state)}
+            >
+              {props.children}
+              <HardwareKeyboardCommandOverlay />
+            </AdaptiveWorkspaceLayout>
+          </AndroidWorkspaceTabsProvider>
+        </WorkspaceConnectionStatusProvider>
       </ExistingThreadSettingsRouteProvider>
     </HardwareKeyboardCommandProvider>
   );
@@ -724,15 +738,15 @@ const RootStackConfig = createWorkspaceStackNavigator({
         path: "pull-requests/:environmentId/:projectId/:repository/:number",
         parse: { number: Number },
       },
-      options: PULL_REQUEST_HEADER_OPTIONS,
+      options: DETAIL_HEADER_OPTIONS,
     }),
     PullRequestGuideStop: createNativeStackScreen({
       screen: PullRequestGuideStopScreen,
-      options: PULL_REQUEST_HEADER_OPTIONS,
+      options: DETAIL_HEADER_OPTIONS,
     }),
     PullRequestFile: createNativeStackScreen({
       screen: PullRequestFileRouteScreen,
-      options: PULL_REQUEST_HEADER_OPTIONS,
+      options: DETAIL_HEADER_OPTIONS,
     }),
     PullRequestFiles: createNativeStackScreen({
       screen: PullRequestFilesRouteScreen,
@@ -746,7 +760,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     PullRequestReviewers: createNativeStackScreen({
       screen: PullRequestReviewersScreen,
       options: {
-        ...PULL_REQUEST_HEADER_OPTIONS,
+        ...DETAIL_HEADER_OPTIONS,
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.75, 0.92],
         sheetGrabberVisible: true,
@@ -755,7 +769,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     PullRequestDiscussion: createNativeStackScreen({
       screen: PullRequestDiscussionScreen,
-      options: PULL_REQUEST_HEADER_OPTIONS,
+      options: DETAIL_HEADER_OPTIONS,
     }),
     PullRequestInlineComment: createNativeStackScreen({
       screen: PullRequestInlineCommentScreen,
@@ -780,7 +794,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     Thread: createNativeStackScreen({
       screen: ThreadRouteScreen,
       linking: THREAD_LINKING_PREFIX,
-      options: GLASS_HEADER_OPTIONS,
+      options: DETAIL_HEADER_OPTIONS,
     }),
     ThreadTerminal: createNativeStackScreen({
       screen: ThreadTerminalRouteScreen,
@@ -907,7 +921,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
       linking: `${THREAD_LINKING_PREFIX}/git/commit`,
       options: {
         ...FORM_SHEET_PRESENTATION_OPTIONS,
-        sheetAllowedDetents: [0.55, 0.92],
+        sheetAllowedDetents: [0.8, 0.92],
         sheetGrabberVisible: true,
       },
     }),
@@ -931,11 +945,14 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     SettingsSheet: createNativeStackScreen({
       screen: SettingsSheetStack,
+      layout: ({ children }) => <AndroidWorkspaceSettings>{children}</AndroidWorkspaceSettings>,
       linking: "settings",
       options: {
         ...NESTED_NAVIGATOR_OPTIONS,
         gestureEnabled: true,
         headerShown: false,
+        // Android opens Settings as a top-level tab, so it swaps like the other tabs.
+        ...(Platform.OS === "android" ? { animation: "none" as const } : null),
       },
     }),
     SettingsLegal: createNativeStackScreen({
