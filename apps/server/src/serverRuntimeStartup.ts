@@ -477,11 +477,14 @@ const make = (options?: StartupOptions) =>
         if (workerFiber !== null) {
           yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
         }
-        yield* providerRuntimeRecovery.prepareForShutdown.pipe(
-          Effect.ensuring(providerSessions.shutdown),
-        );
-        const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
-        yield* Effect.logInfo("V2 orchestration shutdown reconciliation completed", reconciliation);
+        yield* Effect.gen(function* () {
+          yield* providerRuntimeRecovery.prepareForShutdown;
+          const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
+          yield* Effect.logInfo(
+            "V2 orchestration shutdown reconciliation completed",
+            reconciliation,
+          );
+        }).pipe(Effect.ensuring(providerSessions.shutdown));
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("V2 orchestration shutdown reconciliation failed", {
