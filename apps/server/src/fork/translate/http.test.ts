@@ -27,6 +27,7 @@ async function translate(
   const http = HttpClient.make((request) =>
     Effect.sync(() => {
       expect(request.headers.authorization).toBe("Bearer test-translation-key");
+      expect(request.headers["x-mg-tier"]).toBeUndefined();
       expect(request.url).toBe("https://translation.example.test/v1/chat/completions");
       if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON request body");
       const payload = JSON.parse(new TextDecoder().decode(request.body.body));

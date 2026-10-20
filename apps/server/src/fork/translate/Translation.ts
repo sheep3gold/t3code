@@ -9,13 +9,14 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 const DEFAULT_BASE_URL = "https://llm.zxytech.cn/v1";
-// The owner's model-gateway routes by tier; appKeys only allow "auto" and the
-// SIMPLE tier keeps translation cheap. Its flash models think by default, which
+// The owner's model-gateway routes by tier. The translate appKey is restricted
+// to `key.models=['auto']`, so the gateway rejects any explicit x-mg-tier
+// header (403 "key 不允许显式走 <TIER> 档"); the gateway auto-selects the tier
+// from the model and request instead. Its flash models think by default, which
 // dominated latency (2.7k chars: ~4.8k reasoning tokens, 19s vs 3.7s without),
 // so requests disable thinking; max_tokens keeps headroom for a model that
 // ignores the switch, since a small budget leaves an all-reasoning empty reply.
 const DEFAULT_MODEL = "auto";
-const GATEWAY_TIER = "SIMPLE";
 const MAX_TEXTS_PER_REQUEST = 24;
 const MAX_TEXT_LENGTH = 16_000;
 // With thinking on, ~6000-char batches needed ~10k completion tokens (≈9k
@@ -245,7 +246,6 @@ const make = Effect.gen(function* () {
             .execute(
               HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
                 HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-                HttpClientRequest.setHeader("x-mg-tier", GATEWAY_TIER),
                 HttpClientRequest.bodyJsonUnsafe({
                   model,
                   temperature: 0,
