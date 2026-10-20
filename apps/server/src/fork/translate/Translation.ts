@@ -2,11 +2,14 @@ import {
   EnvironmentTranslateUnavailableError,
   EnvironmentTranslateUpstreamError,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
@@ -28,6 +31,14 @@ const MAX_TEXT_LENGTH = 16_000;
 // upstream model does not honor the thinking switch.
 const UPSTREAM_TIMEOUT_SECONDS = 300;
 const UPSTREAM_MAX_TOKENS = 32768;
+// The gateway's auto-router picks the upstream provider per request, and the
+// pick is not reliable: it can land on a provider that is out of credit (a 400
+// "Insufficient balance") or one that never answers. Every new request
+// re-rolls that pick, so a failed attempt is worth another try. A timeout is
+// not retried: it already spent the whole upstream budget, and another attempt
+// would only push the answer past the client's deadline.
+const UPSTREAM_ATTEMPTS = 3;
+const UPSTREAM_RETRY_DELAY = Duration.seconds(1);
 // Long messages exceed the upstream token budget in one shot (a reasoning
 // flash model burns the budget on thinking, or the JSON array is truncated).
 // Split long texts at paragraph boundaries and translate the chunks in batches
@@ -289,31 +300,46 @@ const make = Effect.gen(function* () {
           const textsJson = yield* encodeTextsJson(input).pipe(
             Effect.mapError(() => upstreamError("Could not encode texts.")),
           );
-          const upstreamJson = yield* httpClient
-            .execute(
-              HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
-                HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-                HttpClientRequest.bodyJsonUnsafe({
-                  model,
-                  temperature: 0,
-                  max_tokens: UPSTREAM_MAX_TOKENS,
-                  thinking: { type: "disabled" },
-                  messages: [
-                    { role: "system", content: SYSTEM_PROMPT },
-                    { role: "user", content: textsJson },
-                  ],
-                }),
-              ),
-            )
-            .pipe(
-              Effect.flatMap(HttpClientResponse.filterStatusOk),
-              Effect.flatMap((response) => response.json),
-              Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
-              Effect.tapError(() =>
-                Effect.logWarning("Translation upstream request failed", { batchIndex }),
-              ),
-              Effect.mapError(() => upstreamError("Translation upstream failed.")),
-            );
+          const upstreamJson = yield* Effect.gen(function* () {
+            for (let attempt = 1; attempt <= UPSTREAM_ATTEMPTS; attempt++) {
+              const result = yield* httpClient
+                .execute(
+                  HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
+                    HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+                    HttpClientRequest.bodyJsonUnsafe({
+                      model,
+                      temperature: 0,
+                      max_tokens: UPSTREAM_MAX_TOKENS,
+                      thinking: { type: "disabled" },
+                      messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        { role: "user", content: textsJson },
+                      ],
+                    }),
+                  ),
+                )
+                .pipe(
+                  Effect.flatMap(HttpClientResponse.filterStatusOk),
+                  Effect.flatMap((response) => response.json),
+                  Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+                  Effect.result,
+                );
+              if (Result.isSuccess(result)) return result.success;
+              if (attempt >= UPSTREAM_ATTEMPTS || Cause.isTimeoutError(result.failure)) {
+                yield* Effect.logWarning("Translation upstream request failed", {
+                  batchIndex,
+                  attempt,
+                });
+                return yield* upstreamError("Translation upstream failed.");
+              }
+              yield* Effect.logWarning("Translation upstream request failed; retrying", {
+                batchIndex,
+                attempt,
+              });
+              yield* Effect.sleep(UPSTREAM_RETRY_DELAY);
+            }
+            return yield* upstreamError("Translation upstream failed.");
+          });
           const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
             Effect.mapError(() => upstreamError("Unexpected upstream response.")),
           );

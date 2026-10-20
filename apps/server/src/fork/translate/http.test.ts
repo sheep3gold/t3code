@@ -19,6 +19,8 @@ async function translate(
     configured?: boolean;
     malformed?: boolean;
     fail?: boolean;
+    /** Fail the first N upstream calls, then answer normally. */
+    failTimes?: number;
     /** Unset T3CODE_TRANSLATE_API_KEY and serve the key from ~/.t3 instead. */
     envFileKey?: string;
   } = {},
@@ -29,8 +31,10 @@ async function translate(
   );
   vi.stubEnv("T3CODE_TRANSLATE_BASE_URL", "https://translation.example.test/v1");
   const upstreamInputs: Array<ReadonlyArray<string>> = [];
+  let upstreamCalls = 0;
   const http = HttpClient.make((request) =>
     Effect.sync(() => {
+      upstreamCalls++;
       expect(request.headers.authorization).toBe(
         `Bearer ${options.envFileKey ?? "test-translation-key"}`,
       );
@@ -40,6 +44,9 @@ async function translate(
       const payload = JSON.parse(new TextDecoder().decode(request.body.body));
       const texts: string[] = JSON.parse(payload.messages[1].content);
       upstreamInputs.push(texts);
+      const shouldFail =
+        options.fail === true ||
+        (options.failTimes !== undefined && upstreamCalls <= options.failTimes);
       return HttpClientResponse.fromWeb(
         request,
         new Response(
@@ -54,7 +61,10 @@ async function translate(
               },
             ],
           }),
-          { status: options.fail ? 503 : 200, headers: { "content-type": "application/json" } },
+          {
+            status: shouldFail ? 503 : 200,
+            headers: { "content-type": "application/json" },
+          },
         ),
       );
     }),
@@ -156,6 +166,13 @@ it("rejects oversized input before contacting the translation gateway", async ()
 it("maps upstream failure to a controlled HTTP response", async () => {
   const result = await translate({ fail: true });
   expect(result.status).toBe(502);
-  expect(result.upstreamInputs).toHaveLength(1);
+  expect(result.upstreamInputs.length).toBeGreaterThanOrEqual(2);
   expect(result.text).not.toContain("test-translation-key");
+});
+
+it("retries a failed upstream call and returns the translation when a later attempt succeeds", async () => {
+  const result = await translate({ failTimes: 1 });
+  expect(result.status).toBe(200);
+  expect(JSON.parse(result.text)).toEqual({ translations: ["你好 `code`", "already"] });
+  expect(result.upstreamInputs).toHaveLength(2);
 });
