@@ -1,9 +1,9 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
-import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import { limitFallbackCommands, limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   type ApplicationStoredEvent,
@@ -6383,3 +6383,60 @@ it.layer(layerQueueResumeDisabledInstanceTest)(
     );
   },
 );
+
+describe("UsageLimitRecoveryWorker fallback model", () => {
+  const makeShell = (
+    overrides: Partial<ProjectionStore.ProjectionLimitRecoveryCandidate>,
+  ): ProjectionStore.ProjectionLimitRecoveryCandidate => ({
+    id: ThreadId.make("fallback-thread"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    status: "failed",
+    lastErrorClass: "usage_limit",
+    latestRunId: RunId.make("run:fallback"),
+    usageLimitResetAt: null,
+    latestRunCompletedAt: DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"),
+    updatedAt: DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"),
+    archivedAt: null,
+    settledOverride: null,
+    pendingRuntimeRequest: null,
+    limitRecovery: null,
+    snoozedUntil: null,
+    ...overrides,
+  });
+  const fallback: ModelSelection = {
+    instanceId: ProviderInstanceId.make("codex_alternate"),
+    model: "auto",
+  };
+
+  it("switches a limited thread to the fallback model and resumes it", () => {
+    const commands = limitFallbackCommands(makeShell({}), fallback);
+    assert.lengthOf(commands, 2);
+    const modelCommand = commands[0]!;
+    assert.equal(modelCommand.type, "thread.model-selection.set");
+    if (modelCommand.type === "thread.model-selection.set")
+      assert.deepEqual(modelCommand.modelSelection, fallback);
+    const resumeCommand = commands[1]!;
+    assert.equal(resumeCommand.type, "message.dispatch");
+    if (resumeCommand.type === "message.dispatch")
+      assert.equal(resumeCommand.manualContinuationOfRunId, RunId.make("run:fallback"));
+  });
+
+  it("leaves a thread already on the fallback model alone", () => {
+    const shell = makeShell({ modelSelection: fallback });
+    assert.isEmpty(limitFallbackCommands(shell, fallback));
+  });
+
+  it("ignores threads that are not stopped on a usage limit", () => {
+    assert.isEmpty(
+      limitFallbackCommands(makeShell({ lastErrorClass: "provider_error" }), fallback),
+    );
+    assert.isEmpty(
+      limitFallbackCommands(
+        makeShell({ archivedAt: DateTime.makeUnsafe("2099-01-01T00:00:00.000Z") }),
+        fallback,
+      ),
+    );
+    assert.isEmpty(limitFallbackCommands(makeShell({ status: "completed" }), fallback));
+  });
+});

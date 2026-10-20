@@ -1,4 +1,5 @@
 import { CommandId, MessageId, type OrchestrationV2Command } from "@t3tools/contracts";
+import type { ModelSelection } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -70,6 +71,65 @@ export function limitRecoveryCommand(
   };
 }
 
+function sameModelSelection(current: ModelSelection, fallback: ModelSelection): boolean {
+  if (current.instanceId !== fallback.instanceId || current.model !== fallback.model) return false;
+  const currentOptions = current.options ?? [];
+  const fallbackOptions = fallback.options ?? [];
+  return (
+    currentOptions.length === fallbackOptions.length &&
+    fallbackOptions.every(
+      (option, index) =>
+        currentOptions[index]?.id === option.id && currentOptions[index]?.value === option.value,
+    )
+  );
+}
+
+/**
+ * When a fallback model is configured, a usage-limit stop switches the thread
+ * to that model and resumes immediately, without waiting for the reported
+ * reset time. Two sweeps: the first switches the model, the second (which sees
+ * the thread already on the fallback model) resumes the run. A thread already
+ * on the fallback model that stops again gets no further commands, so a
+ * limited fallback model cannot start a switch loop.
+ */
+export function limitFallbackCommands(
+  thread: ProjectionStore.ProjectionLimitRecoveryCandidate,
+  fallback: ModelSelection,
+): ReadonlyArray<OrchestrationV2Command> {
+  if (
+    thread.status !== "failed" ||
+    thread.lastErrorClass !== "usage_limit" ||
+    !thread.latestRunId ||
+    thread.archivedAt !== null ||
+    thread.settledOverride === "settled" ||
+    thread.pendingRuntimeRequest !== null
+  )
+    return [];
+  const onFallback = sameModelSelection(thread.modelSelection, fallback);
+  if (onFallback) return [];
+  const identity = `${thread.id}:${thread.latestRunId}`;
+  return [
+    {
+      type: "thread.model-selection.set",
+      commandId: CommandId.make(`limit-fallback-model:${identity}`),
+      threadId: thread.id,
+      modelSelection: fallback,
+    },
+    {
+      type: "message.dispatch",
+      commandId: CommandId.make(`limit-fallback-resume:${identity}`),
+      messageId: MessageId.make(`limit-fallback-resume:${identity}`),
+      threadId: thread.id,
+      manualContinuationOfRunId: thread.latestRunId,
+      text: "Continue where you left off on the fallback model after a usage limit.",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "server",
+    },
+  ];
+}
+
 const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -77,28 +137,40 @@ const makeSweep = Effect.gen(function* () {
   return Effect.fn("UsageLimitRecoveryWorker.sweep")(function* () {
     const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
+    const fallback = preferences.usageLimitFallbackModelSelection;
     const candidates = yield* projections.getLimitRecoveryCandidates({
       now,
       autoResume: preferences.autoResumeLimitedThreads,
       snooze: preferences.snoozeLimitedThreads,
+      fallback: fallback !== null,
     });
     const nowMs = DateTime.toEpochMillis(now);
     for (const thread of candidates) {
-      const command = limitRecoveryCommand(
-        thread,
-        preferences.autoResumeLimitedThreads,
-        nowMs,
-        preferences.snoozeLimitedThreads,
-      );
-      if (command === null) continue;
-      yield* threads.dispatch(command).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("orchestration-v2.limit-recovery.dispatch-failed", {
-            threadId: thread.id,
-            cause,
-          }),
-        ),
-      );
+      // The fallback takes priority over waiting for the reset time: a thread
+      // not yet on the fallback model switches and resumes immediately. Only a
+      // thread that stopped on the fallback model itself waits for its reset.
+      const fallbackCommands = fallback !== null ? limitFallbackCommands(thread, fallback) : [];
+      const commands =
+        fallbackCommands.length > 0
+          ? fallbackCommands
+          : [
+              limitRecoveryCommand(
+                thread,
+                preferences.autoResumeLimitedThreads,
+                nowMs,
+                preferences.snoozeLimitedThreads,
+              ),
+            ].filter((command): command is OrchestrationV2Command => command !== null);
+      for (const command of commands) {
+        yield* threads.dispatch(command).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("orchestration-v2.limit-recovery.dispatch-failed", {
+              threadId: thread.id,
+              cause,
+            }),
+          ),
+        );
+      }
     }
   });
 });
