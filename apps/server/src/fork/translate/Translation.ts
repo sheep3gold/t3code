@@ -2,7 +2,6 @@ import {
   EnvironmentTranslateUnavailableError,
   EnvironmentTranslateUpstreamError,
 } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -32,12 +31,16 @@ const MAX_TEXT_LENGTH = 16_000;
 const UPSTREAM_TIMEOUT_SECONDS = 300;
 const UPSTREAM_MAX_TOKENS = 32768;
 // The gateway's auto-router picks the upstream provider per request, and the
-// pick is not reliable: it can land on a provider that is out of credit (a 400
-// "Insufficient balance") or one that never answers. Every new request
-// re-rolls that pick, so a failed attempt is worth another try. A timeout is
-// not retried: it already spent the whole upstream budget, and another attempt
-// would only push the answer past the client's deadline.
+// pick is not reliable: it can land on a provider that is out of credit (a 402
+// or 400 "Insufficient balance"), on one that rejects the request, or on one
+// that never answers. Every new request re-rolls that pick, so a failed
+// attempt is worth another try.
+// One attempt is cut short so a stuck provider cannot eat the whole budget:
+// the router's own fallback chain already burns 20-80s before it finds a
+// working provider, and a batch that needs longer is worth another attempt
+// rather than a longer wait.
 const UPSTREAM_ATTEMPTS = 3;
+const UPSTREAM_ATTEMPT_TIMEOUT_SECONDS = 100;
 const UPSTREAM_RETRY_DELAY = Duration.seconds(1);
 // Long messages exceed the upstream token budget in one shot (a reasoning
 // flash model burns the budget on thinking, or the JSON array is truncated).
@@ -321,11 +324,11 @@ const make = Effect.gen(function* () {
                 .pipe(
                   Effect.flatMap(HttpClientResponse.filterStatusOk),
                   Effect.flatMap((response) => response.json),
-                  Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+                  Effect.timeout(`${UPSTREAM_ATTEMPT_TIMEOUT_SECONDS} seconds`),
                   Effect.result,
                 );
               if (Result.isSuccess(result)) return result.success;
-              if (attempt >= UPSTREAM_ATTEMPTS || Cause.isTimeoutError(result.failure)) {
+              if (attempt >= UPSTREAM_ATTEMPTS) {
                 yield* Effect.logWarning("Translation upstream request failed", {
                   batchIndex,
                   attempt,
@@ -339,7 +342,12 @@ const make = Effect.gen(function* () {
               yield* Effect.sleep(UPSTREAM_RETRY_DELAY);
             }
             return yield* upstreamError("Translation upstream failed.");
-          });
+          }).pipe(
+            // Hard bound for the whole batch: the client gives up after 360s, so
+            // the route has to answer before that.
+            Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+            Effect.mapError(() => upstreamError("Translation upstream failed.")),
+          );
           const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
             Effect.mapError(() => upstreamError("Unexpected upstream response.")),
           );
