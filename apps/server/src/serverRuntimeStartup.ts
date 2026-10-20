@@ -417,21 +417,25 @@ export function runOrderedV2StartupPhases<
   Import,
   Recovery,
   Bootstrap,
+  QueuedResumed,
   ImportError,
   RecoveryError,
   DelegationError,
   WorkerError,
+  ResumeError,
   BootstrapError,
   ImportContext,
   RecoveryContext,
   DelegationContext,
   WorkerContext,
+  ResumeContext,
   BootstrapContext,
 >(input: {
   readonly importLegacyShells: Effect.Effect<Import, ImportError, ImportContext>;
   readonly recover: Effect.Effect<Recovery, RecoveryError, RecoveryContext>;
   readonly recoverDelegatedTasks: Effect.Effect<void, DelegationError, DelegationContext>;
   readonly startEffectWorker: Effect.Effect<void, WorkerError, WorkerContext>;
+  readonly resumeQueuedRuns: Effect.Effect<QueuedResumed, ResumeError, ResumeContext>;
   readonly autoBootstrap: Effect.Effect<Bootstrap, BootstrapError, BootstrapContext>;
 }) {
   return Effect.gen(function* () {
@@ -439,8 +443,12 @@ export function runOrderedV2StartupPhases<
     const recovery = yield* input.recover;
     yield* input.recoverDelegatedTasks;
     yield* input.startEffectWorker;
+    // After the worker so a queue started here has its provider turn executed,
+    // and after recovery so a turn about to resume its own queue is not doubled
+    // by a message started beside it.
+    const resumedQueuedRuns = yield* input.resumeQueuedRuns;
     const bootstrap = yield* input.autoBootstrap;
-    return { recovery, bootstrap } as const;
+    return { recovery, bootstrap, resumedQueuedRuns } as const;
   });
 }
 
@@ -561,6 +569,21 @@ const make = (options?: StartupOptions) =>
             startRelay: agentAwarenessRelay.start(),
             workerFiberRef: effectWorkerFiber,
           }),
+        ),
+        resumeQueuedRuns: runStartupPhase(
+          "orchestration-v2.resume-queued-runs",
+          orchestrator.resumeQueuedRuns.pipe(
+            Effect.tap((resumed) =>
+              resumed === 0
+                ? Effect.void
+                : Effect.logInfo("Resumed queued runs after restart", { resumed }),
+            ),
+            // A queue that cannot be drained at boot stays visible in the UI and
+            // a later run's completion, or a manual resume, drains it again.
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed to resume queued runs after restart", { cause }),
+            ),
+          ),
         ),
         autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
           ? runStartupPhase(

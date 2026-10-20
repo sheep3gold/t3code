@@ -51,6 +51,21 @@ const layerRecoveryTest = ProviderRuntimeRecovery.layer.pipe(
   ),
   Layer.provide(ServerSettings.layerTest()),
 );
+const layerRecoveryTestOptOut = ProviderRuntimeRecovery.layer.pipe(
+  Layer.provideMerge(
+    EventSink.layer.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          EventStore.layer,
+          ProjectionStore.layer,
+          EffectOutbox.layer,
+          IdAllocator.layer,
+        ).pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+      ),
+    ),
+  ),
+  Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: false })),
+);
 const providerInstanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId: providerInstanceId, model: "gpt-5.4" };
 const driver = ProviderDriverKind.make("codex");
@@ -134,7 +149,7 @@ const createRun = Effect.fn(function* (
 });
 
 it.effect.each(["startup", "shutdown"] as const)(
-  "%s cancels queued buffered wakes and holds durable messages",
+  "%s cancels queued buffered wakes and leaves durable messages for the boot drain",
   (trigger) =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -203,10 +218,62 @@ it.effect.each(["startup", "shutdown"] as const)(
       for (const threadId of durableThreads) {
         const projection = yield* projections.getThreadProjection(threadId);
         assert.equal(projection.runs[0]?.status, "queued");
-        assert.isTrue(projection.runs[0]?.queueHeld);
+        // No hold means the queue keeps the resume promise the thread's own
+        // turn already made, instead of waiting for someone to press resume.
+        assert.notEqual(projection.runs[0]?.queueHeld, true);
       }
-      assert.deepEqual(yield* projections.getRecoveryThreadIds("runtime"), []);
+      // An unheld queue stays eligible for recovery so the boot drain, or a
+      // later boot's drain, still reaches it. Only a parked queue drops out.
+      assert.deepEqual(
+        new Set(yield* projections.getRecoveryThreadIds("runtime")),
+        new Set(durableThreads),
+      );
     }).pipe(Effect.provide(layerRecoveryTest)),
+);
+
+it.effect.each(["startup", "shutdown"] as const)(
+  "%s still parks a queue when the thread opts out of continuing after an update",
+  (trigger) =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = yield* createThread(`wake:${trigger}:opt-out`);
+      const messageId = MessageId.make(`message:${threadId}`);
+      const runId = yield* createRun(threadId, "queued", {
+        userMessageId: messageId,
+        startedAt: null,
+        queuePosition: 1,
+      });
+      yield* projections.apply({
+        id: EventId.make(`message:${threadId}`),
+        type: "message.updated",
+        threadId,
+        runId,
+        occurredAt: now,
+        payload: {
+          id: messageId,
+          threadId,
+          runId,
+          nodeId: null,
+          role: "user",
+          text: "Queued work",
+          attachments: [],
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: "user",
+          creationSource: "server",
+        },
+      });
+      const recovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+      const summary = yield* recovery.reconcile(trigger);
+      assert.equal(summary.terminalizedRuns, 0);
+      const projection = yield* projections.getThreadProjection(threadId);
+      assert.equal(projection.runs[0]?.status, "queued");
+      assert.isTrue(projection.runs[0]?.queueHeld);
+      // A parked queue has been through recovery; it waits for a person.
+      assert.deepEqual(yield* projections.getRecoveryThreadIds("runtime"), []);
+    }).pipe(Effect.provide(layerRecoveryTestOptOut)),
 );
 
 it.effect("stops a session its thread detached, which kept its live status", () =>

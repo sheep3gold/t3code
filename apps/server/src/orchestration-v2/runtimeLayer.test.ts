@@ -4684,7 +4684,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
   );
 
   it.effect.each(["startup", "shutdown"] as const)(
-    "preserves and holds queued messages across %s until explicitly resumed",
+    "preserves queued messages across %s for automatic boot drain",
     (trigger) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -4725,26 +4725,25 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         yield* recovery.reconcile("startup");
         const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
         assert.isTrue((yield* maintenance.rebuild).valid);
-        assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
-        const held = yield* orchestrator.getThreadProjection(threadId);
+        const recovered = yield* orchestrator.getThreadProjection(threadId);
         assert.deepEqual(
-          held.runs.map((run) => run.status),
+          recovered.runs.map((run) => run.status),
           ["cancelled", "queued", "queued"],
         );
         for (const run of queued) {
           assert.deepEqual(
-            held.runs.find((row) => row.id === run.id),
-            { ...run, queueHeld: true },
+            recovered.runs.find((row) => row.id === run.id),
+            run,
           );
           assert.deepEqual(
-            held.messages.find((row) => row.id === run.userMessageId),
+            recovered.messages.find((row) => row.id === run.userMessageId),
             before.messages.find((row) => row.id === run.userMessageId),
           );
           assert.equal(
-            held.attempts.find((row) => row.id === run.activeAttemptId)?.status,
+            recovered.attempts.find((row) => row.id === run.activeAttemptId)?.status,
             "pending",
           );
-          assert.equal(held.nodes.find((row) => row.id === run.rootNodeId)?.status, "pending");
+          assert.equal(recovered.nodes.find((row) => row.id === run.rootNodeId)?.status, "pending");
         }
         const first = queued[0]!;
         const second = queued[1]!;
@@ -4762,14 +4761,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           runId: second.id,
           beforeRunId: first.id,
         });
-        assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
-        const resume = {
-          type: "queue.resume" as const,
-          commandId: CommandId.make(`${threadId}:resume`),
-          threadId,
-        };
-        yield* orchestrator.dispatch(resume);
-        yield* orchestrator.dispatch(resume);
+        yield* orchestrator.resumeQueuedRuns;
+        yield* orchestrator.resumeQueuedRuns;
         const resumed = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(resumed.runs.find((run) => run.id === second.id)?.status, "starting");
         assert.equal(resumed.runs.find((run) => run.id === first.id)?.status, "queued");
@@ -4778,7 +4771,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           resumed.messages.find((row) => row.id === second.userMessageId)?.text,
           "Edited second message",
         );
-        assert.equal(resumed.runs.length, 3, "resume retries must not duplicate messages or runs");
+        assert.equal(
+          resumed.runs.length,
+          3,
+          "boot drain retries must not duplicate messages or runs",
+        );
       }),
   );
 
@@ -4922,8 +4919,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         ),
         "removed queued message must not surface as a transcript row",
       );
-      assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
-
       const cancelAgainError = yield* orchestrator
         .dispatch({
           type: "queued-run.cancel",
