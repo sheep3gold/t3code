@@ -4,9 +4,26 @@ import * as Effect from "effect/Effect";
 import {
   chunkText,
   joinChunks,
+  parseTranslateEnvFile,
   parseTranslationsJson,
   preservesTranslationStructure,
 } from "./Translation.ts";
+
+it("reads the translation key from an env file with comments and quotes", () => {
+  const contents = [
+    "# rendered for this machine; not part of the distributable",
+    "",
+    'T3CODE_TRANSLATE_API_KEY="sk-from-file"',
+  ].join("\n");
+  expect(parseTranslateEnvFile(contents)).toBe("sk-from-file");
+  expect(parseTranslateEnvFile("T3CODE_TRANSLATE_API_KEY=sk-plain\n")).toBe("sk-plain");
+});
+
+it("ignores an env file without a non-empty translation key", () => {
+  expect(parseTranslateEnvFile("OTHER_KEY=value\n")).toBeUndefined();
+  expect(parseTranslateEnvFile("T3CODE_TRANSLATE_API_KEY=\n")).toBeUndefined();
+  expect(parseTranslateEnvFile("")).toBeUndefined();
+});
 
 it.effect("parses a plain JSON string array", () =>
   Effect.gen(function* () {

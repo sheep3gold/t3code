@@ -4,7 +4,9 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
@@ -37,6 +39,8 @@ const UPSTREAM_BATCH_LENGTH = 2_000;
 const UPSTREAM_BATCH_CONCURRENCY = 4;
 const MAX_MALFORMED_RECOVERY_DEPTH = 4;
 
+const TRANSLATE_ENV_FILE = "t3code-translate.env";
+
 const SYSTEM_PROMPT = [
   "You are a translation engine. The user sends JSON: an array of strings.",
   "Translate each element into Simplified Chinese and reply with a JSON array of the same length, in the same order, and nothing else.",
@@ -57,6 +61,44 @@ const decodeTranslationsJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
 const encodeTextsJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+
+/** Minimal KEY=VALUE reader: skips comments, strips one layer of quotes. */
+export const parseTranslateEnvFile = (contents: string): string | undefined => {
+  for (const line of contents.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) continue;
+    if (trimmed.slice(0, separator).trim() !== "T3CODE_TRANSLATE_API_KEY") continue;
+    const value = trimmed
+      .slice(separator + 1)
+      .trim()
+      .replace(/^(["'])(.*)\1$/, "$2");
+    return value.length > 0 ? value : undefined;
+  }
+  return undefined;
+};
+
+/**
+ * The desktop app spawns its own backend, and a Finder-launched app inherits no
+ * shell environment, so `T3CODE_TRANSLATE_API_KEY` is simply absent there and
+ * the route answers 503 — which hides the translate buttons for the whole
+ * session. Reading the key from `~/.t3/t3code-translate.env` lets each machine
+ * supply it without baking a secret into the distributable or editing a launchd
+ * plist. Resolved per request so dropping the file in needs no restart.
+ */
+const resolveApiKey = (
+  fileSystem: FileSystem.FileSystem | undefined,
+  home: string | undefined,
+): Effect.Effect<string | undefined> => {
+  const fromEnv = process.env.T3CODE_TRANSLATE_API_KEY?.trim();
+  if (fromEnv) return Effect.succeed(fromEnv);
+  if (fileSystem === undefined || home === undefined) return Effect.succeed(undefined);
+  return fileSystem.readFileString(`${home}/.t3/${TRANSLATE_ENV_FILE}`).pipe(
+    Effect.map(parseTranslateEnvFile),
+    Effect.orElseSucceed(() => undefined),
+  );
+};
 
 /** The model answers with a JSON array; tolerate code fences around it. */
 export const parseTranslationsJson = (content: string) => {
@@ -172,8 +214,13 @@ export class Translation extends Context.Service<
 >()("t3/fork/translate/Translation") {}
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
+  // Optional so the route also composes where no FileSystem is provided; the
+  // env-file fallback then simply cannot apply.
+  const fileSystem = yield* Effect.serviceOption(FileSystem.FileSystem).pipe(
+    Effect.map(Option.getOrUndefined),
+  );
   const translate = Effect.fn("Translation.translate")(function* (texts: ReadonlyArray<string>) {
-    const apiKey = process.env.T3CODE_TRANSLATE_API_KEY?.trim();
+    const apiKey = yield* resolveApiKey(fileSystem, process.env.HOME);
     if (!apiKey) {
       return yield* new EnvironmentTranslateUnavailableError({
         message: "Translation is not configured on this server.",
