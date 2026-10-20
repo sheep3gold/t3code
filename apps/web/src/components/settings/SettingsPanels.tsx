@@ -11,6 +11,8 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   type BackgroundActivityProfile,
   type DesktopUpdateChannel,
+  DEFAULT_MODEL_BY_PROVIDER,
+  type ModelSelection,
   ProviderDriverKind,
   type ProviderInstanceId,
   type ScopedThreadRef,
@@ -2039,6 +2041,80 @@ function LegacyFeaturesSection() {
   );
 }
 
+function FallbackModelPicker({
+  selection,
+  onChange,
+}: {
+  selection: ModelSelection | null;
+  onChange: (value: ModelSelection | null) => void;
+}) {
+  const { scope, environment, target } = useSettingsScope();
+  const settings = useScopedSettings();
+  const navigate = useNavigate();
+  const providersByEnvironment = useEnvironmentProviders();
+  const providers =
+    (environment?.serverConfig
+      ? providersByEnvironment.get(environment.environmentId)
+      : undefined) ?? EMPTY_SERVER_PROVIDERS;
+  const entries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(
+      deriveProviderInstanceEntries(providers),
+      settings,
+      target?.projectId ?? null,
+    ),
+  );
+  const modelOptions = getCustomModelOptionsByInstance(
+    settings,
+    providers,
+    selection?.instanceId,
+    selection?.model,
+  );
+  const activeEntry = entries.find((entry) => entry.instanceId === selection?.instanceId);
+  if (scope.kind !== "environment" || !selection || !activeEntry) {
+    const firstAvailable = entries.find((entry) => entry.enabled && entry.isAvailable);
+    return (
+      <ScopedSwitch
+        settingKeys={["usageLimitFallbackModelSelection"]}
+        checked={selection !== null}
+        onCheckedChange={(checked) =>
+          onChange(
+            checked && firstAvailable
+              ? createModelSelection(
+                  firstAvailable.instanceId,
+                  DEFAULT_MODEL_BY_PROVIDER[firstAvailable.driverKind] ??
+                    firstAvailable.models[0]?.slug ??
+                    "",
+                )
+              : null,
+          )
+        }
+        aria-label="Usage limit fallback model"
+      />
+    );
+  }
+  return (
+    <ProviderModelPicker
+      environmentId={environment?.environmentId ?? null}
+      activeInstanceId={selection.instanceId}
+      model={selection.model}
+      lockedProvider={null}
+      instanceEntries={entries}
+      modelOptionsByInstance={modelOptions}
+      triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+      onOpenProviderSetup={(instanceId) => {
+        if (environment)
+          void navigate({
+            to: "/settings/providers",
+            search: { environmentId: environment.environmentId, instanceId },
+          });
+      }}
+      onInstanceModelChange={(instanceId, model) =>
+        onChange(createModelSelection(instanceId, model))
+      }
+    />
+  );
+}
+
 export function GeneralSettingsPanel() {
   const modifierLabel = isMacPlatform(navigator.platform) ? "⌘" : "Ctrl";
   const sendShortcutOptions = [
@@ -2226,6 +2302,27 @@ export function GeneralSettingsPanel() {
                 updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
               }
               aria-label="Auto-resume limited threads"
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("usage-limit-fallback-model")}
+          description="Switch usage-limit stops to this model and continue immediately, instead of waiting for the reset time."
+          settingKeys={["usageLimitFallbackModelSelection"]}
+          status={settings.usageLimitFallbackModelSelection === null ? "Disabled" : undefined}
+          resetAction={
+            settings.usageLimitFallbackModelSelection !== null ? (
+              <SettingResetButton
+                label="usage limit fallback model"
+                onClick={() => updateSettings({ usageLimitFallbackModelSelection: null })}
+              />
+            ) : null
+          }
+          control={
+            <FallbackModelPicker
+              selection={settings.usageLimitFallbackModelSelection}
+              onChange={(value) => updateSettings({ usageLimitFallbackModelSelection: value })}
             />
           }
         />
