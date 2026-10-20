@@ -1,9 +1,14 @@
 import { modelSelectionsEqual, readCustomModelEntries } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  resolveClaudeCatalogModel,
+} from "../provider/ClaudeModelCatalog.ts";
+import {
   CommandId,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
+  type ModelSelection,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2Run,
@@ -37,10 +42,13 @@ import {
   DEFAULT_HANDOFF_TOKEN_CAP,
   handoffTokenCapConfig,
   handoffBudget,
+  handoffMinCost,
   attachmentTokenAllowance,
   contextUsageForHandoff,
   historicalMessage,
+  knownModelContextWindowTokens,
   latestNativeContextUsage,
+  modelWindowOverflows,
 } from "@t3tools/provider-core/server/handoffBudget";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -85,10 +93,6 @@ export class ProviderTurnStartServiceV2 extends Context.Service<
   ProviderTurnStartServiceV2Shape
 >()("t3/orchestration-v2/ProviderTurnStartService/ProviderTurnStartServiceV2") {}
 
-// Below this many tokens of handoff room the target would only get a recovery
-// pointer; a fresh native thread with the full portable summary is better.
-const MIN_USEFUL_HANDOFF_TOKENS = 4_000;
-
 export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   never,
@@ -116,26 +120,6 @@ export const layer: Layer.Layer<
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    // Window declared on the instance's custom model (`contextWindowTokens`),
-    // for slugs the driver catalog does not know, such as a gateway's `auto`.
-    const customModelContextWindow = (
-      instanceId: string,
-      model: string | undefined,
-    ): Effect.Effect<number | undefined> =>
-      model === undefined
-        ? Effect.succeed(undefined)
-        : serverSettings.getSettings.pipe(
-            Effect.map((settings) => {
-              const config = settings.providerInstances[instanceId as never]?.config as
-                | { readonly customModels?: unknown }
-                | undefined;
-              return (
-                readCustomModelEntries(config?.customModels).find((entry) => entry.slug === model)
-                  ?.contextWindowTokens ?? undefined
-              );
-            }),
-            Effect.orElseSucceed(() => undefined),
-          );
     const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
@@ -605,6 +589,97 @@ export const layer: Layer.Layer<
         return;
       }
       const session = sessionResult.success;
+      const tokenCap = yield* handoffTokenCapConfig.pipe(
+        Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
+      );
+      // Budget check for the run's selected model. When it cannot hold the
+      // pending handoffs, move the turn to another model on the same provider
+      // whose window fits, instead of failing the turn.
+      const measuredUsage = latestNativeContextUsage(projection, providerThread);
+      const budgetThread = {
+        ...providerThread,
+        contextUsage: measuredUsage?.usage ?? providerThread.contextUsage,
+      };
+      const settingsCache = yield* serverSettings.getSettings;
+      const selectionWindow = (selection: ModelSelection) =>
+        session.getModelContextWindow?.(selection, resolvedRuntimePolicy.cwd) ??
+        readCustomModelEntries(
+          (
+            settingsCache.providerInstances[run.providerInstanceId]?.config as
+              | { customModels?: unknown }
+              | undefined
+          )?.customModels,
+        ).find((entry) => entry.slug === selection.model)?.contextWindowTokens ??
+        knownModelContextWindowTokens(selection.model);
+      const runModelSelection = yield* Effect.gen(function* () {
+        if (run.modelSelection === undefined) {
+          return { selection: run.modelSelection, overflow: false };
+        }
+        const minCost = handoffs.reduce((sum, handoff) => sum + handoffMinCost(handoff), 0);
+        const currentWindow = selectionWindow(run.modelSelection);
+        const overflow = modelWindowOverflows({
+          userText: projectComposerContextForProvider({
+            text: message.text,
+            records: message.context?.records ?? [],
+          }),
+          attachments: message.attachments,
+          providerThread: budgetThread,
+          nativeContextEstimate: 0,
+          handoffMinCost: minCost,
+          modelContextWindow: currentWindow,
+        });
+        if (!overflow) return { selection: run.modelSelection, overflow: false };
+        const customEntries = readCustomModelEntries(
+          (
+            settingsCache.providerInstances[run.providerInstanceId]?.config as
+              | { customModels?: unknown }
+              | undefined
+          )?.customModels,
+        );
+        const seen = new Set<string>([run.modelSelection.model]);
+        let best: { selection: ModelSelection; window: number } | undefined;
+        const consider = (slug: string) => {
+          if (seen.has(slug)) return;
+          seen.add(slug);
+          const selection: ModelSelection = { ...run.modelSelection!, model: slug };
+          const window = selectionWindow(selection);
+          if (window === undefined) return;
+          const fits = !modelWindowOverflows({
+            userText: projectComposerContextForProvider({
+              text: message.text,
+              records: message.context?.records ?? [],
+            }),
+            attachments: message.attachments,
+            providerThread: budgetThread,
+            nativeContextEstimate: 0,
+            handoffMinCost: minCost,
+            modelContextWindow: window,
+          });
+          if (!fits) return;
+          if (best === undefined || window > best.window) {
+            best = { selection, window };
+          }
+        };
+        for (const entry of customEntries) consider(entry.slug);
+        if (session.driver === "claudeAgent") {
+          for (const catalogModel of BUNDLED_CLAUDE_MODEL_CATALOG.models) {
+            consider(catalogModel.model.slug);
+          }
+        }
+        consider(`${run.modelSelection.model}-large`);
+        if (best === undefined) return { selection: run.modelSelection, overflow: true };
+        yield* Effect.logWarning(
+          "Selected model window cannot hold the pending context handoffs; switching models",
+          {
+            runId: run.id,
+            providerInstanceId: run.providerInstanceId,
+            from: run.modelSelection.model,
+            to: best.selection.model,
+          },
+        );
+        return { selection: best.selection, overflow: false };
+      });
+      const runSelection = runModelSelection.selection;
       const loadFromProvider = (
         load: Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapter.ProviderAdapterV2Error>,
       ) =>
@@ -651,7 +726,7 @@ export const layer: Layer.Layer<
               sourceProviderThread,
               sourceProviderTurns: sourceProjection.providerTurns,
               targetThreadId: projection.thread.id,
-              modelSelection: run.modelSelection,
+              modelSelection: runSelection,
               runtimePolicy: resolvedRuntimePolicy,
               ...(sourceProviderTurn === undefined
                 ? {}
@@ -668,7 +743,7 @@ export const layer: Layer.Layer<
             session.ensureThread({
               threadId: projection.thread.id,
               title: projection.thread.title,
-              modelSelection: run.modelSelection,
+              modelSelection: runSelection,
               runtimePolicy: resolvedRuntimePolicy,
               providerSessionId,
               existingProviderThread: providerThread,
@@ -681,44 +756,16 @@ export const layer: Layer.Layer<
             handoff.delivery?.nativeThreadId === providerThread.nativeThreadRef?.nativeId &&
             handoff.delivery?.status === "pending",
         );
-        // A native thread that is already (nearly) full cannot take the pending
-        // handoff. Resuming it would only leave room for a recovery pointer, so
-        // bind a fresh native thread instead and hand it the whole thread as a
-        // portable summary. The turn then runs with real history, not an error.
-        const nativeFull = yield* Effect.gen(function* () {
-          if (effectiveHandoffs.length === 0 || message === undefined) return false;
-          const measured =
-            latestNativeContextUsage(projection, providerThread)?.usage ??
-            providerThread.contextUsage;
-          if (measured == null) return false;
-          const window =
-            session.getModelContextWindow?.(run.modelSelection, resolvedRuntimePolicy.cwd) ??
-            (yield* customModelContextWindow(run.providerInstanceId, run.modelSelection?.model));
-          const tokenCap = yield* handoffTokenCapConfig.pipe(
-            Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
-          );
-          const budget = handoffBudget({
-            tokenCap,
-            modelContextWindow: window,
-            userText: projectComposerContextForProvider({
-              text: message.text,
-              records: message.context?.records ?? [],
-            }),
-            attachments: message.attachments,
-            providerThread: { ...providerThread, contextUsage: measured },
-            nativeContextEstimate: 0,
-          });
-          return budget < Math.min(tokenCap, MIN_USEFUL_HANDOFF_TOKENS);
-        });
+        const nativeOverflow = runModelSelection.overflow;
         const resumed = yield* Effect.result(
-          uncertainDelivery || nativeFull
+          uncertainDelivery || nativeOverflow
             ? Effect.fail(
                 new ProviderAdapter.ProviderAdapterTurnStartError({
                   driver: session.driver,
                   threadId: projection.thread.id,
                   providerThreadId: providerThread.id,
                   runId,
-                  cause: nativeFull
+                  cause: nativeOverflow
                     ? "Native context cannot hold the pending handoff"
                     : "Uncertain native history injection",
                 }),
@@ -726,7 +773,7 @@ export const layer: Layer.Layer<
             : session.resumeThread({
                 providerThread,
                 threadId: projection.thread.id,
-                modelSelection: run.modelSelection,
+                modelSelection: runSelection,
                 runtimePolicy: resolvedRuntimePolicy,
               }),
         );
@@ -740,7 +787,7 @@ export const layer: Layer.Layer<
           runId,
           reason: uncertainDelivery
             ? "uncertain_history_delivery"
-            : nativeFull
+            : nativeOverflow
               ? "native_context_full"
               : "resume_failed",
           errorTag: resumed.failure._tag,
@@ -749,7 +796,7 @@ export const layer: Layer.Layer<
           session.ensureThread({
             threadId: projection.thread.id,
             title: projection.thread.title,
-            modelSelection: run.modelSelection,
+            modelSelection: runSelection,
             runtimePolicy: resolvedRuntimePolicy,
             providerSessionId,
             // The native ref is dropped so the adapter binds a fresh native
@@ -842,8 +889,7 @@ export const layer: Layer.Layer<
             source.providerThreadId === providerThread.id,
         )?.modelSelection;
       const sameSelection =
-        previousSelection === undefined ||
-        modelSelectionsEqual(previousSelection, run.modelSelection);
+        previousSelection === undefined || modelSelectionsEqual(previousSelection, runSelection);
       const sameNativeThread =
         loadedProviderThread.nativeThreadRef?.nativeId === providerThread.nativeThreadRef?.nativeId;
       const threadUsage = loadedProviderThread.contextUsage ?? providerThread.contextUsage;
@@ -853,10 +899,24 @@ export const layer: Layer.Layer<
       const reuseTelemetry =
         sameSelection ||
         (previousSelection !== undefined &&
-          session.canReuseContextUsage?.(previousSelection, run.modelSelection) === true);
-      const knownModelWindow =
-        session.getModelContextWindow?.(run.modelSelection, resolvedRuntimePolicy.cwd) ??
-        (yield* customModelContextWindow(run.providerInstanceId, run.modelSelection?.model));
+          session.canReuseContextUsage?.(previousSelection, runSelection) === true);
+      const catalogWindow = session.getModelContextWindow?.(
+        runSelection,
+        resolvedRuntimePolicy.cwd,
+      );
+      // Drivers without a context-window catalog (or custom slugs unknown to
+      // it) fall back to the window declared on the custom model in settings,
+      // so gateway slugs like `auto` do not collapse to the 128k default.
+      const customModelWindow =
+        catalogWindow === undefined && runSelection !== undefined
+          ? (readCustomModelEntries(
+              (
+                (yield* serverSettings.getSettings).providerInstances[run.providerInstanceId]
+                  ?.config as { customModels?: unknown } | undefined
+              )?.customModels,
+            ).find((entry) => entry.slug === runSelection?.model)?.contextWindowTokens ?? undefined)
+          : undefined;
+      const knownModelWindow = catalogWindow ?? customModelWindow;
       const handoffUsage = contextUsageForHandoff({
         sameNativeThread,
         sameSelection,
@@ -883,6 +943,7 @@ export const layer: Layer.Layer<
       };
       const runningRun: OrchestrationV2Run = {
         ...run,
+        modelSelection: runSelection,
         status: "running",
         startedAt: now,
       };
@@ -1022,9 +1083,6 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
-      const tokenCap = yield* handoffTokenCapConfig.pipe(
-        Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
-      );
       const settledHandoffs = projection.contextHandoffs.filter(
         (handoff) =>
           handoff.toProviderThreadId === providerThread.id &&
@@ -1136,45 +1194,49 @@ export const layer: Layer.Layer<
         compact = false,
       ) =>
         Effect.gen(function* () {
-          const retryHandoff =
-            missedItems.length === 0
-              ? []
-              : [
-                  yield* contextHandoffService.prepareProviderHandoff({
-                    threadId: projection.thread.id,
-                    targetRunId: run.id,
-                    transferId: null,
-                    fromProviderThreadIds: [providerThread.id],
-                    toProviderThreadId: providerThread.id,
-                    fromProviderInstanceId: run.providerInstanceId,
-                    toProviderInstanceId: run.providerInstanceId,
-                    coveredRunOrdinals: {
-                      from: missedRuns[0]!.ordinal,
-                      to: missedRuns.at(-1)!.ordinal,
-                    },
-                    strategy: "delta_since_target_last_seen",
-                    items: missedItems,
-                    runs: projection.runs,
-                    createdAt: yield* DateTime.now,
-                  }),
-                ];
+          const buildRetryHandoff = Effect.fn("orchestrationV2.providerTurnStart.retryHandoff")(
+            function* () {
+              if (missedItems.length === 0) return [];
+              return [
+                yield* contextHandoffService.prepareProviderHandoff({
+                  threadId: projection.thread.id,
+                  targetRunId: run.id,
+                  transferId: null,
+                  fromProviderThreadIds: [providerThread.id],
+                  toProviderThreadId: providerThread.id,
+                  fromProviderInstanceId: run.providerInstanceId,
+                  toProviderInstanceId: run.providerInstanceId,
+                  coveredRunOrdinals: {
+                    from: missedRuns[0]!.ordinal,
+                    to: missedRuns.at(-1)!.ordinal,
+                  },
+                  strategy: "delta_since_target_last_seen",
+                  items: missedItems,
+                  runs: projection.runs,
+                  createdAt: yield* DateTime.now,
+                }),
+              ];
+            },
+          );
+          const deliveryBudget = Effect.gen(function* () {
+            const nativeEstimate =
+              budgetProviderThread.contextUsage?.usedTokens === undefined
+                ? yield* nativeContextEstimate
+                : 0;
+            return handoffBudget({
+              tokenCap,
+              modelContextWindow: modelContextWindow,
+              userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
+              attachments: message.attachments,
+              providerThread: budgetProviderThread,
+              nativeContextEstimate: nativeEstimate,
+            });
+          });
           const delivery = yield* deliverContextHandoffs({
-            handoffs: [...effectiveHandoffs, ...retryHandoff],
+            handoffs: [...effectiveHandoffs, ...(yield* buildRetryHandoff())],
             deferInline: compact,
             providerThread: runningProviderThread,
-            budget: Effect.gen(function* () {
-              return handoffBudget({
-                tokenCap,
-                modelContextWindow,
-                userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
-                attachments: message.attachments,
-                providerThread: budgetProviderThread,
-                nativeContextEstimate:
-                  budgetProviderThread.contextUsage?.usedTokens === undefined
-                    ? yield* nativeContextEstimate
-                    : 0,
-              });
-            }),
+            budget: deliveryBudget,
             alreadyDeliveredItemIds: deliveredItemIds,
             ...(session.injectHistory === undefined
               ? {}
@@ -1315,7 +1377,7 @@ export const layer: Layer.Layer<
             ? {}
             : { senderThreadId: message.senderThreadId }),
         },
-        modelSelection: run.modelSelection,
+        modelSelection: runSelection,
         runtimePolicy: resolvedRuntimePolicy,
       });
     });

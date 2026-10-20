@@ -899,6 +899,242 @@ describe("orchestration v2 provider switching", () => {
       }),
     ),
   );
+
+  it.live("switches to a larger-window model on the same provider when the handoff overflows", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("handoff-window-overflow");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const generation = yield* Ref.make(0);
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: CODEX_MODEL_SELECTION.instanceId,
+            driver: CODEX_DRIVER,
+            capabilities: CodexProviderCapabilitiesV2,
+            modelSelection: CODEX_MODEL_SELECTION,
+            responseByRunOrdinal: { 1: "Original partial work" },
+            capturedTurns,
+          }),
+          makeTestAdapter({
+            instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+            driver: CLAUDE_DRIVER,
+            capabilities: ClaudeProviderCapabilitiesV2,
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            responseByRunOrdinal: {},
+            capturedTurns,
+            injectedHistory,
+            nativeThreadGeneration: generation,
+            getModelContextWindow: (selection: ModelSelection) =>
+              selection.model.endsWith("-large") ? 1_000_000 : 32_000,
+            canReuseContextUsage: (previous, next) => previous.instanceId === next.instanceId,
+            tokenUsageByRunOrdinal: {
+              2: { usedTokens: 30_000, maxTokens: 32_000 },
+            },
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const dispatch = (ordinal: number, text: string, selection: ModelSelection) =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`overflow:${ordinal}`),
+              threadId,
+              messageId: MessageId.make(`overflow:message:${ordinal}`),
+              createdBy: "user",
+              creationSource: "web",
+              text,
+              attachments: [],
+              modelSelection: selection,
+              dispatchMode: { type: "start_immediately" },
+            });
+          const wait = (ordinal: number) =>
+            orchestrator.streamStoredEvents.pipe(
+              Stream.filter(
+                ({ event }) =>
+                  event.type === "run.updated" &&
+                  event.payload.ordinal === ordinal &&
+                  (event.payload.status === "completed" || event.payload.status === "failed"),
+              ),
+              Stream.runHead,
+              Effect.andThen(worker.drain()),
+            );
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("overflow:create"),
+            threadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Handoff overflow",
+            modelSelection: CODEX_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* dispatch(1, "Original request with constraints", CODEX_MODEL_SELECTION);
+          yield* wait(1);
+          // Run 2 on the small Claude model establishes a native thread and
+          // reports a nearly-full context window through turn telemetry, so
+          // run 3's large message cannot fit the remaining window and the
+          // turn must move to the large variant instead of failing.
+          yield* dispatch(2, "Establish target", CLAUDE_MODEL_SELECTION);
+          yield* wait(2);
+          yield* waitForIdle(threadId);
+          const overflowText = "x".repeat(70_000);
+          yield* dispatch(3, overflowText, CLAUDE_MODEL_SELECTION);
+          yield* wait(3);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(projection.runs.at(-1)?.status, "completed");
+          assert.equal(projection.thread.modelSelection.model, "claude-sonnet-4-6-large");
+          const lastTurn = (yield* Ref.get(capturedTurns)).at(-1)!;
+          assert.equal(lastTurn.driver, CLAUDE_DRIVER);
+          assert.equal(lastTurn.text, overflowText);
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "handoff-window-overflow",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: { type: "readOnly" },
+                },
+              },
+              layerRegistry,
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.live("delivers the handoff inline when the target model window fits", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("handoff-window-fits");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: CODEX_MODEL_SELECTION.instanceId,
+            driver: CODEX_DRIVER,
+            capabilities: CodexProviderCapabilitiesV2,
+            modelSelection: CODEX_MODEL_SELECTION,
+            responseByRunOrdinal: { 1: "Original partial work" },
+            capturedTurns,
+          }),
+          makeTestAdapter({
+            instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+            driver: CLAUDE_DRIVER,
+            capabilities: ClaudeProviderCapabilitiesV2,
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            responseByRunOrdinal: {},
+            capturedTurns,
+            injectedHistory,
+            getModelContextWindow: (selection: ModelSelection) =>
+              selection.model.endsWith("-large") ? 1_000_000 : 32_000,
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const dispatch = (ordinal: number, text: string, selection: ModelSelection) =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`auto-fallback:${ordinal}`),
+              threadId,
+              messageId: MessageId.make(`auto-fallback:message:${ordinal}`),
+              createdBy: "user",
+              creationSource: "web",
+              text,
+              attachments: [],
+              modelSelection: selection,
+              dispatchMode: { type: "start_immediately" },
+            });
+          const wait = (ordinal: number) =>
+            orchestrator.streamStoredEvents.pipe(
+              Stream.filter(
+                ({ event }) =>
+                  event.type === "run.updated" &&
+                  event.payload.ordinal === ordinal &&
+                  (event.payload.status === "completed" || event.payload.status === "failed"),
+              ),
+              Stream.runHead,
+              Effect.andThen(worker.drain()),
+            );
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("auto-fallback:create"),
+            threadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Auto fallback",
+            modelSelection: CODEX_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* dispatch(1, "Original request with constraints", CODEX_MODEL_SELECTION);
+          yield* wait(1);
+          yield* dispatch(2, "New source constraint " + "q".repeat(9_000), CODEX_MODEL_SELECTION);
+          yield* wait(2);
+          // Fill the small model's window so the handoff does not fit.
+          const target = (yield* orchestrator.getThreadProjection(threadId)).providerThreads.find(
+            (thread) => thread.providerInstanceId === CLAUDE_MODEL_SELECTION.instanceId,
+          );
+          if (target !== undefined) {
+            yield* eventSink.write({
+              events: [
+                {
+                  id: EventId.make("auto-fallback:usage"),
+                  type: "provider-thread.updated",
+                  threadId,
+                  occurredAt: yield* DateTime.now,
+                  payload: {
+                    ...target,
+                    contextUsage: { usedTokens: 30_000, maxTokens: 32_000 },
+                  },
+                },
+              ],
+            });
+          }
+          yield* dispatch(3, "Continue work", CLAUDE_MODEL_SELECTION);
+          yield* wait(3);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(projection.runs.at(-1)?.status, "completed");
+          assert.equal(projection.thread.modelSelection.model, "claude-sonnet-4-6");
+          const lastTurn = (yield* Ref.get(capturedTurns)).at(-1)!;
+          assert.equal(lastTurn.driver, CLAUDE_DRIVER);
+          assert.equal(lastTurn.text, "Continue work");
+          assert.include(
+            yield* encodeJson(yield* Ref.get(injectedHistory)),
+            "New source constraint",
+          );
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "handoff-window-fits",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: { type: "readOnly" },
+                },
+              },
+              layerRegistry,
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
   it.live.each(["turn-start", "injection", "large-missed-request"] as const)(
     "recovers %s failure without duplicating history in the same native thread",
     (failure) =>
