@@ -2842,6 +2842,7 @@ export default function ChatView(props: ChatViewProps) {
   const threadTranslation = useThreadTranslation({
     threadKey: displayedTimelineKey,
     messages: timelineMessages,
+    environmentId: activeThread?.environmentId ?? null,
   });
   /**
    * `[OPTIONS:]` chip candidates shown above the composer, read from the last
