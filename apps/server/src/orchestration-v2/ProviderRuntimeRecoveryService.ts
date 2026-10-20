@@ -343,7 +343,15 @@ export const make = Effect.gen(function* () {
           runs.push(run);
           continue;
         }
-        if (run.queueHeld === true) continue;
+        // A process loss leaves no live provider callback for a turn's pending
+        // approvals, so a stopped thread's queue waits for explicit consent to
+        // drain again. A thread that opts into continuing after a server update
+        // keeps that promise for its queue too: parking it here would strand
+        // every message behind the turn, because nothing in production ever
+        // drains a hold this pass wrote, and the resumed turn's own completion
+        // would then meet a queue that only a person can restart. A user Stop
+        // records its hold on the queued run directly, and survives both passes.
+        if (continueAfterRestart || run.queueHeld === true) continue;
         events.push({
           id: yield* allocateEventId(),
           type: "run.updated",

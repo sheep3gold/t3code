@@ -121,7 +121,10 @@ it.effect.each([
           prepareForShutdown: Effect.void,
           reconcile: () => Effect.succeed(recovery),
         }),
-        Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          recoverDelegatedTasks: Effect.void,
+          resumeQueuedRuns: Effect.succeed(0),
+        }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown: Effect.void }),
         Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.never }),
@@ -255,6 +258,7 @@ it.effect("starts without scanning or rebuilding projection history", () =>
       recover: record("recover").pipe(Effect.as({ closedRequests: 2 })),
       recoverDelegatedTasks: record("delegated"),
       startEffectWorker: record("worker"),
+      resumeQueuedRuns: record("resume").pipe(Effect.as(1)),
       autoBootstrap: record("bootstrap").pipe(Effect.as({ projectId: "project-1" })),
     });
 
@@ -263,11 +267,13 @@ it.effect("starts without scanning or rebuilding projection history", () =>
       "recover",
       "delegated",
       "worker",
+      "resume",
       "bootstrap",
     ]);
     assert.deepEqual(result, {
       recovery: { closedRequests: 2 },
       bootstrap: { projectId: "project-1" },
+      resumedQueuedRuns: 1,
     });
   }),
 );

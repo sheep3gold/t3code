@@ -2035,6 +2035,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     for (const threadId of threadIds) {
       const resumedThread = yield* Effect.gen(function* () {
         if (!(yield* projectionStore.canStartQueuedRun(threadId))) return false;
+        // A queued run whose continuation effect is still pending must not be
+        // started during boot: it would race the continuation turn. The
+        // continuation drains the queue itself when it settles.
+        const latestRun = latestExecutedRun(
+          (yield* projectionStore.getThreadRecords(threadId, ["runs"])).runs,
+        );
+        if (latestRun !== null && (yield* awaitsRestartContinuation(latestRun))) {
+          return false;
+        }
         yield* threadDispatch.withLock(threadId, startNextQueuedRun(threadId));
         return true;
       }).pipe(
