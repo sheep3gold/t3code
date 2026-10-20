@@ -199,7 +199,10 @@ export function ProviderModelsSection({
 
     scrollToSlugRef.current = normalized;
     setFilter("");
-    onChange([...customModels, { slug: normalized, name: normalized, capabilities: null }]);
+    onChange([
+      ...customModels,
+      { slug: normalized, name: normalized, capabilities: null, contextWindowTokens: null },
+    ]);
     setInput("");
     setError(null);
     setIsAdding(false);
