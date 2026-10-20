@@ -55,10 +55,16 @@ import {
   EnvironmentAuthInvalidError,
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
+  OptionalBearerHeaders,
 } from "./environmentHttp.ts";
 class TranslationGroup extends HttpApiGroup.make("translate").add(
   HttpApiEndpoint.post("translate", "/api/translate", {
     payload: EnvironmentTranslatePayload,
+    // The route authenticates inside its handler, but the client still has to
+    // be able to carry its credential: without a headers schema the generated
+    // client refuses the authorization header, and a request without it is
+    // bounced by the SSO gate instead of reaching the translation service.
+    headers: OptionalBearerHeaders,
     success: EnvironmentTranslateResult,
     error: [
       EnvironmentAuthInvalidError,

@@ -6,6 +6,7 @@ import {
   ProjectId,
   ThreadId,
   type AuthSessionState,
+  EnvironmentTranslateResult,
   type OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadBoundedSnapshot,
@@ -42,6 +43,7 @@ import { fetchEnvironmentThreadTranscript } from "./threadTranscriptHttp.ts";
 import { fetchEnvironmentBoundedThreadSnapshot } from "./boundedThreadSnapshotHttp.ts";
 import * as BoundedThreadSnapshotHttp from "./boundedThreadSnapshotHttp.ts";
 import { fetchEnvironmentThreadHistoryPage } from "./threadHistoryHttp.ts";
+import { translateEnvironmentTexts } from "./translateHttp.ts";
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 
 const encodeThreadSnapshot = Schema.encodeSync(OrchestrationV2ThreadDetailSnapshot);
@@ -110,6 +112,9 @@ const THREAD_HISTORY = {
   nextCursor: null,
   hasMoreHistory: false,
 } satisfies OrchestrationV2ThreadHistoryPage;
+const TRANSLATION = {
+  translations: ["你好"],
+} satisfies Schema.Schema.Type<typeof EnvironmentTranslateResult>;
 
 function credentialRejectedResponse(reason = "invalid_credential") {
   return Response.json(
@@ -261,6 +266,14 @@ const LOADERS: ReadonlyArray<{
         threadId: THREAD.projection.thread.id,
         cursor: "older-page",
       }),
+  },
+  {
+    name: "thread translation",
+    method: "POST",
+    path: "/api/translate",
+    response: TRANSLATION,
+    expected: TRANSLATION,
+    load: (input: HttpInput) => translateEnvironmentTexts({ ...input, texts: ["Hello"] }),
   },
 ];
 

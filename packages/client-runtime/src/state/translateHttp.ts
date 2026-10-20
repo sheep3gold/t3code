@@ -43,7 +43,8 @@ export const translateEnvironmentTexts = Effect.fn("translateEnvironmentTexts")(
     url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/translate"),
     timeoutMs: input.timeoutMs ?? DEFAULT_TRANSLATE_TIMEOUT_MS,
     groupClient: makeForkTranslationHttpApiGroupClient,
-    request: (client) => client.translate({ payload: { texts: [...input.texts] } }),
+    request: ({ client, headers }) =>
+      client.translate({ payload: { texts: [...input.texts] }, headers }),
   });
 });
 
