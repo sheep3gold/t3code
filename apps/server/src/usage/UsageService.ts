@@ -10,6 +10,7 @@ import {
   type UsagePricing,
   type UsageSummary,
   type UsageSummaryInput,
+  type UsageInstancesSummary,
   UsageReadError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -40,8 +41,14 @@ import type {
   TranscriptUsageFormat,
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
+import { totalTokens } from "@t3tools/provider-core/server/usage";
 import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
-import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
+import {
+  createOverrideRateTable,
+  parseRateTable,
+  priceUsage,
+  type RateTable,
+} from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -155,6 +162,17 @@ export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    /**
+     * Scans the trailing `days` of transcripts and attributes usage to the
+     * configured provider instances rather than physical transcript volumes.
+     * Two instances of one driver (e.g. two codex homes serving overlapping
+     * model slugs) must never merge, so attribution goes by instance home
+     * directory. Instances that resolve to the same physical directory are
+     * reported together under each of their ids.
+     */
+    readonly readInstances: (input: {
+      readonly days: number;
+    }) => Effect.Effect<UsageInstancesSummary, UsageReadError>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
   }
 >()("t3/usage/UsageService") {}
@@ -178,6 +196,13 @@ const layerTest = Layer.succeed(
         untilDay: input.untilDay,
         buckets: [],
         sources: [],
+        pricing: EMPTY_PRICING,
+        scanDurationMs: 0,
+      }),
+    readInstances: () =>
+      Effect.succeed({
+        readAt: "1970-01-01T00:00:00.000Z",
+        instances: [],
         pricing: EMPTY_PRICING,
         scanDurationMs: 0,
       }),
@@ -627,6 +652,202 @@ export const make = Effect.gen(function* () {
     return scanned;
   });
 
+  /**
+   * Maps each configured instance to the transcript directories its driver
+   * would read, so scanned usage can be attributed back to the instance the
+   * user named in settings. Uses the same `reader.directories` the summary
+   * scan goes through, so the two can never disagree about where a home is.
+   */
+  const instanceTranscriptDirs = Effect.fn("UsageService.instanceTranscriptDirs")(function* (
+    settings: ServerSettingsValue,
+  ) {
+    const byDir = new Map<string, ReadonlyArray<string>>();
+    for (const { driver, reader } of transcriptReaders) {
+      if (reader.kind !== "transcripts") continue;
+      const instances = yield* usageInstances(driver, settings);
+      for (const instance of instances) {
+        if (!instance.configured) continue;
+        const directories = yield* reader.directories(instance).pipe(
+          Effect.provideContext(readerContext),
+          Effect.catchCause(() => Effect.succeed([] as const)),
+        );
+        for (const { dir } of directories) {
+          const key = `${reader.provider}\0${dir}`;
+          const owners = byDir.get(key) ?? [];
+          // Two instances may resolve to one shared home (an alias); both ids
+          // must carry that home's usage, so attribution never drops one.
+          byDir.set(key, [...owners, instance.instanceId]);
+        }
+      }
+    }
+    return byDir;
+  });
+
+  /**
+   * Attributes the trailing `days` of transcript usage to the configured
+   * provider instances. Uses the same cached per-file records as the summary
+   * scan; dedupe runs in-memory per directory because the keys encode the
+   * aggregation window. Rates price each record directly, so a missing rate
+   * shows up as `unpricedRecords` rather than a zero-cost bucket.
+   */
+  const scanInstances = Effect.fn("UsageService.scanInstances")(function* (
+    days: number,
+    settings: ServerSettingsValue,
+  ) {
+    const startedAtMs = yield* Clock.currentTimeMillis;
+    yield* ensureScanCacheLoaded;
+
+    // Midnight-to-midnight UTC arithmetic, so `days` counts calendar days
+    // ending today rather than a rolling 24h multiple.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const sinceDayStartMs = Math.floor(startedAtMs / DAY_MS) * DAY_MS - (days - 1) * DAY_MS;
+    const windowStartMs = sinceDayStartMs - MTIME_SLACK_MS;
+    const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+    const [, scannedDirs, dirOwners] = yield* Effect.all(
+      [
+        ensureRates(false),
+        collectDirs(windowStartMs, settings, retentionCutoffMs, false),
+        instanceTranscriptDirs(settings),
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    const overrides = createOverrideRateTable(settings.usagePriceOverrides);
+
+    interface MutableInstance {
+      totalTokens: number;
+      costUsd: number;
+      unpricedRecords: number;
+      /** Present when the instance's transcript directory exists on disk. */
+      hasDir: boolean;
+      models: Map<string, { totalTokens: number; costUsd: number }>;
+    }
+    const byInstance = new Map<string, MutableInstance>();
+    const instanceEntry = (instanceKey: string): MutableInstance => {
+      let entry = byInstance.get(instanceKey);
+      if (entry === undefined) {
+        entry = {
+          totalTokens: 0,
+          costUsd: 0,
+          unpricedRecords: 0,
+          hasDir: false,
+          models: new Map(),
+        };
+        byInstance.set(instanceKey, entry);
+      }
+      return entry;
+    };
+    const accumulate = (
+      entry: MutableInstance,
+      record: Pick<UsageRecord, "model" | "rateModel" | "totals" | "speed" | "reportedCostUsd">,
+    ): void => {
+      const tokens = totalTokens(record.totals);
+      if (tokens === 0 && record.reportedCostUsd === null) return;
+      const priced = priceUsage(rates, record, overrides);
+      entry.totalTokens += tokens;
+      entry.costUsd += priced.costUsd;
+      if (priced.costSource === "unpriced") entry.unpricedRecords += 1;
+      const model = entry.models.get(record.model) ?? { totalTokens: 0, costUsd: 0 };
+      model.totalTokens += tokens;
+      model.costUsd += priced.costUsd;
+      entry.models.set(record.model, model);
+    };
+
+    for (const scannedDir of scannedDirs) {
+      const provider = scannedDir.provider;
+      // Every configured instance claiming this physical directory shares the
+      // attribution; a shared home carries its usage under each alias id.
+      const ownerKeys = dirOwners.get(`${provider}\0${scannedDir.dir}`) ?? [];
+      if (ownerKeys.length === 0) continue;
+      const entries = ownerKeys.map((ownerKey) => instanceEntry(ownerKey));
+      for (const entry of entries) {
+        if (scannedDir.files !== null) entry.hasDir = true;
+      }
+
+      // Dedupe has to happen per record; UsageAggregator ties its seen-set to
+      // a fixed day window, so fold the records here with the same rules.
+      const seen = new Set<string>();
+      for (const file of scannedDir.files ?? []) {
+        for (const record of file.records) {
+          if (record.timestampMs < windowStartMs + MTIME_SLACK_MS) continue;
+          if (record.dedupeKey !== null) {
+            if (seen.has(record.dedupeKey)) continue;
+            seen.add(record.dedupeKey);
+          }
+          for (const entry of entries) accumulate(entry, record);
+        }
+      }
+    }
+
+    const pruned = pruneScanCache(fileCache, retentionCutoffMs);
+    if (pruned > 0) cacheDirty = true;
+
+    const readAt = yield* DateTime.now;
+    const finishedAtMs = yield* Clock.currentTimeMillis;
+
+    const instances: Array<UsageInstancesSummary["instances"][number]> = [];
+    for (const [instanceId, entry] of byInstance) {
+      if (!entry.hasDir && entry.totalTokens === 0 && entry.costUsd === 0) continue;
+      instances.push({
+        instanceId: ProviderInstanceId.make(instanceId),
+        usage: {
+          available: true,
+          totalTokens: Math.max(0, Math.round(entry.totalTokens)),
+          costUsd: entry.costUsd,
+          unpricedRecords: entry.unpricedRecords,
+          models: [...entry.models.entries()]
+            .map(([model, totals]) => ({
+              model,
+              totalTokens: Math.max(0, Math.round(totals.totalTokens)),
+              costUsd: totals.costUsd,
+            }))
+            .sort((a, b) => b.totalTokens - a.totalTokens),
+        },
+      });
+    }
+
+    return {
+      readAt: DateTime.formatIso(readAt),
+      instances,
+      pricing: pricing(),
+      scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
+    } satisfies UsageInstancesSummary;
+  });
+
+  const inflightInstanceScans = new Map<
+    number,
+    Deferred.Deferred<UsageInstancesSummary, UsageReadError>
+  >();
+
+  const readInstances = Effect.fn("UsageService.readInstances")(function* (input: {
+    readonly days: number;
+  }) {
+    const days = Math.max(
+      1,
+      Math.min(31, Math.floor(Number.isFinite(input.days) ? input.days : 7)),
+    );
+    const settings = yield* readSettings;
+    const deferred = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const existing = inflightInstanceScans.get(days);
+        if (existing !== undefined) return existing;
+        const created = Deferred.makeUnsafe<UsageInstancesSummary, UsageReadError>();
+        inflightInstanceScans.set(days, created);
+        yield* scanInstances(days, settings).pipe(
+          Effect.onExit((exit) =>
+            Effect.sync(() => inflightInstanceScans.delete(days)).pipe(
+              Effect.andThen(Deferred.done(created, exit)),
+            ),
+          ),
+          Effect.forkDetach,
+        );
+        return created;
+      }),
+    );
+    return yield* Deferred.await(deferred);
+  });
+
   const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
     input: UsageSummaryInput,
     settings: ServerSettingsValue,
@@ -840,7 +1061,7 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  return { readSummary, readInstances, refreshRates, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

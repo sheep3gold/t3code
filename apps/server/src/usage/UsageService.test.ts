@@ -27,6 +27,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "effect/Scheduler";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -2260,6 +2262,123 @@ describe("UsageService", () => {
         orphanedAt,
         `interruption left the next matching request pending at scheduler check ${orphanedAt}`,
       );
+    }).pipe(Effect.scoped),
+  );
+
+  /**
+   * `claudeLine` is pinned to 2026-08-01, outside `readInstances`' trailing
+   * window; this variant writes a transcript entry at a recent timestamp.
+   */
+  const recentClaudeLine = (id: number, outputTokens: number, isoTimestamp: string): string =>
+    `${JSON.stringify({
+      type: "assistant",
+      timestamp: isoTimestamp,
+      requestId: `req_${id}`,
+      sessionId: "session-1",
+      message: {
+        id: `msg_${id}`,
+        model: "claude-fable-5",
+        usage: { input_tokens: 10, output_tokens: outputTokens },
+      },
+    })}\n`;
+
+  it.live("attributes trailing-window usage per configured instance home", () =>
+    Effect.gen(function* () {
+      const { home } = yield* setup;
+      const nowMs = yield* Clock.currentTimeMillis;
+      const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+      const dayAgoIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 86_400_000));
+      const firstHome = NodePath.join(home, "claude-a");
+      const secondHome = NodePath.join(home, "claude-b");
+      const firstDir = NodePath.join(firstHome, "projects", "proj");
+      const secondDir = NodePath.join(secondHome, "projects", "proj");
+      yield* Effect.promise(async () => {
+        for (const [dir, lines] of [
+          [firstDir, [recentClaudeLine(1, 5, nowIso), recentClaudeLine(2, 7, dayAgoIso)]],
+          [secondDir, [recentClaudeLine(3, 11, nowIso)]],
+        ] as const) {
+          await NodeFSP.mkdir(dir, { recursive: true });
+          await NodeFSP.writeFile(NodePath.join(dir, "session.jsonl"), lines.join(""));
+        }
+      });
+      const instance = (homePath: string) => ({
+        driver: ProviderDriverKind.make("claudeAgent"),
+        config: { homePath },
+      });
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-instance-attribution-test",
+            home,
+            ratesDocument: {
+              "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+            },
+            settings: {
+              providerInstances: {
+                [ProviderInstanceId.make("claude_xjp")]: instance(firstHome),
+                [ProviderInstanceId.make("claude_work")]: instance(secondHome),
+              },
+            },
+          }),
+        ),
+      );
+      const summary = yield* service.readInstances({ days: 7 });
+      const byId = new Map(summary.instances.map((entry) => [entry.instanceId, entry.usage]));
+      const first = byId.get("claude_xjp" as never);
+      const second = byId.get("claude_work" as never);
+      assert.isDefined(first, "claude_xjp has a transcript home, so it must be reported");
+      assert.isDefined(second);
+      // 2 entries × (10 input + 5 output) then (10 + 7): input+output each.
+      assert.deepStrictEqual(
+        { totalTokens: first?.totalTokens, unpricedRecords: first?.unpricedRecords },
+        { totalTokens: 32, unpricedRecords: 0 },
+      );
+      assert.strictEqual(second?.totalTokens, 21);
+      // Same physical model on both instances must never merge them.
+      assert.deepStrictEqual(
+        first?.models.map((model) => [model.model, model.totalTokens]),
+        [["claude-fable-5", 32]],
+      );
+      assert.isTrue(first?.available);
+      assert.isAbove(first?.costUsd ?? 0, 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("keeps two instances on one shared home separate and reports both", () =>
+    Effect.gen(function* () {
+      const { home, transcript, settings } = yield* setup;
+      const nowIso = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, recentClaudeLine(1, 5, nowIso)));
+      const sharedHome = NodePath.join(home, "claude");
+      const instance = {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        config: { homePath: sharedHome },
+      };
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-instance-shared-home-test",
+            home,
+            ratesDocument: {
+              "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+            },
+            settings: {
+              ...settings,
+              providerInstances: {
+                ...settings.providerInstances,
+                [ProviderInstanceId.make("claude_alias")]: instance,
+              },
+            },
+          }),
+        ),
+      );
+      const summary = yield* service.readInstances({ days: 7 });
+      const reported = summary.instances
+        .filter((entry) => entry.usage.totalTokens > 0)
+        .map((entry) => entry.instanceId)
+        .sort();
+      // Both ids resolve to the same directory, so both carry its usage.
+      assert.deepStrictEqual(reported, ["claudeAgent", "claude_alias"]);
     }).pipe(Effect.scoped),
   );
 });
