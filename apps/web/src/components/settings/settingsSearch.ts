@@ -319,6 +319,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["usage quota rate limit reset recover continue"],
   },
   {
+    id: "auto-retry-failed-threads",
+    title: "Auto-retry failed threads",
+    to: "/settings/general",
+    searchTerms: ["error failure retry transient provider connection api continue"],
+  },
+  {
     id: "usage-limit-fallback-model",
     title: "Usage limit fallback model",
     to: "/settings/general",

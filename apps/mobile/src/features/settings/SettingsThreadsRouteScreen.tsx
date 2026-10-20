@@ -93,6 +93,7 @@ function AutoSettleSettingsRows() {
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
+      autoRetryFailedThreads?: boolean;
     },
   ) => {
     if (
@@ -201,6 +202,17 @@ function AutoSettleSettingsRows() {
             value={uniformMobileSetting(displayTargets, "snoozeLimitedThreads")}
             disabled={disabled}
             onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
+          />
+        </SettingsSection>
+      ) : null}
+      {!projectSelected ? (
+        <SettingsSection title="Failures">
+          <SettingsSwitchRow
+            icon="arrow.clockwise"
+            label="Auto-retry failed threads"
+            value={uniformMobileSetting(displayTargets, "autoRetryFailedThreads")}
+            disabled={disabled}
+            onValueChange={(value) => writeToAll({ autoRetryFailedThreads: value })}
           />
         </SettingsSection>
       ) : null}
