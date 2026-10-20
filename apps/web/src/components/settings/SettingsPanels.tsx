@@ -588,6 +588,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
       ? ["Snooze limited threads"]
       : []),
+    ...(settings.autoRetryFailedThreads !== DEFAULT_UNIFIED_SETTINGS.autoRetryFailedThreads
+      ? ["Auto-retry failed threads"]
+      : []),
     ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
     ...(settings.persistComposerContextStrip !==
     DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
@@ -745,6 +748,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
+      autoRetryFailedThreads: DEFAULT_UNIFIED_SETTINGS.autoRetryFailedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
@@ -2302,6 +2306,22 @@ export function GeneralSettingsPanel() {
                 updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
               }
               aria-label="Auto-resume limited threads"
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("auto-retry-failed-threads")}
+          description="Continue a thread after a transient provider or connection error, up to three times. Usage limits and stopped runs are not retried."
+          settingKeys={["autoRetryFailedThreads"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["autoRetryFailedThreads"]}
+              checked={settings.autoRetryFailedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoRetryFailedThreads: Boolean(checked) })
+              }
+              aria-label="Auto-retry failed threads"
             />
           }
         />

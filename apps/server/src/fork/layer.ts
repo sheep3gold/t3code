@@ -16,6 +16,7 @@ import * as ThreadLedgerRepository from "./ledger/ThreadLedger.ts";
 import * as AgentMemories from "./memory/AgentMemories.ts";
 import { startMemorySync } from "./memory/MemorySync.ts";
 import { startMsgHubNotifications } from "./notifications/MsgHubNotificationReactor.ts";
+import { startFailedRunAutoRetry } from "./retry/FailedRunAutoRetry.ts";
 import * as ThreadScheduleRunner from "./schedules/ThreadScheduleToolkit.ts";
 import * as ThreadWorkflowRunner from "./workflows/ThreadWorkflowToolkit.ts";
 import * as ForkTurnContext from "./turnContext/ForkTurnContext.ts";
@@ -37,6 +38,7 @@ export const layerForkBackground = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* startMemorySync;
     yield* startMsgHubNotifications;
+    yield* startFailedRunAutoRetry;
     yield* ThreadScheduleRunner.startThreadScheduleRunner;
     yield* ThreadWorkflowRunner.startThreadWorkflowRunner;
   }),

@@ -1137,6 +1137,12 @@ export const ServerSettings = Schema.Struct({
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
+   * Re-send a short continuation when a run fails on a transient provider or
+   * transport error, at most three times per original request. Usage limits,
+   * user stops, and permission or validation errors are never retried.
+   */
+  autoRetryFailedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
    * Model to switch a thread to when its run stops on a usage limit, then
    * resume immediately instead of waiting for the reported reset time. Null
    * keeps the current behavior: the thread waits for its reset time.
@@ -1459,6 +1465,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  autoRetryFailedThreads: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   usageLimitFallbackModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   backgroundActivity: Schema.optionalKey(
