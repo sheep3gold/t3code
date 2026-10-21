@@ -12,8 +12,11 @@ export type VoiceComposerPresentation = {
 export function resolveVoiceComposerPresentation(
   state: VoiceInputState,
   elapsedSeconds: number,
+  heldByGesture = false,
 ): VoiceComposerPresentation {
-  switch (state.phase) {
+  // While a finger holds the mic, the toolbar must keep the mic (and its
+  // gesture detector) mounted; the hold overlay shows progress instead.
+  switch (heldByGesture ? "idle" : state.phase) {
     case "idle":
       return {
         leadingAction: null,

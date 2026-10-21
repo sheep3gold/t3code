@@ -66,4 +66,14 @@ describe("resolveVoiceComposerPresentation", () => {
     );
     expect(voiceInputFreezesEditor({ phase: "idle", error: null, errorAction: null })).toBe(false);
   });
+
+  it("keeps the mic presentation while a finger holds it", () => {
+    expect(
+      resolveVoiceComposerPresentation(
+        { phase: "recording", error: null, errorAction: null },
+        3,
+        true,
+      ),
+    ).toMatchObject({ trailingAction: "mic", statusLabel: null });
+  });
 });
