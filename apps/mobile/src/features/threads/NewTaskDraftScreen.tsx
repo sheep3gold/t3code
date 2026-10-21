@@ -498,13 +498,14 @@ export function NewTaskDraftScreen(props: {
     onChangeDraftMessage: flow.setPrompt,
     onChangeSelection: composerMenu.onSelectionChange,
   });
-  const voicePresentation = resolveVoiceComposerPresentation(
-    voiceInput.state,
-    voiceInput.elapsedSeconds,
-  );
   const holdToTalk = useHoldToTalk(
     voiceInput,
     isIncomingShareTransferPending || isImportingShare || flow.submitting,
+  );
+  const voicePresentation = resolveVoiceComposerPresentation(
+    voiceInput.state,
+    voiceInput.elapsedSeconds,
+    holdToTalk.held,
   );
   const isVoiceInputPresented = voicePresentation.statusLabel !== null;
   const preventRemove =
