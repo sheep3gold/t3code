@@ -20,6 +20,10 @@
  *   pool across accounts, flagging when the cache is more than a day old.
  * - `kimi`: Moonshot's `GET /v1/users/me/balance` (prepaid balance in CNY),
  *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
+ *   When the instance's `ANTHROPIC_BASE_URL` points at the Kimi Code plan
+ *   (`api.kimi.com/coding`), it reads `GET /coding/v1/usages` instead — the
+ *   endpoint kimi-cli's `/usage` renders: `used_ratio` per bucket for the
+ *   5-hour window and the monthly quotas.
  * - `deepseek`: `GET api.deepseek.com/user/balance` (prepaid balance, CNY),
  *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
  * - `factory`: `GET api.factory.ai/api/organization/subscription/usage`, the
@@ -71,6 +75,8 @@ const WORKBUDDY_ACCOUNTS_DIR = "/home/ubuntu/.workbuddy2api-hub/accounts";
 const WORKBUDDY_CREDITS_STALE_MS = 24 * 60 * 60 * 1000;
 const GLM_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 const KIMI_BALANCE_URL = "https://api.moonshot.cn/v1/users/me/balance";
+const KIMI_CODE_HOST = "api.kimi.com";
+const KIMI_CODE_USAGES_URL = "https://api.kimi.com/coding/v1/usages";
 const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 const MINIMAX_REMAINS_URL = "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains";
 const MINIMAX_CONFIG_FILE = "config.yaml";
@@ -627,8 +633,83 @@ const readClaudeHomeApiKey = (
   });
 
 /* ------------------------------------------------------------------ */
-/* Kimi (Moonshot prepaid balance)                                      */
+/* Kimi (Moonshot prepaid balance, or the Kimi Code plan windows)       */
 /* ------------------------------------------------------------------ */
+
+/** True when the Claude home routes to the Kimi Code plan rather than the
+ * pay-as-you-go Moonshot platform; the two keys are not interchangeable. */
+const usesKimiCodePlan = (
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  home: string,
+): Effect.Effect<boolean> =>
+  fileSystem.readFileString(path.join(home, CLAUDE_SETTINGS_FILE)).pipe(
+    Effect.flatMap(decodeJson),
+    Effect.map((settings) => {
+      const baseUrl =
+        typeof settings === "object" && settings !== null
+          ? (settings as { env?: { ANTHROPIC_BASE_URL?: unknown } }).env?.ANTHROPIC_BASE_URL
+          : undefined;
+      if (typeof baseUrl !== "string") return false;
+      try {
+        return new URL(baseUrl).hostname === KIMI_CODE_HOST;
+      } catch {
+        return false;
+      }
+    }),
+    Effect.orElseSucceed(() => false),
+  );
+
+/** Known `usages` buckets; unknown ones still render under their raw key. */
+const KIMI_CODE_BUCKETS: Record<
+  string,
+  { readonly label: string; readonly kind: ServerProviderUsageWindow["kind"] }
+> = {
+  limit_5h: { label: "5 小时窗口", kind: "session" },
+  limit_month_total: { label: "本月总额度", kind: "monthly" },
+  limit_month_code: { label: "本月 Code 额度", kind: "monthly" },
+};
+
+const kimiCodeProbe = (
+  client: HttpClient.HttpClient,
+  key: string,
+  checkedAt: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const document = yield* getJson(
+      client,
+      "kimi",
+      HttpClientRequest.get(KIMI_CODE_USAGES_URL).pipe(
+        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+        HttpClientRequest.acceptJson,
+      ),
+    );
+    const usages =
+      typeof document === "object" && document !== null
+        ? (document as { usages?: unknown }).usages
+        : undefined;
+    const windows: ServerProviderUsageWindow[] = [];
+    if (typeof usages === "object" && usages !== null) {
+      for (const [id, bucket] of Object.entries(usages)) {
+        if (typeof bucket !== "object" || bucket === null) continue;
+        const { used_ratio: ratio, reset_time: resetsAt } = bucket as {
+          used_ratio?: unknown;
+          reset_time?: unknown;
+        };
+        if (typeof ratio !== "number" || !Number.isFinite(ratio)) continue;
+        const known = KIMI_CODE_BUCKETS[id];
+        windows.push({
+          id,
+          kind: known?.kind ?? "other",
+          label: known?.label ?? id,
+          usedPercent: Math.round(Math.max(0, Math.min(100, ratio * 100)) * 10) / 10,
+          ...(typeof resetsAt === "string" && resetsAt.length > 0 ? { resetsAt } : {}),
+        });
+      }
+    }
+    if (windows.length === 0) return windowUnavailable(checkedAt, "Kimi Code 未返回额度窗口");
+    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+  });
 
 const kimiProbe = (
   client: HttpClient.HttpClient,
@@ -640,6 +721,9 @@ const kimiProbe = (
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
     if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
+    if (yield* usesKimiCodePlan(fileSystem, path, home)) {
+      return yield* kimiCodeProbe(client, key, checkedAt);
+    }
 
     const document = yield* getJson(
       client,

@@ -112,6 +112,71 @@ describe("usageQuotaProbe", () => {
     );
   });
 
+  it.live(
+    "kimi probe reads the Kimi Code plan windows when the home routes to api.kimi.com",
+    () => {
+      const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+      return Effect.gen(function* () {
+        clearUsageQuotaProbeCache();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fileSystem.makeTempDirectoryScoped();
+        yield* fileSystem.writeFileString(
+          path.join(home, "settings.json"),
+          JSON.stringify({
+            env: {
+              ANTHROPIC_BASE_URL: "https://api.kimi.com/coding/",
+              ANTHROPIC_AUTH_TOKEN: "sk-kimi",
+            },
+          }),
+        );
+        const settings = {
+          providerInstances: { claude_kimi: { driver: "claudeAgent", config: { homePath: home } } },
+        } as never;
+        const limits = yield* readInstanceUsageLimits(settings, "claude_kimi");
+        assert.isUndefined(limits?.unavailable);
+        assert.deepStrictEqual(limits?.windows, [
+          {
+            id: "limit_5h",
+            kind: "session",
+            label: "5 小时窗口",
+            usedPercent: 25,
+            resetsAt: "2026-10-21T05:56:50Z",
+          },
+          {
+            id: "limit_month_total",
+            kind: "monthly",
+            label: "本月总额度",
+            usedPercent: 0.3,
+            resetsAt: "2026-11-21T00:56:51Z",
+          },
+        ]);
+        assert.deepStrictEqual(requests, [
+          { url: "https://api.kimi.com/coding/v1/usages", authorization: "Bearer sk-kimi" },
+        ]);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          stubClient(
+            {
+              limits: [
+                {
+                  window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+                  detail: { limit: "100", remaining: "75", resetTime: "2026-10-21T05:56:51Z" },
+                },
+              ],
+              usages: {
+                limit_5h: { used_ratio: 0.25, reset_time: "2026-10-21T05:56:50Z" },
+                limit_month_total: { used_ratio: 0.003, reset_time: "2026-11-21T00:56:51Z" },
+              },
+            },
+            requests,
+          ),
+        ),
+      );
+    },
+  );
+
   it.live("deepseek probe reports the CNY prepaid balance with its top-up/granted split", () => {
     const requests: Array<{ url: string; authorization?: string | undefined }> = [];
     return Effect.gen(function* () {
@@ -275,53 +340,56 @@ describe("usageQuotaProbe", () => {
 
   // The legacy→ACP migration renamed the driver to acpRegistry and moved
   // dataDir into the instance environment; the probe must keep up.
-  it.live("minimax probe still runs for the migrated acpRegistry instance via MINIMAX_DATA_DIR", () => {
-    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
-    return Effect.gen(function* () {
-      clearUsageQuotaProbeCache();
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const dataDir = yield* fileSystem.makeTempDirectoryScoped();
-      yield* fileSystem.writeFileString(
-        path.join(dataDir, "config.yaml"),
-        minimaxYaml("sk-cp-acp"),
-      );
-      const settings = {
-        providerInstances: {
-          minimax: {
-            driver: "acpRegistry",
-            environment: [{ name: "MINIMAX_DATA_DIR", value: dataDir }],
+  it.live(
+    "minimax probe still runs for the migrated acpRegistry instance via MINIMAX_DATA_DIR",
+    () => {
+      const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+      return Effect.gen(function* () {
+        clearUsageQuotaProbeCache();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dataDir = yield* fileSystem.makeTempDirectoryScoped();
+        yield* fileSystem.writeFileString(
+          path.join(dataDir, "config.yaml"),
+          minimaxYaml("sk-cp-acp"),
+        );
+        const settings = {
+          providerInstances: {
+            minimax: {
+              driver: "acpRegistry",
+              environment: [{ name: "MINIMAX_DATA_DIR", value: dataDir }],
+            },
           },
-        },
-      } as never;
-      const limits = yield* readInstanceUsageLimits(settings, "minimax");
-      assert.isUndefined(limits?.unavailable);
-      assert.strictEqual(limits?.windows.length, 2);
-      assert.deepStrictEqual(requests, [
-        {
-          url: "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains",
-          authorization: "Bearer sk-cp-acp",
-        },
-      ]);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        stubClient(
+        } as never;
+        const limits = yield* readInstanceUsageLimits(settings, "minimax");
+        assert.isUndefined(limits?.unavailable);
+        assert.strictEqual(limits?.windows.length, 2);
+        assert.deepStrictEqual(requests, [
           {
-            base_resp: { status_code: 0, status_msg: "success" },
-            model_remains: [
-              {
-                model_name: "general",
-                current_interval_status: 3,
-                current_weekly_status: 3,
-              },
-            ],
+            url: "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+            authorization: "Bearer sk-cp-acp",
           },
-          requests,
+        ]);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          stubClient(
+            {
+              base_resp: { status_code: 0, status_msg: "success" },
+              model_remains: [
+                {
+                  model_name: "general",
+                  current_interval_status: 3,
+                  current_weekly_status: 3,
+                },
+              ],
+            },
+            requests,
+          ),
         ),
-      ),
-    );
-  });
+      );
+    },
+  );
 
   it.live("factory probe is selected for the migrated acpRegistry instance", () =>
     Effect.gen(function* () {
