@@ -23,7 +23,8 @@
  *   When the instance's `ANTHROPIC_BASE_URL` points at the Kimi Code plan
  *   (`api.kimi.com/coding`), it reads `GET /coding/v1/usages` instead — the
  *   endpoint kimi-cli's `/usage` renders: `used_ratio` per bucket for the
- *   5-hour window and the monthly quotas.
+ *   5-hour window and the monthly quotas. Kimi CLI shares that plan and probe,
+ *   using the stable Claude-home key rather than its short-lived OAuth token.
  * - `deepseek`: `GET api.deepseek.com/user/balance` (prepaid balance, CNY),
  *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
  * - `factory`: `GET api.factory.ai/api/organization/subscription/usage`, the
@@ -1202,8 +1203,8 @@ const probeForInstance = (
     return { kind: "claudeOAuth", home: instanceHome(settings, instanceKey) };
   }
   if (instanceKey === "codex_workbuddy") return { kind: "workbuddy", home: null };
-  if (instanceKey === "claude_kimi")
-    return { kind: "kimi", home: instanceHome(settings, instanceKey) };
+  if (instanceKey === "claude_kimi" || instanceKey === "kimi_cli")
+    return { kind: "kimi", home: instanceHome(settings, "claude_kimi") };
   if (instanceKey === "claude_deepseek")
     return { kind: "deepseek", home: instanceHome(settings, instanceKey) };
   if (instance?.driver === "antigravity") {

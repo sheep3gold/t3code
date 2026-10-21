@@ -112,70 +112,74 @@ describe("usageQuotaProbe", () => {
     );
   });
 
-  it.live(
-    "kimi probe reads the Kimi Code plan windows when the home routes to api.kimi.com",
-    () => {
-      const requests: Array<{ url: string; authorization?: string | undefined }> = [];
-      return Effect.gen(function* () {
-        clearUsageQuotaProbeCache();
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const home = yield* fileSystem.makeTempDirectoryScoped();
-        yield* fileSystem.writeFileString(
-          path.join(home, "settings.json"),
-          JSON.stringify({
-            env: {
-              ANTHROPIC_BASE_URL: "https://api.kimi.com/coding/",
-              ANTHROPIC_AUTH_TOKEN: "sk-kimi",
-            },
-          }),
-        );
-        const settings = {
-          providerInstances: { claude_kimi: { driver: "claudeAgent", config: { homePath: home } } },
-        } as never;
-        const limits = yield* readInstanceUsageLimits(settings, "claude_kimi");
-        assert.isUndefined(limits?.unavailable);
-        assert.deepStrictEqual(limits?.windows, [
-          {
-            id: "limit_5h",
-            kind: "session",
-            label: "5 小时窗口",
-            usedPercent: 25,
-            resetsAt: "2026-10-21T05:56:50Z",
+  it.live("kimi and kimi_cli probes read the Kimi Code plan windows from the shared home", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(
+        path.join(home, "settings.json"),
+        JSON.stringify({
+          env: {
+            ANTHROPIC_BASE_URL: "https://api.kimi.com/coding/",
+            ANTHROPIC_AUTH_TOKEN: "sk-kimi",
           },
-          {
-            id: "limit_month_total",
-            kind: "monthly",
-            label: "本月总额度",
-            usedPercent: 0.3,
-            resetsAt: "2026-11-21T00:56:51Z",
-          },
-        ]);
-        assert.deepStrictEqual(requests, [
-          { url: "https://api.kimi.com/coding/v1/usages", authorization: "Bearer sk-kimi" },
-        ]);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          stubClient(
-            {
-              limits: [
-                {
-                  window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
-                  detail: { limit: "100", remaining: "75", resetTime: "2026-10-21T05:56:51Z" },
-                },
-              ],
-              usages: {
-                limit_5h: { used_ratio: 0.25, reset_time: "2026-10-21T05:56:50Z" },
-                limit_month_total: { used_ratio: 0.003, reset_time: "2026-11-21T00:56:51Z" },
-              },
-            },
-            requests,
-          ),
-        ),
+        }),
       );
-    },
-  );
+      const settings = {
+        providerInstances: {
+          claude_kimi: { driver: "claudeAgent", config: { homePath: home } },
+          kimi_cli: { driver: "acpRegistry" },
+        },
+      } as never;
+      const expectedWindows = [
+        {
+          id: "limit_5h",
+          kind: "session",
+          label: "5 小时窗口",
+          usedPercent: 25,
+          resetsAt: "2026-10-21T05:56:50Z",
+        },
+        {
+          id: "limit_month_total",
+          kind: "monthly",
+          label: "本月总额度",
+          usedPercent: 0.3,
+          resetsAt: "2026-11-21T00:56:51Z",
+        },
+      ] as const;
+      for (const instanceKey of ["claude_kimi", "kimi_cli"]) {
+        const limits = yield* readInstanceUsageLimits(settings, instanceKey);
+        assert.isUndefined(limits?.unavailable);
+        assert.deepStrictEqual(limits?.windows, expectedWindows);
+      }
+      assert.deepStrictEqual(requests, [
+        { url: "https://api.kimi.com/coding/v1/usages", authorization: "Bearer sk-kimi" },
+        { url: "https://api.kimi.com/coding/v1/usages", authorization: "Bearer sk-kimi" },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClient(
+          {
+            limits: [
+              {
+                window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+                detail: { limit: "100", remaining: "75", resetTime: "2026-10-21T05:56:51Z" },
+              },
+            ],
+            usages: {
+              limit_5h: { used_ratio: 0.25, reset_time: "2026-10-21T05:56:50Z" },
+              limit_month_total: { used_ratio: 0.003, reset_time: "2026-11-21T00:56:51Z" },
+            },
+          },
+          requests,
+        ),
+      ),
+    );
+  });
 
   it.live("deepseek probe reports the CNY prepaid balance with its top-up/granted split", () => {
     const requests: Array<{ url: string; authorization?: string | undefined }> = [];
