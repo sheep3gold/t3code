@@ -498,6 +498,16 @@ export const ChatHeader = memo(function ChatHeader({
           "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:motion-safe:ease-out",
         )}
       >
+        {/* 模型指示器：显示当前使用的 provider/model 和档位 */}
+        {isServerThread && (
+          <SessionModelIndicator
+            info={modelRouteInfo}
+            error={modelRouteError}
+            isLoading={modelRouteLoading}
+            onRefresh={refreshModelRoute}
+            className="hidden @3xl/header-actions:inline-flex"
+          />
+        )}
         <Menu open={actionsCollapsed && actionsOpen} onOpenChange={setActionsOpen}>
           <MenuTrigger
             className={
