@@ -127,7 +127,7 @@ describe("acpRegistrySnapshotReadiness", () => {
     ).toBe("unknown");
   });
 
-  it("overlays live configuration without dropping probe-owned session capabilities", () => {
+  it("overlays live configuration without dropping probe-owned capabilities or models", () => {
     const provider = buildCheckedAcpRegistrySnapshot({
       ...identity,
       settings: decodeSettings({ agentId: "test-agent" }),
@@ -175,6 +175,16 @@ describe("acpRegistrySnapshotReadiness", () => {
       auth: { status: "unknown", canLogout: true },
       nativeSessions: { canList: true, canLoad: true, canResume: true },
       models: [{ slug: "live-model", isDefault: true }],
+    });
+
+    expect(
+      applyAcpRegistryLiveConfiguration(
+        provider,
+        { models: [], currentModelId: null, configOptions: [] },
+        [],
+      ),
+    ).toMatchObject({
+      models: [{ slug: "probe-model", isDefault: true }],
     });
   });
 

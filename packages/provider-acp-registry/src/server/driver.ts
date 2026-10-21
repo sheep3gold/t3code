@@ -264,10 +264,16 @@ export function applyAcpRegistryLiveConfiguration(
   customModels: ReadonlyArray<string>,
 ): ServerProvider {
   const { message: _staleProbeMessage, ...snapshot } = provider;
+  // Legacy session/load responses (Kimi CLI) can omit model state even when
+  // the discovery session reported it. An empty update must not erase that inventory.
+  const models =
+    configuration.models.length === 0 && provider.models.length > 0
+      ? provider.models
+      : modelsFromDiscovery(configuration, customModels);
   return {
     ...snapshot,
     status: provider.enabled ? "ready" : provider.status,
-    models: modelsFromDiscovery(configuration, customModels),
+    models,
   };
 }
 

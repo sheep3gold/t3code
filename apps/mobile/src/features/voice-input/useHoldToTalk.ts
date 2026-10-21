@@ -27,34 +27,27 @@ function selectionHaptic(): void {
 export function useHoldToTalk(voice: VoiceInputController, disabled = false) {
   const [held, setHeld] = useState(false);
   const [cancelArmed, setCancelArmed] = useState(false);
+  const heldRef = useRef(false);
+  // session.start() is async, so the phase is still idle for a render or two
+  // after the hold begins; only a hold that has seen a busy phase can go stale.
+  const [sawBusy, setSawBusy] = useState(false);
   const cancelArmedRef = useRef(false);
   const startYRef = useRef<number | null>(null);
   const gestureY = useSharedValue(0);
+  // The controller object changes every render; reading it through a ref keeps
+  // the gesture identity stable so an in-flight press keeps its callbacks.
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
 
-  const beginHold = useCallback(() => {
-    if (disabled || !voice.isAvailable) return;
-    selectionHaptic();
+  const clearHold = useCallback(() => {
+    heldRef.current = false;
     cancelArmedRef.current = false;
+    setSawBusy(false);
+    setHeld(false);
     setCancelArmed(false);
-    setHeld(true);
-    voice.start();
-  }, [disabled, voice]);
-
-  const releaseHold = useCallback(() => {
-    setHeld((wasHeld) => {
-      if (!wasHeld) return false;
-      if (cancelArmedRef.current) {
-        voice.cancel();
-      } else if (voice.state.phase === "recording") {
-        voice.stop();
-      } else {
-        // Released before recording began (or after an error): too short to
-        // transcribe, so drop the attempt instead of wedging in preparing.
-        voice.cancel();
-      }
-      return false;
-    });
-  }, [voice]);
+  }, []);
 
   const gesture = useMemo(
     () =>
@@ -78,26 +71,44 @@ export function useHoldToTalk(voice: VoiceInputController, disabled = false) {
           }
         })
         .onStart(() => {
-          beginHold();
+          const current = voiceRef.current;
+          if (disabledRef.current || !current.isAvailable || heldRef.current) return;
+          selectionHaptic();
+          heldRef.current = true;
+          cancelArmedRef.current = false;
+          setSawBusy(false);
+          setCancelArmed(false);
+          setHeld(true);
+          current.start();
         })
-        // Fires on both a clean release and a cancelled press; releaseHold is
-        // a no-op unless the hold already activated.
+        // Fires on both a clean release and a cancelled press; a no-op unless
+        // the hold already activated.
         .onFinalize(() => {
-          releaseHold();
+          if (!heldRef.current) return;
+          const current = voiceRef.current;
+          const cancelled = cancelArmedRef.current;
+          clearHold();
+          if (cancelled) {
+            current.cancel();
+          } else if (current.state.phase === "recording") {
+            current.stop();
+          } else {
+            // Released before recording began (or after an error): too short to
+            // transcribe, so drop the attempt instead of wedging in preparing.
+            current.cancel();
+          }
         }),
-    [beginHold, gestureY, releaseHold],
+    [clearHold, gestureY],
   );
 
   // A stale hold (backgrounding, interruption, owner switch) must not leave
   // the overlay up with no finger to release it.
   const phase = voice.state.phase;
   const busy = phase === "preparing" || phase === "recording" || phase === "transcribing";
+  if (held && busy && !sawBusy) setSawBusy(true);
   const showOverlay = held && busy;
-  const heldPhaseStale = held && !busy;
-  if (heldPhaseStale) {
-    setHeld(false);
-    setCancelArmed(false);
-    cancelArmedRef.current = false;
+  if (held && !busy && (sawBusy || phase === "error")) {
+    clearHold();
   }
 
   return {

@@ -29,9 +29,11 @@ vi.mock("react-native-gesture-handler", () => ({
   },
 }));
 
-vi.mock("react-native-reanimated", () => ({
-  useSharedValue: (initial: number) => ({ value: initial }),
-}));
+vi.mock("react-native-reanimated", async () => {
+  const { useState } = await import("react");
+  // Shared values keep their identity across renders, like Reanimated's.
+  return { useSharedValue: (initial: number) => useState(() => ({ value: initial }))[0] };
+});
 
 vi.mock("expo-haptics", () => ({
   impactAsync: vi.fn().mockResolvedValue(undefined),
@@ -121,6 +123,79 @@ describe("useHoldToTalk", () => {
     });
     expect(voice.cancel).toHaveBeenCalledTimes(1);
     expect(voice.stop).not.toHaveBeenCalled();
+  });
+
+  it("stops on release after the phase moves from idle to recording mid-hold", () => {
+    // The controller object is recreated each render, as in the real composer.
+    let phase = "idle";
+    const start = vi.fn();
+    const stop = vi.fn();
+    const cancel = vi.fn();
+    function Probe() {
+      lastHold = useHoldToTalk({
+        isAvailable: true,
+        state: { phase, error: null, errorAction: null },
+        start,
+        stop,
+        cancel,
+      } as never);
+      return null;
+    }
+    root = createRoot(document.createElement("div"));
+    const rerender = () => act(() => root!.render(<Probe />));
+    rerender();
+    const gesture = lastHold!.gesture;
+
+    act(() => {
+      harness.handlers.onBegin!();
+      harness.handlers.onStart!();
+    });
+    // session.start() has not reported preparing yet; the hold must survive.
+    expect(lastHold!.held).toBe(true);
+    phase = "preparing";
+    rerender();
+    phase = "recording";
+    rerender();
+    expect(lastHold!.showOverlay).toBe(true);
+    expect(lastHold!.gesture).toBe(gesture);
+
+    act(() => {
+      harness.handlers.onFinalize!();
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(lastHold!.held).toBe(false);
+
+    // A second finalize (cancelled press after end) does nothing.
+    act(() => {
+      harness.handlers.onFinalize!();
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a hold whose session ended without a release", () => {
+    let phase = "recording";
+    function Probe() {
+      lastHold = useHoldToTalk({
+        isAvailable: true,
+        state: { phase, error: null, errorAction: null },
+        start: vi.fn(),
+        stop: vi.fn(),
+        cancel: vi.fn(),
+      } as never);
+      return null;
+    }
+    root = createRoot(document.createElement("div"));
+    const rerender = () => act(() => root!.render(<Probe />));
+    rerender();
+    act(() => {
+      harness.handlers.onStart!();
+    });
+    expect(lastHold!.showOverlay).toBe(true);
+    phase = "idle";
+    rerender();
+    expect(lastHold!.held).toBe(false);
+    expect(lastHold!.showOverlay).toBe(false);
   });
 
   it("ignores holds when voice input is unavailable", () => {

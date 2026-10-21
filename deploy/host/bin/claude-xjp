@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""在终端里以 T3 的 claude_xjp provider 同样的方式启动 Claude Code。
+
+每次运行都从 ~/.t3/userdata/settings.json 读 providerInstances.claude_xjp：
+binaryPath、homePath（导出为 CLAUDE_CONFIG_DIR，与 T3 的 Claude 驱动一致）、
+environment（经本机 sing-box-xjp 的 127.0.0.1:2080 出口等）和 launchArgs。
+在 T3 设置里改了这个 provider，终端里的 claude-xjp 随之生效，不必同步两处。
+
+用法与 claude 相同：claude-xjp [claude 的参数...]
+另一个 provider 实例：T3_CLAUDE_INSTANCE=<instanceId> claude-xjp
+"""
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import sys
+
+SETTINGS = os.path.expanduser("~/.t3/userdata/settings.json")
+INSTANCE = os.environ.get("T3_CLAUDE_INSTANCE", "claude_xjp")
+
+
+def fail(message: str) -> None:
+    print(f"claude-xjp: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def main() -> None:
+    try:
+        with open(SETTINGS, encoding="utf-8") as fh:
+            settings = json.load(fh)
+    except (OSError, ValueError) as exc:
+        fail(f"cannot read {SETTINGS}: {exc}")
+    instance = (settings.get("providerInstances") or {}).get(INSTANCE)
+    if not instance:
+        fail(f"provider instance {INSTANCE!r} not found in {SETTINGS}")
+    if instance.get("driver") != "claudeAgent":
+        fail(f"provider instance {INSTANCE!r} is not a Claude provider")
+    config = instance.get("config") or {}
+
+    env = dict(os.environ)
+    for item in instance.get("environment") or []:
+        name, value = item.get("name"), item.get("value")
+        if name and value is not None:
+            env[name] = str(value)
+    home_path = str(config.get("homePath") or "").strip()
+    if home_path:
+        env["CLAUDE_CONFIG_DIR"] = os.path.abspath(os.path.expanduser(home_path))
+
+    binary = str(config.get("binaryPath") or "").strip() or "claude"
+    args = shlex.split(str(config.get("launchArgs") or "")) + sys.argv[1:]
+    try:
+        os.execvpe(binary, [binary, *args], env)
+    except OSError as exc:
+        fail(f"cannot start {binary}: {exc}")
+
+
+if __name__ == "__main__":
+    main()
