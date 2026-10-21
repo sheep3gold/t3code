@@ -5,6 +5,7 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
   isProviderAvailable,
+  type UsageDay,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -50,11 +51,16 @@ import {
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as UsageService from "./usage/UsageService.ts";
+import { totalTokens } from "./usage/usageTranscripts.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
 const PROVIDER_MODELS_PATH = "/api/provider-models";
+/** Default and longest `?days=` window for the provider usage summary page. */
+const PROVIDER_USAGE_DEFAULT_DAYS = 7;
+const PROVIDER_USAGE_MAX_DAYS = 90;
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -385,25 +391,138 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
     yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
     const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-    const readAt = DateTime.formatIso(yield* DateTime.now);
+    const usage = yield* UsageService.UsageService;
+    const nowIso = yield* DateTime.now;
+    const fallbackReadAt = DateTime.formatIso(nowIso);
     const providers = yield* providerRegistry.getProviders;
     const usageLimitSourceSnapshots = yield* usageLimitSources.current;
 
+    // `?days=N` bounds the token/cost window. Anything not an integer in
+    // [1, 90] falls back to the default rather than erroring: the page is a
+    // dashboard, and a malformed query should still render quota windows.
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const daysRaw = HttpServerRequest.toURL(request).pipe(
+      Option.map((url) => Number(url.searchParams.get("days"))),
+      Option.getOrElse(() => Number.NaN),
+    );
+    const days =
+      Number.isInteger(daysRaw) && daysRaw >= 1 && daysRaw <= PROVIDER_USAGE_MAX_DAYS
+        ? daysRaw
+        : PROVIDER_USAGE_DEFAULT_DAYS;
+
+    // Days are bucketed where the server runs; the fork's summary page is the
+    // operator's own dashboard, same machine as the transcripts.
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const dayFormat = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const nowMs = DateTime.toEpochMillis(nowIso);
+    // en-CA formats as YYYY-MM-DD, satisfying the UsageDay pattern; the cast
+    // mirrors the aggregator's own day formatting.
+    const untilDay = dayFormat.format(nowMs) as UsageDay;
+    const sinceDay = dayFormat.format(nowMs - (days - 1) * 24 * 60 * 60 * 1000) as UsageDay;
+
+    // A failed transcript scan degrades the token/cost figures to "not
+    // counted" instead of failing the whole summary: quota windows from the
+    // registry still render.
+    const scan = yield* usage.readInstancesSummary({ sinceDay, untilDay, timeZone }).pipe(
+      Effect.map((summary) => ({ ok: true as const, summary })),
+      Effect.catchTag("UsageReadError", (error) =>
+        Effect.succeed({ ok: false as const, reason: error.reason, detail: error.detail }),
+      ),
+    );
+
+    const instances = scan.ok ? scan.summary.instances : [];
+    const instancesByProvider = new Map(
+      instances.map((entry) => [entry.instanceKey, entry] as const),
+    );
+    const modelNames = new Map(
+      providers.flatMap((provider) =>
+        provider.models.map((model) => [model.slug, model.name] as const),
+      ),
+    );
+
+    const entryUsage = (entry: UsageService.InstanceUsageEntry) => ({
+      available: true as const,
+      totalTokens: totalTokens(entry.totals),
+      uncachedInputTokens: entry.totals.uncachedInputTokens,
+      cachedInputTokens: entry.totals.cachedInputTokens,
+      cacheCreationTokens: entry.totals.cacheCreationTokens,
+      outputTokens: entry.totals.outputTokens,
+      reasoningTokens: entry.totals.reasoningTokens,
+      costUsd: entry.costUsd,
+      cacheSavingsUsd: entry.cacheSavingsUsd,
+      records: entry.records,
+      unpricedRecords: entry.unpricedRecords,
+      sessions: entry.sessions,
+    });
+    const perModelRows = (entry: UsageService.InstanceUsageEntry) =>
+      entry.models.map((model) => ({
+        model: model.model,
+        displayName: modelNames.get(model.model),
+        totalTokens: totalTokens(model.totals),
+        outputTokens: model.totals.outputTokens,
+        cachedInputTokens: model.totals.cachedInputTokens,
+        costUsd: model.costUsd,
+        records: model.records,
+        unpricedRecords: model.unpricedRecords,
+      }));
+
+    const providerCards = providers.map((provider) => {
+      const entry = instancesByProvider.get(provider.instanceId);
+      return {
+        id: provider.instanceId,
+        driver: provider.driver,
+        displayName: provider.displayName ?? provider.driver,
+        modelCount: provider.models.length,
+        state: provider.status,
+        usage: entry ? entryUsage(entry) : { available: false as const },
+        ...(entry ? { perModel: perModelRows(entry) } : {}),
+        usageLimits: provider.usageLimits ?? {
+          checkedAt: fallbackReadAt,
+          windows: [],
+          unavailable: { reason: "unsupported" },
+        },
+      };
+    });
+
+    // Instances that exist in settings but not (yet) in the registry snapshot
+    // still carry usage; surface them so token counts never silently vanish.
+    const knownIds = new Set(providers.map((provider) => provider.instanceId as string));
+    const extraCards = instances
+      .filter((entry) => !knownIds.has(entry.instanceKey))
+      .map((entry) => ({
+        id: entry.instanceKey,
+        driver: entry.provider,
+        displayName: entry.instanceKey,
+        modelCount: 0,
+        state: "unknown" as const,
+        usage: entryUsage(entry),
+        perModel: perModelRows(entry),
+        usageLimits: {
+          checkedAt: fallbackReadAt,
+          windows: [],
+          unavailable: { reason: "unsupported" },
+        },
+      }));
+
+    const totals = instances.reduce(
+      (acc, entry) => ({
+        totalTokens: acc.totalTokens + totalTokens(entry.totals),
+        costUsd: acc.costUsd + entry.costUsd,
+        records: acc.records + entry.records,
+        sessions: acc.sessions + entry.sessions,
+      }),
+      { totalTokens: 0, costUsd: 0, records: 0, sessions: 0 },
+    );
+
     return HttpServerResponse.jsonUnsafe({
       providers: [
-        ...providers.map((provider) => ({
-          id: provider.instanceId,
-          driver: provider.driver,
-          displayName: provider.displayName ?? provider.driver,
-          modelCount: provider.models.length,
-          state: provider.status,
-          usage: { available: false },
-          usageLimits: provider.usageLimits ?? {
-            checkedAt: readAt,
-            windows: [],
-            unavailable: { reason: "unsupported" },
-          },
-        })),
+        ...providerCards,
+        ...extraCards,
         ...usageLimitSourceSnapshots.flatMap((source) =>
           source.accounts.map((account) => ({
             id: `${source.id}:${account.id}`,
@@ -411,17 +530,18 @@ export const providerUsageSummaryRouteLayer = HttpRouter.add(
             displayName: account.plan ?? source.label,
             modelCount: 0,
             state: "ready" as const,
-            usage: { available: false },
+            usage: { available: false as const },
             usageLimits: account.usageLimits,
           })),
         ),
       ],
-      totals: {
-        totalTokens: 0,
-        costUsd: 0,
-        available: false,
-      },
-      readAt,
+      totals: { ...totals, available: instances.length > 0 },
+      window: { sinceDay, untilDay, days, timeZone },
+      usageScan: scan.ok
+        ? { available: true, scanDurationMs: scan.summary.scanDurationMs }
+        : { available: false, reason: scan.reason, detail: scan.detail },
+      ...(scan.ok ? { pricing: scan.summary.pricing } : {}),
+      readAt: scan.ok ? scan.summary.readAt : fallbackReadAt,
     });
   }).pipe(
     Effect.catchTags({

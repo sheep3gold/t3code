@@ -25,6 +25,7 @@ import {
   type UsagePricing,
   type UsageSummary,
   type UsageSummaryInput,
+  type UsageTokenTotals,
   UsageReadError,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
@@ -61,7 +62,7 @@ import {
   pruneScanCache,
   type ScanCache,
 } from "./usageScanCache.ts";
-import type { UsageRecord } from "./usageTranscripts.ts";
+import { addTotals, type UsageRecord } from "./usageTranscripts.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -107,10 +108,55 @@ const decodeCachedSources = Schema.decodeUnknownOption(
   Schema.Struct({ sources: Schema.Record(Schema.String, CachedSource) }),
 );
 
+/** One model's rollup inside an {@link InstanceUsageEntry}. */
+export interface InstanceUsageModel {
+  readonly model: string;
+  readonly totals: UsageTokenTotals;
+  readonly costUsd: number;
+  readonly records: number;
+  readonly unpricedRecords: number;
+}
+
+/**
+ * One provider instance's usage over a daily window. Attribution is by
+ * transcript home, so two accounts serving the same model name never merge;
+ * the plain `UsageSummary` buckets cannot offer that (they key on provider
+ * kind, not instance).
+ */
+export interface InstanceUsageEntry {
+  /** Settings `providerInstances` key; the legacy default slot uses the driver id. */
+  readonly instanceKey: string;
+  readonly provider: UsageProviderKind;
+  readonly resolvedHomePath: string;
+  readonly status: "ok" | "missing";
+  readonly totals: UsageTokenTotals;
+  readonly costUsd: number;
+  readonly cacheSavingsUsd: number;
+  readonly records: number;
+  readonly unpricedRecords: number;
+  /** Distinct transcript sessions that contributed in-window. */
+  readonly sessions: number;
+  readonly models: readonly InstanceUsageModel[];
+}
+
+export interface InstancesUsageSummary {
+  readonly readAt: string;
+  readonly timeZone: string;
+  readonly sinceDay: string;
+  readonly untilDay: string;
+  readonly pricing: UsagePricing;
+  readonly instances: readonly InstanceUsageEntry[];
+  readonly scanDurationMs: number;
+}
+
 export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    /** Same corpus as `readSummary`, but rolled up per provider instance. */
+    readonly readInstancesSummary: (
+      input: UsageSummaryInput,
+    ) => Effect.Effect<InstancesUsageSummary, UsageReadError>;
     /** Refetches the rate table ahead of its TTL. See `ensureRates`. */
     readonly refreshRates: Effect.Effect<UsagePricing>;
   }
@@ -121,6 +167,14 @@ const EMPTY_PRICING: UsagePricing = {
   source: LITELLM_RATES_URL,
   fetchedAt: null,
   knownModels: 0,
+};
+
+const EMPTY_TOKEN_TOTALS: UsageTokenTotals = {
+  uncachedInputTokens: 0,
+  cachedInputTokens: 0,
+  cacheCreationTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
 };
 
 /** Empty summary, for suites that only need the RPC surface to resolve. */
@@ -137,6 +191,16 @@ export const layerTest = Layer.succeed(
         buckets: [],
         sources: [],
         pricing: EMPTY_PRICING,
+        scanDurationMs: 0,
+      }),
+    readInstancesSummary: (input) =>
+      Effect.succeed({
+        readAt: "1970-01-01T00:00:00.000Z",
+        timeZone: input.timeZone,
+        sinceDay: input.sinceDay,
+        untilDay: input.untilDay,
+        pricing: EMPTY_PRICING,
+        instances: [],
         scanDurationMs: 0,
       }),
     refreshRates: Effect.succeed(EMPTY_PRICING),
@@ -254,6 +318,7 @@ export const make = Effect.gen(function* () {
     retentionCutoffMs: number,
   ) {
     const dirs: Array<{
+      instanceKey: string;
       provider: UsageProviderKind;
       dir: string;
       volumeId: string;
@@ -263,12 +328,16 @@ export const make = Effect.gen(function* () {
     for (const driver of ["claudeAgent", "codex", "grok"] as const) {
       // Disabled accounts still have history. Explicit default slots replace
       // the legacy settings, just as they do in the provider registry.
-      const instances: Array<Pick<ProviderInstanceConfig, "config" | "environment">> =
-        Object.values(settings.providerInstances).filter((instance) => instance.driver === driver);
+      const instances: Array<[string, Pick<ProviderInstanceConfig, "config" | "environment">]> =
+        Object.entries(settings.providerInstances)
+          .filter(([, instance]) => instance.driver === driver)
+          .map(([instanceKey, instance]) => [instanceKey, instance] as const);
       if (!Object.hasOwn(settings.providerInstances, driver)) {
-        instances.push({ config: settings.providers[driver] });
+        // The registry materializes the legacy slot under the driver id, so
+        // per-instance usage can join on the same key.
+        instances.push([driver, { config: settings.providers[driver] }]);
       }
-      for (const instance of instances) {
+      for (const [instanceKey, instance] of instances) {
         const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
         const provider = driver === "claudeAgent" ? "claude" : driver;
         let home: string;
@@ -326,6 +395,7 @@ export const make = Effect.gen(function* () {
         if (seen.has(key)) continue;
         seen.add(key);
         dirs.push({
+          instanceKey,
           provider,
           dir,
           volumeId,
@@ -443,6 +513,7 @@ export const make = Effect.gen(function* () {
 
   /** One provider directory's walk and parse, before rates are involved. */
   interface ScannedDir {
+    readonly instanceKey: string;
     readonly provider: UsageProviderKind;
     readonly dir: string;
     readonly volumeId: string;
@@ -463,12 +534,12 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
     const scanned: ScannedDir[] = [];
-    for (const { provider, dir, volumeId, fileName } of dirs) {
+    for (const { instanceKey, provider, dir, volumeId, fileName } of dirs) {
       const exists = yield* fileSystem
         .exists(dir)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
       if (!exists) {
-        scanned.push({ provider, dir, volumeId, files: null });
+        scanned.push({ instanceKey, provider, dir, volumeId, files: null });
         continue;
       }
       const files = yield* Effect.promise(() =>
@@ -479,10 +550,75 @@ export const make = Effect.gen(function* () {
         const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
         parsedFiles.push({ path: file.path, records });
       }
-      scanned.push({ provider, dir, volumeId, files: parsedFiles });
+      scanned.push({ instanceKey, provider, dir, volumeId, files: parsedFiles });
     }
     return scanned;
   });
+
+  /**
+   * Folds one scanned directory's records into `aggregator`. Shared by the
+   * merged summary scan (one aggregator for every directory) and the
+   * per-instance scan (one aggregator per directory), so dedupe and session
+   * accounting behave identically on both paths.
+   */
+  const foldScannedDir = (
+    scanned: Pick<ScannedDir, "provider" | "dir" | "files">,
+    aggregator: UsageAggregator,
+    retentionCutoffMs: number,
+  ): { scannedFiles: number; skippedFiles: number; sessions: number } => {
+    const retainedFiles = [...(scanned.files ?? [])];
+    const livePaths = new Set(retainedFiles.map((file) => file.path));
+    // Cleanup may remove transcripts, but the usage we already saved still
+    // contributes to this source. Keep the normal aggregation and dedupe path.
+    for (const [filePath, entry] of fileCache) {
+      if (
+        entry.provider !== scanned.provider ||
+        entry.mtimeMs < retentionCutoffMs ||
+        livePaths.has(filePath) ||
+        !isWithinDirectory(filePath, scanned.dir)
+      )
+        continue;
+      retainedFiles.push({ path: filePath, records: [...entry.records, ...entry.tailRecords] });
+    }
+    let scannedFiles = 0;
+    let skippedFiles = 0;
+    // Distinct per directory. Buckets carry per-cell session counts, but a
+    // session spans days and models, so clients total this figure instead.
+    const sessionIds = new Set<string>();
+
+    for (const file of retainedFiles) {
+      if (file.records.length === 0) {
+        skippedFiles += 1;
+        continue;
+      }
+      scannedFiles += 1;
+      const codexEventOccurrences = new Map<string, number>();
+      for (const record of file.records) {
+        let usageRecord = record;
+        if (record.provider === "codex" && record.sessionId.length > 0) {
+          // Match moved rollout copies without collapsing repeated equal events
+          // within one rollout (timestamps can have only second precision).
+          const key = encodeUsageRecordKey([
+            record.provider,
+            record.sessionId,
+            record.timestampMs,
+            record.model,
+            record.totals,
+          ]);
+          const occurrence = (codexEventOccurrences.get(key) ?? 0) + 1;
+          codexEventOccurrences.set(key, occurrence);
+          usageRecord = { ...record, dedupeKey: key + ":" + occurrence };
+        }
+        // Only sessions contributing in-window count; the mtime slack can
+        // admit boundary files whose records fall outside the range.
+        if (aggregator.add(usageRecord) && record.sessionId.length > 0) {
+          sessionIds.add(record.sessionId);
+        }
+      }
+    }
+
+    return { scannedFiles, skippedFiles, sessions: sessionIds.size };
+  };
 
   const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
     input: UsageSummaryInput,
@@ -556,65 +692,16 @@ export const make = Effect.gen(function* () {
     const sources: UsageSource[] = [];
 
     for (const { provider, dir, volumeId, files } of scannedDirs) {
-      const retainedFiles = [...(files ?? [])];
-      const livePaths = new Set(retainedFiles.map((file) => file.path));
-      // Cleanup may remove transcripts, but the usage we already saved still
-      // contributes to this source. Keep the normal aggregation and dedupe path.
-      for (const [filePath, entry] of fileCache) {
-        if (
-          entry.provider !== provider ||
-          entry.mtimeMs < retentionCutoffMs ||
-          livePaths.has(filePath) ||
-          !isWithinDirectory(filePath, dir)
-        )
-          continue;
-        retainedFiles.push({ path: filePath, records: [...entry.records, ...entry.tailRecords] });
-      }
-      let scannedFiles = 0;
-      let skippedFiles = 0;
-      // Distinct per directory. Buckets carry per-cell session counts, but a
-      // session spans days and models, so clients total this figure instead.
-      const sessionIds = new Set<string>();
-
-      for (const file of retainedFiles) {
-        if (file.records.length === 0) {
-          skippedFiles += 1;
-          continue;
-        }
-        scannedFiles += 1;
-        const codexEventOccurrences = new Map<string, number>();
-        for (const record of file.records) {
-          let usageRecord = record;
-          if (record.provider === "codex" && record.sessionId.length > 0) {
-            // Match moved rollout copies without collapsing repeated equal events
-            // within one rollout (timestamps can have only second precision).
-            const key = encodeUsageRecordKey([
-              record.provider,
-              record.sessionId,
-              record.timestampMs,
-              record.model,
-              record.totals,
-            ]);
-            const occurrence = (codexEventOccurrences.get(key) ?? 0) + 1;
-            codexEventOccurrences.set(key, occurrence);
-            usageRecord = { ...record, dedupeKey: key + ":" + occurrence };
-          }
-          // Only sessions contributing in-window count; the mtime slack can
-          // admit boundary files whose records fall outside the range.
-          if (aggregator.add(usageRecord) && record.sessionId.length > 0) {
-            sessionIds.add(record.sessionId);
-          }
-        }
-      }
+      const folded = foldScannedDir({ provider, dir, files }, aggregator, retentionCutoffMs);
 
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
         // Clients exclude missing sources, so saved records remain an available source.
-        status: files === null && scannedFiles === 0 ? "missing" : "ok",
-        scannedFiles,
-        skippedFiles,
+        status: files === null && folded.scannedFiles === 0 ? "missing" : "ok",
+        scannedFiles: folded.scannedFiles,
+        skippedFiles: folded.skippedFiles,
         malformedRecords: 0,
-        distinctSessions: sessionIds.size,
+        distinctSessions: folded.sessions,
         message: files === null ? "No transcript directory on this environment." : null,
       });
     }
@@ -641,11 +728,132 @@ export const make = Effect.gen(function* () {
   });
 
   /**
+   * Per-instance rollup over the same corpus `scanSummary` reads. One
+   * aggregator per transcript home keeps accounts separate even when two of
+   * them serve the same model name; dedupe keys embed per-home session ids,
+   * so records cannot collide across homes.
+   */
+  const scanInstancesSummary = Effect.fn("UsageService.scanInstancesSummary")(function* (
+    input: UsageSummaryInput,
+    settings: ServerSettingsValue,
+  ) {
+    if (input.sinceDay > input.untilDay || input.resolution === "hour") {
+      return yield* new UsageReadError({
+        reason: "invalidWindow",
+        detail: "Instance usage requires a daily window with sinceDay no later than untilDay.",
+      });
+    }
+
+    const startedAtMs = yield* Clock.currentTimeMillis;
+    yield* ensureScanCacheLoaded;
+
+    const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
+    if (Option.isNone(windowStart)) {
+      return yield* new UsageReadError({
+        reason: "invalidWindow",
+        detail: `sinceDay '${input.sinceDay}' is not a valid date`,
+      });
+    }
+    const windowStartMs = DateTime.toEpochMillis(windowStart.value) - MTIME_SLACK_MS;
+    const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+    const [, scannedDirs] = yield* Effect.all(
+      [ensureRates(false), collectDirs(windowStartMs, settings, retentionCutoffMs)],
+      { concurrency: 2 },
+    );
+
+    const instances: InstanceUsageEntry[] = [];
+    for (const scanned of scannedDirs) {
+      const aggregator = new UsageAggregator({
+        timeZone: input.timeZone,
+        sinceDay: input.sinceDay,
+        untilDay: input.untilDay,
+        resolution: "day",
+        rates,
+        priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
+      });
+      const folded = foldScannedDir(scanned, aggregator, retentionCutoffMs);
+      const { buckets } = aggregator.finish();
+
+      const byModel = new Map<
+        string,
+        {
+          totals: UsageTokenTotals;
+          costUsd: number;
+          records: number;
+          unpricedRecords: number;
+        }
+      >();
+      let entryTotals = EMPTY_TOKEN_TOTALS;
+      let costUsd = 0;
+      let cacheSavingsUsd = 0;
+      let records = 0;
+      let unpricedRecords = 0;
+      for (const bucket of buckets) {
+        entryTotals = addTotals(entryTotals, bucket.totals);
+        costUsd += bucket.costUsd;
+        cacheSavingsUsd += bucket.cacheSavingsUsd;
+        records += bucket.records;
+        unpricedRecords += bucket.unpricedRecords;
+        const model = byModel.get(bucket.model) ?? {
+          totals: EMPTY_TOKEN_TOTALS,
+          costUsd: 0,
+          records: 0,
+          unpricedRecords: 0,
+        };
+        byModel.set(bucket.model, {
+          totals: addTotals(model.totals, bucket.totals),
+          costUsd: model.costUsd + bucket.costUsd,
+          records: model.records + bucket.records,
+          unpricedRecords: model.unpricedRecords + bucket.unpricedRecords,
+        });
+      }
+
+      instances.push({
+        instanceKey: scanned.instanceKey,
+        provider: scanned.provider,
+        resolvedHomePath: scanned.dir,
+        status: scanned.files === null && folded.scannedFiles === 0 ? "missing" : "ok",
+        totals: entryTotals,
+        costUsd,
+        cacheSavingsUsd,
+        records,
+        unpricedRecords,
+        sessions: folded.sessions,
+        models: [...byModel]
+          .map(([model, rollup]) => ({ model, ...rollup }))
+          .sort((a, b) => b.records - a.records),
+      });
+    }
+
+    const pruned = pruneScanCache(fileCache, retentionCutoffMs);
+    if (pruned > 0) cacheDirty = true;
+    yield* persistScanCache();
+
+    const readAt = yield* DateTime.now;
+    const finishedAtMs = yield* Clock.currentTimeMillis;
+
+    return {
+      readAt: DateTime.formatIso(readAt),
+      timeZone: input.timeZone,
+      sinceDay: input.sinceDay,
+      untilDay: input.untilDay,
+      pricing: pricing(),
+      instances,
+      scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
+    } satisfies InstancesUsageSummary;
+  });
+
+  /**
    * In-flight scans by window and custom prices, so concurrent identical requests (the usage
    * page open on two clients at once) share one scan instead of racing over
    * the same corpus twice.
    */
   const inflightScans = new Map<string, Deferred.Deferred<UsageSummary, UsageReadError>>();
+  const inflightInstanceScans = new Map<
+    string,
+    Deferred.Deferred<InstancesUsageSummary, UsageReadError>
+  >();
 
   const scanKey = (
     input: UsageSummaryInput,
@@ -661,23 +869,27 @@ export const make = Effect.gen(function* () {
       priceOverrides,
     ]);
 
-  const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
-    const settings = yield* readSettings;
-    const key = scanKey(input, settings.usagePriceOverrides);
-    const deferred = yield* Effect.uninterruptible(
+  /**
+   * Shared deferred bookkeeping for both read paths: enrollment plus detached
+   * scan must be atomic, or a canceled first caller can leave a Deferred with
+   * no scan to finish it. The scan is detached so one departing client cannot
+   * tear it out from under the fibers awaiting it.
+   */
+  const enrollInflight = <A>(
+    inflight: Map<string, Deferred.Deferred<A, UsageReadError>>,
+    key: string,
+    run: Effect.Effect<A, UsageReadError>,
+  ): Effect.Effect<Deferred.Deferred<A, UsageReadError>> =>
+    Effect.uninterruptible(
       Effect.gen(function* () {
-        const existing = inflightScans.get(key);
+        const existing = inflight.get(key);
         if (existing !== undefined) return existing;
 
-        // Enrollment and detached-fiber creation must be atomic. Otherwise a
-        // canceled first caller can leave a Deferred with no scan to finish it.
-        const created = Deferred.makeUnsafe<UsageSummary, UsageReadError>();
-        inflightScans.set(key, created);
-        // Detached so one departing client cannot tear the scan out from under
-        // the fibers awaiting it; a finished scan warms the cache either way.
-        yield* scanSummary(input, settings).pipe(
+        const created = Deferred.makeUnsafe<A, UsageReadError>();
+        inflight.set(key, created);
+        yield* run.pipe(
           Effect.onExit((exit) =>
-            Effect.sync(() => inflightScans.delete(key)).pipe(
+            Effect.sync(() => inflight.delete(key)).pipe(
               Effect.andThen(Deferred.done(created, exit)),
             ),
           ),
@@ -686,12 +898,30 @@ export const make = Effect.gen(function* () {
         return created;
       }),
     );
+
+  const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
+    const settings = yield* readSettings;
+    const key = scanKey(input, settings.usagePriceOverrides);
+    const deferred = yield* enrollInflight(inflightScans, key, scanSummary(input, settings));
     // Waiting stays interruptible. The detached scan continues for other
     // callers and still warms the cache if this caller leaves.
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates } as const;
+  const readInstancesSummary = Effect.fn("UsageService.readInstancesSummary")(function* (
+    input: UsageSummaryInput,
+  ) {
+    const settings = yield* readSettings;
+    const key = scanKey(input, settings.usagePriceOverrides);
+    const deferred = yield* enrollInflight(
+      inflightInstanceScans,
+      "instances\u0000" + key,
+      scanInstancesSummary(input, settings),
+    );
+    return yield* Deferred.await(deferred);
+  });
+
+  return { readSummary, readInstancesSummary, refreshRates } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

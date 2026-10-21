@@ -41,7 +41,9 @@ import {
   type ServerLifecycleStreamEvent,
   ThreadId,
   TurnId,
+  UsageDay,
   UsageLimitSourceId,
+  UsageReadError,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -528,6 +530,7 @@ const buildAppUnderTest = (options?: {
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
     modelManifest?: Partial<ModelManifest.ModelManifest["Service"]>;
     usageLimitSources?: Partial<UsageLimitSources.UsageLimitSources["Service"]>;
+    usage?: Partial<UsageService.UsageService["Service"]>;
     providerService?: Partial<ProviderService.ProviderService["Service"]>;
     providerAuth?: Partial<ProviderAuthService["Service"]>;
     providerInstanceRegistry?: Partial<ProviderInstanceRegistry["Service"]>;
@@ -1085,7 +1088,14 @@ const buildAppUnderTest = (options?: {
 
     const appLayer = servedRoutesLayer.pipe(
       Layer.provide(Layer.mergeAll(threadRepositoriesLayer, resourceTelemetryLayer)),
-      Layer.provide(UsageService.layerTest),
+      Layer.provide(
+        options?.layers?.usage
+          ? Layer.mock(UsageService.UsageService)({
+              readSummary: () => Effect.die("readSummary is not stubbed in this test"),
+              ...options.layers.usage,
+            })
+          : UsageService.layerTest,
+      ),
       Layer.provide(
         Layer.mock(AnalyticsService.AnalyticsService)({
           record: () => Effect.void,
@@ -2230,6 +2240,180 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(summary.providers[0]?.displayName, "Codex");
       assert.deepEqual(summary.providers[0]?.usageLimits.windows, [providerUsageWindow]);
       assert.equal(summary.providers[1]?.displayName, "Team");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("fills per-instance token usage into the provider usage summary", () =>
+    Effect.gen(function* () {
+      const provider = {
+        instanceId: ProviderInstanceId.make("claude-xjp"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        displayName: "Claude Pro · XJP",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-04-11T00:00:00.000Z",
+        models: [
+          {
+            slug: "claude-opus-5-5",
+            name: "Claude Opus 5.5",
+            isCustom: false,
+            isDefault: true,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      };
+      const kiro = {
+        ...provider,
+        instanceId: ProviderInstanceId.make("kiro"),
+        driver: ProviderDriverKind.make("kiro"),
+        displayName: "Kiro",
+        models: [],
+      };
+      const instancesSummary: UsageService.InstancesUsageSummary = {
+        readAt: "2026-04-11T01:00:00.000Z",
+        timeZone: "UTC",
+        sinceDay: UsageDay.make("2026-04-05"),
+        untilDay: UsageDay.make("2026-04-11"),
+        pricing: { status: "fresh", source: "test", fetchedAt: null, knownModels: 1 },
+        scanDurationMs: 12,
+        instances: [
+          {
+            instanceKey: "claude-xjp",
+            provider: "claude" as const,
+            resolvedHomePath: "/tmp/claude-xjp/projects",
+            status: "ok" as const,
+            totals: {
+              uncachedInputTokens: 100,
+              cachedInputTokens: 20,
+              cacheCreationTokens: 10,
+              outputTokens: 200,
+              reasoningTokens: 50,
+            },
+            costUsd: 1.5,
+            cacheSavingsUsd: 0.25,
+            records: 4,
+            unpricedRecords: 0,
+            sessions: 2,
+            models: [
+              {
+                model: "claude-opus-5-5",
+                totals: {
+                  uncachedInputTokens: 100,
+                  cachedInputTokens: 20,
+                  cacheCreationTokens: 10,
+                  outputTokens: 200,
+                  reasoningTokens: 50,
+                },
+                costUsd: 1.5,
+                records: 4,
+                unpricedRecords: 0,
+              },
+            ],
+          },
+        ],
+      };
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([provider, kiro]) },
+          usageLimitSources: { current: Effect.succeed([]), streamChanges: Stream.empty },
+          usage: {
+            readInstancesSummary: (input) =>
+              Effect.succeed({
+                ...instancesSummary,
+                sinceDay: input.sinceDay,
+                untilDay: input.untilDay,
+                timeZone: input.timeZone,
+              }),
+          },
+        },
+      });
+
+      const response = yield* fetchEffect(
+        yield* getHttpServerUrl("/api/provider-usage-summary?days=7"),
+        { headers: { cookie: yield* getAuthenticatedSessionCookieHeader() } },
+      );
+      const summary = yield* responseJsonEffect<{
+        providers: Array<{
+          id: string;
+          usage: {
+            available: boolean;
+            totalTokens?: number;
+            costUsd?: number;
+            sessions?: number;
+          };
+          perModel?: Array<{ model: string; displayName?: string; totalTokens: number }>;
+        }>;
+        totals: { available: boolean; totalTokens: number; costUsd: number; sessions: number };
+        window: { days: number };
+        usageScan: { available: boolean; scanDurationMs?: number };
+        readAt: string;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(summary.window.days, 7);
+
+      const claude = summary.providers.find((candidate) => candidate.id === "claude-xjp");
+      assert.isTrue(claude?.usage.available);
+      // 100 + 20 + 10 + 200: reasoning is a subset of output and excluded.
+      assert.equal(claude?.usage.totalTokens, 330);
+      assert.equal(claude?.usage.costUsd, 1.5);
+      assert.equal(claude?.usage.sessions, 2);
+      assert.equal(claude?.perModel?.[0]?.model, "claude-opus-5-5");
+      assert.equal(claude?.perModel?.[0]?.displayName, "Claude Opus 5.5");
+      assert.equal(claude?.perModel?.[0]?.totalTokens, 330);
+
+      // A driver without local transcripts keeps the explicit "not counted"
+      // shape instead of inheriting another instance's numbers.
+      const kiroCard = summary.providers.find((candidate) => candidate.id === "kiro");
+      assert.isFalse(kiroCard?.usage.available);
+      assert.isUndefined(kiroCard?.perModel);
+
+      assert.isTrue(summary.totals.available);
+      assert.equal(summary.totals.totalTokens, 330);
+      assert.equal(summary.totals.costUsd, 1.5);
+      assert.equal(summary.totals.sessions, 2);
+      assert.isTrue(summary.usageScan.available);
+      assert.equal(summary.usageScan.scanDurationMs, 12);
+      assert.equal(summary.readAt, "2026-04-11T01:00:00.000Z");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("degrades the usage summary when the transcript scan fails", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([]) },
+          usageLimitSources: { current: Effect.succeed([]), streamChanges: Stream.empty },
+          usage: {
+            readInstancesSummary: () =>
+              new UsageReadError({
+                reason: "scanFailed",
+                detail: "test failure",
+              }),
+          },
+        },
+      });
+
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/provider-usage-summary"), {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+      const summary = yield* responseJsonEffect<{
+        totals: { available: boolean; totalTokens: number };
+        usageScan: { available: boolean; reason: string };
+        providers: unknown[];
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(summary.providers, []);
+      assert.isFalse(summary.totals.available);
+      assert.equal(summary.totals.totalTokens, 0);
+      assert.isFalse(summary.usageScan.available);
+      assert.equal(summary.usageScan.reason, "scanFailed");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

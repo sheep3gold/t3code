@@ -714,4 +714,93 @@ describe("UsageService", () => {
       );
     }).pipe(Effect.scoped),
   );
+
+  it.live("attributes usage per provider instance even when model names collide", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const claudeA = NodePath.join(home, "claude-a");
+      const claudeB = NodePath.join(home, "claude-b");
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(NodePath.join(claudeA, "projects", "p"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(claudeA, "projects", "p", "session.jsonl"),
+          claudeLine(1, 5) + claudeLine(2, 7),
+        );
+        await NodeFSP.mkdir(NodePath.join(claudeB, "projects", "p"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(claudeB, "projects", "p", "session.jsonl"),
+          // The same model name as instance A, on purpose.
+          claudeLine(3, 11) + claudeLine(4, 13),
+        );
+      });
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-service-instances-test",
+            home,
+            settings: {
+              ...settings,
+              providerInstances: {
+                [ProviderInstanceId.make("claude-xjp")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: claudeA },
+                },
+                [ProviderInstanceId.make("claude-glm")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: claudeB },
+                },
+              },
+            },
+          }),
+        ),
+      );
+
+      const summary = yield* service.readInstancesSummary(WINDOW);
+      const byKey = new Map(summary.instances.map((entry) => [entry.instanceKey, entry]));
+      // The legacy default slots for drivers without explicit instances are
+      // scanned too, keyed by driver id, exactly like the registry does.
+      assert.deepStrictEqual([...byKey.keys()].sort(), [
+        "claude-glm",
+        "claude-xjp",
+        "claudeAgent",
+        "codex",
+        "grok",
+      ]);
+
+      // The merged summary cannot tell the two homes apart; the instance
+      // rollup must, even though every record carries the same model name.
+      const merged = yield* service.readSummary(WINDOW);
+      assert.strictEqual(totalOutputTokens(merged), 5 + 7 + 11 + 13);
+      assert.strictEqual(byKey.get("claude-xjp")?.totals.outputTokens, 12);
+      assert.strictEqual(byKey.get("claude-glm")?.totals.outputTokens, 24);
+
+      const xjpModel = byKey.get("claude-xjp")?.models.find((m) => m.model === "claude-fable-5");
+      assert.strictEqual(xjpModel?.records, 2);
+      assert.strictEqual(byKey.get("claude-glm")?.models[0]?.records, 2);
+      assert.strictEqual(byKey.get("claude-xjp")?.records, 2);
+      assert.strictEqual(byKey.get("claude-xjp")?.sessions, 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("keys the legacy default slot by driver id and reports missing homes", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 3)));
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({ prefix: "usage-service-instances-default-test", home, settings }),
+        ),
+      );
+
+      const summary = yield* service.readInstancesSummary(WINDOW);
+      const claude = summary.instances.find((entry) => entry.provider === "claude");
+      assert.strictEqual(claude?.instanceKey, "claudeAgent");
+      assert.strictEqual(claude?.status, "ok");
+      assert.strictEqual(claude?.totals.outputTokens, 3);
+      const codex = summary.instances.find((entry) => entry.provider === "codex");
+      assert.strictEqual(codex?.instanceKey, "codex");
+      assert.strictEqual(codex?.status, "missing");
+      assert.strictEqual(codex?.totals.outputTokens, 0);
+    }).pipe(Effect.scoped),
+  );
 });
