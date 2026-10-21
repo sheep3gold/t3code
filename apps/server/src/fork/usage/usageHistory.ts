@@ -63,6 +63,11 @@ export interface HistoryDay {
   readonly costUsd: number;
 }
 
+export interface HistoryDayByProvider {
+  readonly day: UsageDay;
+  readonly byProvider: ReadonlyMap<string, { totalTokens: number; costUsd: number }>;
+}
+
 /**
  * Folds the summary scan's `(day, provider, model)` buckets into one row per
  * calendar day in `[sinceDay, untilDay]`. Days with no records are zero-filled
@@ -89,6 +94,41 @@ export function foldDailyUsage(
       day,
       totalTokens: Math.max(0, Math.round(sum?.totalTokens ?? 0)),
       costUsd: sum?.costUsd ?? 0,
+    });
+    if (day === untilDay) return days;
+  }
+}
+
+/**
+ * Folds the summary scan's `(day, provider, model)` buckets into one row per
+ * calendar day in `[sinceDay, untilDay]`, but preserves per-provider breakdown
+ * so the chart can show individual provider trends.
+ */
+export function foldDailyUsageByProvider(
+  buckets: readonly UsageBucket[],
+  sinceDay: UsageDay,
+  untilDay: UsageDay,
+): HistoryDayByProvider[] {
+  if (sinceDay > untilDay) return [];
+  const sums = new Map<string, Map<string, { totalTokens: number; costUsd: number }>>();
+  for (const bucket of buckets) {
+    if (bucket.day < sinceDay || bucket.day > untilDay) continue;
+    let dayMap = sums.get(bucket.day);
+    if (!dayMap) {
+      dayMap = new Map();
+      sums.set(bucket.day, dayMap);
+    }
+    const providerSum = dayMap.get(bucket.provider) ?? { totalTokens: 0, costUsd: 0 };
+    providerSum.totalTokens += totalTokens(bucket.totals);
+    providerSum.costUsd += bucket.costUsd;
+    dayMap.set(bucket.provider, providerSum);
+  }
+  const days: HistoryDayByProvider[] = [];
+  for (let day = sinceDay; ; day = shiftDay(day, 1)) {
+    const dayMap = sums.get(day);
+    days.push({
+      day,
+      byProvider: dayMap ?? new Map(),
     });
     if (day === untilDay) return days;
   }
