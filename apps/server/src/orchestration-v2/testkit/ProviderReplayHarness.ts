@@ -15,6 +15,8 @@ import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import type { ServerSettings as ServerSettingsSchema } from "@t3tools/contracts/settings";
+import type { DeepPartial } from "@t3tools/shared/Struct";
 import * as ThreadManagementService from "../ThreadManagementService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpSessionRegistryTestkit from "../../mcp/McpSessionRegistry.testkit.ts";
@@ -270,6 +272,7 @@ export function layerWithRegistry<Error>(
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly settingsOverrides?: DeepPartial<ServerSettingsSchema>;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -298,6 +301,7 @@ export function layerWithRegistry<Error>(
     Layer.provide(Layer.merge(layerContinuationRequests, McpProviderSessions.layer)),
   );
   const layerServerSettings = ServerSettings.layerTest({
+    ...options.settingsOverrides,
     responseStreamingMode: "turn",
     ...(options.continueThreadsAfterServerUpdate === undefined
       ? {}

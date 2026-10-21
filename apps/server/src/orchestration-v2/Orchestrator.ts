@@ -99,6 +99,7 @@ import {
   modelWindowOverflows,
 } from "@t3tools/provider-core/server/handoffBudget";
 import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../provider/ClaudeModelCatalog.ts";
+import { wantsCustomModelsOnly } from "../fork/provider/customModelsOnly.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -1001,13 +1002,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (pendingHandoffs.length === 0) return input.selection;
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const instanceSettings = settings.providerInstances[input.selection.instanceId];
       const customEntries = readCustomModelEntries(
-        (
-          settings.providerInstances[input.selection.instanceId]?.config as
-            | { customModels?: unknown }
-            | undefined
-        )?.customModels,
+        (instanceSettings?.config as { customModels?: unknown } | undefined)?.customModels,
       );
+      // A gateway-backed instance only serves its configured models; the
+      // bundled catalog and `-large` variants would be rejected upstream.
+      const customOnly = wantsCustomModelsOnly(instanceSettings?.environment ?? []);
       const windowFor = (selection: ModelSelection) =>
         Effect.gen(function* () {
           const session = yield* providerSessions.get(input.providerSessionId).pipe(
@@ -1047,7 +1048,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       for (const entry of customEntries) {
         consider(entry.slug, yield* windowFor({ ...input.selection, model: entry.slug }));
       }
-      if (input.driver === "claudeAgent") {
+      if (input.driver === "claudeAgent" && !customOnly) {
         for (const catalogModel of BUNDLED_CLAUDE_MODEL_CATALOG.models) {
           consider(
             catalogModel.model.slug,
@@ -1058,8 +1059,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // Gateway and catalog variants carry a capability suffix. When the
       // adapter knows a window for `${model}-large`, that variant is a
       // candidate too.
-      const largeSlug = `${input.selection.model}-large`;
-      consider(largeSlug, yield* windowFor({ ...input.selection, model: largeSlug }));
+      if (!customOnly) {
+        const largeSlug = `${input.selection.model}-large`;
+        consider(largeSlug, yield* windowFor({ ...input.selection, model: largeSlug }));
+      }
       if (best !== undefined) {
         yield* Effect.logWarning(
           "Selected model window cannot hold the pending context handoffs; switching models",

@@ -59,6 +59,7 @@ import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as ForkTurnContext from "../fork/turnContext/ForkTurnContext.ts";
+import { wantsCustomModelsOnly } from "../fork/provider/customModelsOnly.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -629,13 +630,13 @@ export const layer: Layer.Layer<
           modelContextWindow: currentWindow,
         });
         if (!overflow) return { selection: run.modelSelection, overflow: false };
+        const instanceSettings = settingsCache.providerInstances[run.providerInstanceId];
         const customEntries = readCustomModelEntries(
-          (
-            settingsCache.providerInstances[run.providerInstanceId]?.config as
-              | { customModels?: unknown }
-              | undefined
-          )?.customModels,
+          (instanceSettings?.config as { customModels?: unknown } | undefined)?.customModels,
         );
+        // Same rule as the orchestrator: a custom-models-only instance can
+        // only switch among its own models.
+        const customOnly = wantsCustomModelsOnly(instanceSettings?.environment ?? []);
         const seen = new Set<string>([run.modelSelection.model]);
         let best: { selection: ModelSelection; window: number } | undefined;
         const consider = (slug: string) => {
@@ -661,12 +662,12 @@ export const layer: Layer.Layer<
           }
         };
         for (const entry of customEntries) consider(entry.slug);
-        if (session.driver === "claudeAgent") {
+        if (session.driver === "claudeAgent" && !customOnly) {
           for (const catalogModel of BUNDLED_CLAUDE_MODEL_CATALOG.models) {
             consider(catalogModel.model.slug);
           }
         }
-        consider(`${run.modelSelection.model}-large`);
+        if (!customOnly) consider(`${run.modelSelection.model}-large`);
         if (best === undefined) return { selection: run.modelSelection, overflow: true };
         yield* Effect.logWarning(
           "Selected model window cannot hold the pending context handoffs; switching models",
