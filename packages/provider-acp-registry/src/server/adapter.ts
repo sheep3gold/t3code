@@ -167,6 +167,32 @@ function makeAcpRegistryRuntime(
     });
 }
 
+/**
+ * Model config options are the portable way to pick a model. Agents that only
+ * report the unstable session `models` state (Kimi CLI) are switched through
+ * `session/set_model` instead, and only to a model they listed.
+ */
+export const applyAcpRegistryModelSelection: NonNullable<
+  AcpAdapterV2Flavor["applyModelSelection"]
+> = ({ runtime, startResult, modelSelection }) =>
+  Effect.gen(function* () {
+    const requested = modelSelection.model;
+    if (requested.length === 0 || requested === "auto" || requested === "default") {
+      return undefined;
+    }
+    const setup = startResult.sessionSetupResult;
+    if (setup.configOptions?.some((option) => option.category === "model") === true) {
+      yield* runtime.setModel(requested);
+      return undefined;
+    }
+    const models = setup.models;
+    if (models == null || !models.availableModels.some((model) => model.modelId === requested)) {
+      return undefined;
+    }
+    yield* runtime.setSessionModel(requested);
+    return requested;
+  });
+
 export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(function* (
   options: AcpRegistryAdapterV2Options,
 ) {
@@ -210,6 +236,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           normalizeSessionUpdate: copilotRouting.normalizeSessionUpdate,
           extractSubagentUpdate: extractCopilotSubagentUpdate,
         }),
+    applyModelSelection: applyAcpRegistryModelSelection,
     makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options, catalog),
     ...(runtimeCoordinator === undefined
       ? {}
