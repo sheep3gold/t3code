@@ -470,4 +470,112 @@ describe("AcpRegistryAdapterV2", () => {
       });
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
+
+  it.effect("publishes models reported only in legacy session state", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const replayDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-legacy-models-",
+      });
+      const statusPath = path.join(replayDir, "status.json");
+      const transcript = yield* decodeAcpReplayTranscript(
+        {
+          provider: ACP_REGISTRY_PROVIDER,
+          protocol: "acp.ndjson-jsonrpc",
+          version: "1",
+          scenario: "legacy-session-models",
+          entries: [
+            {
+              type: "expect_outbound",
+              frame: { kind: "request", method: "initialize", params: "<any>" },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                kind: "response",
+                method: "initialize",
+                result: {
+                  protocolVersion: 1,
+                  agentCapabilities: { loadSession: false },
+                  authMethods: [{ id: "test", name: "Test" }],
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              frame: { kind: "request", method: "session/new", params: "<any>" },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                kind: "response",
+                method: "session/new",
+                result: {
+                  sessionId: "kimi-session",
+                  configOptions: [],
+                  models: {
+                    currentModelId: "kimi-code/k3",
+                    availableModels: [
+                      { modelId: "kimi-code/k3", name: "k3" },
+                      {
+                        modelId: "kimi-code/kimi-for-coding-highspeed",
+                        name: "kimi-for-coding-highspeed",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ] as never,
+        },
+        ACP_REGISTRY_PROVIDER,
+      );
+      const instanceId = ProviderInstanceId.make("acp-registry-legacy-session-models");
+      const adapter = yield* makeAcpRegistryAdapterV2({
+        selfInvocation: yield* resolveSelfInvocation(),
+        instanceId,
+        settings: yield* decodeAcpRegistryAdapterSettings({
+          agentId: "fixture-agent",
+          authMethodId: "test",
+        }),
+        environment: {},
+        makeRuntime: makeAcpReplayRuntime({
+          transcript,
+          statusPath,
+          scriptPath: yield* path.fromFileUrl(
+            new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
+          ),
+          childProcessSpawner,
+          fileSystem,
+        }),
+      }).pipe(Effect.provide(layerInjectedRuntimeCatalog));
+      yield* adapter.openSession({
+        threadId: ThreadId.make("thread-acp-registry-legacy-session-models"),
+        providerSessionId: ProviderSessionId.make("provider-session-legacy-session-models"),
+        modelSelection: { instanceId, model: "default" },
+        runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: replayDir,
+        }),
+      });
+
+      const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
+      const configuration = yield* coordinator.getLiveConfiguration(instanceId);
+      assert.isTrue(Option.isSome(configuration));
+      if (Option.isSome(configuration)) {
+        assert.deepEqual(
+          configuration.value.models.map((model) => model.id),
+          ["kimi-code/k3", "kimi-code/kimi-for-coding-highspeed"],
+        );
+        assert.equal(configuration.value.currentModelId, "kimi-code/k3");
+      }
+      yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript);
+    }).pipe(
+      Effect.provide(Layer.mergeAll(layerTest, AcpRegistryRuntimeCoordinator.layer)),
+      Effect.scoped,
+    ),
+  );
 });

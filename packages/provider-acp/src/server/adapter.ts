@@ -207,6 +207,7 @@ export interface AcpAdapterV2Flavor {
   readonly onSessionConfigurationUpdate?: (
     configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
     modeState: AcpSessionModeState | undefined,
+    sessionModels: EffectAcpSchema.SessionModelState | null | undefined,
   ) => Effect.Effect<void>;
   readonly onUrlElicitation?: (input: {
     readonly elicitationId: string;
@@ -5062,10 +5063,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               notification.update.sessionUpdate === "config_option_update" ||
               notification.update.sessionUpdate === "current_mode_update"
             ) {
+              const activeSetup = yield* Ref.get(activeSessionSetup);
               yield* (
                 flavor.onSessionConfigurationUpdate?.(
                   yield* runtime.getConfigOptions,
                   yield* runtime.getModeState,
+                  activeSetup?.sessionSetupResult.models,
                 ) ?? Effect.void
               );
             }
@@ -6019,6 +6022,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.onSessionConfigurationUpdate?.(
               yield* runtime.getConfigOptions,
               yield* runtime.getModeState,
+              startResult.sessionSetupResult.models,
             ) ?? Effect.void
           );
         });
