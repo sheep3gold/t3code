@@ -90,6 +90,8 @@ import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
+import { SessionModelIndicator } from "./SessionModelIndicator";
+import { useSessionModelRoute, DEFAULT_BASE_URL } from "../../hooks/useSessionModelRoute";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
@@ -141,6 +143,8 @@ export interface ThreadDetailScreenProps {
   readonly respondingUserInputId: ApprovalRequestId | null;
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerAttachment>;
+  readonly providerSessionId: string | null;
+  readonly modelRefreshTrigger: string | number | null;
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
@@ -317,6 +321,14 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + IOS_NAV_BAR_HEIGHT;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+
+  // Query actual model routing info from gateway (for "auto" model selection)
+  const modelRoute = useSessionModelRoute({
+    sessionId: props.providerSessionId,
+    enabled: props.providerSessionId !== null,
+    baseUrl: DEFAULT_BASE_URL,
+    trigger: props.modelRefreshTrigger,
+  });
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const draftMessageRef = useRef(props.draftMessage);
   draftMessageRef.current = props.draftMessage;
@@ -977,6 +989,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 showScrollToEnd={showScrollToEndButton}
                 onScrollToEnd={handleScrollToEnd}
               />
+              <View className="w-full self-center px-4 pt-2" style={{ maxWidth: contentMaxWidth }}>
+                <SessionModelIndicator
+                  info={modelRoute.info}
+                  isLoading={modelRoute.isLoading}
+                  error={modelRoute.error}
+                  onRefresh={modelRoute.refresh}
+                  textStyle={{ fontSize: 12 }}
+                />
+              </View>
               <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
                 {props.feedbackSubmissions.map((submission) => (
                   <ComposerFeedback

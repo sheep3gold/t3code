@@ -1003,6 +1003,8 @@ function ThreadRouteContent(
           respondingUserInputId={requests.respondingUserInputId}
           draftMessage={composer.draftMessage}
           draftAttachments={composer.draftAttachments}
+          providerSessionId={selectedThread.session?.providerSessionId ?? null}
+          modelRefreshTrigger={selectedThread.latestTurn?.id ?? null}
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
           loadEarlier={loadEarlierTurns}
