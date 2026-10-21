@@ -66,14 +66,23 @@ function modelConfigOptions(
 
 function normalizeModels(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+  sessionModels?: EffectAcpSchema.SessionModelState | null,
 ): ReadonlyArray<AcpRegistryProbeModel> {
-  // Model discovery is the model config option's base models; ACP has no
-  // other portable model inventory.
-  const candidates = modelConfigOptions(configOptions).map((model) => ({
+  // The model config option is the portable inventory. Agents that predate
+  // config options (Kimi CLI) only report the unstable session `models` state.
+  const configured = modelConfigOptions(configOptions).map((model) => ({
     id: model.value,
     name: model.name,
     description: model.description ?? null,
   }));
+  const candidates =
+    configured.length > 0
+      ? configured
+      : (sessionModels?.availableModels ?? []).map((model) => ({
+          id: model.modelId,
+          name: model.name,
+          description: model.description ?? null,
+        }));
   const seen = new Set<string>();
   const models: Array<AcpRegistryProbeModel> = [];
   for (const candidate of candidates) {
@@ -173,15 +182,18 @@ export interface AcpRegistryLiveConfiguration {
 export function normalizeAcpRegistryLiveConfiguration(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
   modeState?: Parameters<typeof acpProviderOptionDescriptors>[0]["modeState"],
+  sessionModels?: EffectAcpSchema.SessionModelState | null,
 ): AcpRegistryLiveConfiguration {
   const modelOption = configOptions.find(
     (option) => option.category === "model" && option.type === "select",
   );
+  const currentModelId =
+    modelOption?.type === "select" ? modelOption.currentValue : sessionModels?.currentModelId;
   const boundedCurrentModelId =
-    modelOption?.type === "select"
-      ? (boundedOpaqueValue(modelOption.currentValue, MAX_ID_LENGTH) ?? null)
-      : null;
-  const models = normalizeModels(configOptions);
+    currentModelId === undefined
+      ? null
+      : (boundedOpaqueValue(currentModelId, MAX_ID_LENGTH) ?? null);
+  const models = normalizeModels(configOptions, sessionModels);
   return {
     models,
     currentModelId: models.some((model) => model.id === boundedCurrentModelId)
@@ -243,6 +255,7 @@ export function acpRegistryProbeResult(
   const liveConfiguration = normalizeAcpRegistryLiveConfiguration(
     started.sessionSetupResult.configOptions ?? [],
     parseSessionModeState(started.sessionSetupResult),
+    started.sessionSetupResult.models,
   );
   return AcpRegistryProbeResult.make({
     instanceId,
