@@ -29,7 +29,13 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as UsageLimitSources from "../../usage/UsageLimitSources.ts";
 import * as UsageService from "../../usage/UsageService.ts";
 import { readInstanceUsageLimits } from "./usageQuotaProbe.ts";
-import { dayInZone, foldDailyUsage, isDay, shiftDay } from "./usageHistory.ts";
+import {
+  dayInZone,
+  foldDailyUsage,
+  foldDailyUsageByProvider,
+  isDay,
+  shiftDay,
+} from "./usageHistory.ts";
 
 const PROVIDER_USAGE_SUMMARY_PATH = "/api/provider-usage-summary";
 
@@ -160,11 +166,17 @@ export const layerProviderUsageSummaryRoute = HttpRouter.add(
             ),
           ),
         );
+      const daily = foldDailyUsage(scanned?.buckets ?? [], sinceDay, untilDay);
+      const byProvider = foldDailyUsageByProvider(scanned?.buckets ?? [], sinceDay, untilDay);
       return HttpServerResponse.jsonUnsafe({
         timeZone: PROVIDER_USAGE_HISTORY_TIME_ZONE,
         sinceDay,
         untilDay,
-        days: foldDailyUsage(scanned?.buckets ?? [], sinceDay, untilDay),
+        days: daily,
+        byProvider: byProvider.map((row) => ({
+          day: row.day,
+          byProvider: Object.fromEntries(row.byProvider),
+        })),
         available: scanned !== null,
         readAt: scanned?.readAt ?? DateTime.formatIso(yield* DateTime.now),
       });
