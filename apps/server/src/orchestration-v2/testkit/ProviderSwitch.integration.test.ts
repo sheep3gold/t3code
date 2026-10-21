@@ -1011,6 +1011,131 @@ describe("orchestration v2 provider switching", () => {
     ),
   );
 
+  it.live("keeps a custom-models-only instance on its own model when the handoff overflows", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("handoff-window-overflow-custom-only");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const generation = yield* Ref.make(0);
+        // A gateway-backed Claude instance that only serves "auto". Every
+        // bundled catalog model reports a huge window, so a fallback that
+        // still consulted the catalog would pick one of them and the gateway
+        // would reject it.
+        const autoSelection = { instanceId: CLAUDE_MODEL_SELECTION.instanceId, model: "auto" };
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: CODEX_MODEL_SELECTION.instanceId,
+            driver: CODEX_DRIVER,
+            capabilities: CodexProviderCapabilitiesV2,
+            modelSelection: CODEX_MODEL_SELECTION,
+            responseByRunOrdinal: { 1: "Original partial work" },
+            capturedTurns,
+          }),
+          makeTestAdapter({
+            instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+            driver: CLAUDE_DRIVER,
+            capabilities: ClaudeProviderCapabilitiesV2,
+            modelSelection: autoSelection,
+            responseByRunOrdinal: {},
+            capturedTurns,
+            injectedHistory,
+            nativeThreadGeneration: generation,
+            getModelContextWindow: (selection: ModelSelection) =>
+              selection.model === "auto" ? 32_000 : 1_000_000,
+            canReuseContextUsage: (previous, next) => previous.instanceId === next.instanceId,
+            tokenUsageByRunOrdinal: {
+              2: { usedTokens: 30_000, maxTokens: 32_000 },
+            },
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const dispatch = (ordinal: number, text: string, selection: ModelSelection) =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`custom-only:${ordinal}`),
+              threadId,
+              messageId: MessageId.make(`custom-only:message:${ordinal}`),
+              createdBy: "user",
+              creationSource: "web",
+              text,
+              attachments: [],
+              modelSelection: selection,
+              dispatchMode: { type: "start_immediately" },
+            });
+          const wait = (ordinal: number) =>
+            orchestrator.streamStoredEvents.pipe(
+              Stream.filter(
+                ({ event }) =>
+                  event.type === "run.updated" &&
+                  event.payload.ordinal === ordinal &&
+                  (event.payload.status === "completed" || event.payload.status === "failed"),
+              ),
+              Stream.runHead,
+              Effect.andThen(worker.drain()),
+            );
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("custom-only:create"),
+            threadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Handoff overflow on a custom-models-only instance",
+            modelSelection: CODEX_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* dispatch(1, "Original request with constraints", CODEX_MODEL_SELECTION);
+          yield* wait(1);
+          yield* dispatch(2, "Establish target", autoSelection);
+          yield* wait(2);
+          yield* waitForIdle(threadId);
+          yield* dispatch(3, "x".repeat(70_000), autoSelection);
+          yield* wait(3);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(projection.thread.modelSelection.model, "auto");
+          for (const run of projection.runs) {
+            if (run.modelSelection?.instanceId === autoSelection.instanceId) {
+              assert.equal(run.modelSelection.model, "auto");
+            }
+          }
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "handoff-window-overflow-custom-only",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: { type: "readOnly" },
+                },
+              },
+              layerRegistry,
+              {
+                settingsOverrides: {
+                  providerInstances: {
+                    [CLAUDE_MODEL_SELECTION.instanceId]: {
+                      driver: CLAUDE_DRIVER,
+                      environment: [
+                        { name: "T3_CLAUDE_CUSTOM_MODELS_ONLY", value: "1", sensitive: false },
+                      ],
+                      config: { customModels: [{ slug: "auto", name: "Auto" }] },
+                    },
+                  },
+                },
+              },
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
   it.live("delivers the handoff inline when the target model window fits", () =>
     Effect.scoped(
       Effect.gen(function* () {
