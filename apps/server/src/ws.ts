@@ -2164,6 +2164,52 @@ const layerWsRpc = (
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
+        [WS_METHODS.serverGetModelRoute]: (input) =>
+          Effect.gen(function* () {
+            // Hardcoded gateway URL for now; could be made configurable later
+            const gatewayUrl = "https://llm.zxytech.cn/v1";
+            const url = `${gatewayUrl.replace(/\/$/, "")}/session/by-id/${encodeURIComponent(input.providerSessionId)}`;
+            const response = yield* Effect.tryPromise({
+              try: () =>
+                fetch(url, {
+                  headers: { Accept: "application/json" },
+                  cache: "no-store",
+                }),
+              catch: (error) => new Error(`Gateway request failed: ${String(error)}`),
+            });
+            if (!response.ok) {
+              return yield* Effect.fail(
+                new Error(`Gateway returned ${response.status}`),
+              );
+            }
+            const data = yield* Effect.tryPromise({
+              try: () => response.json(),
+              catch: (error) => new Error(`Failed to parse gateway response: ${String(error)}`),
+            });
+            if (data === null || typeof data !== "object") {
+              return yield* Effect.fail(new Error("Invalid gateway response"));
+            }
+            const record = data as Record<string, unknown>;
+            if ("error" in record && record["error"] !== null && record["error"] !== undefined) {
+              return yield* Effect.fail(new Error("Gateway returned error"));
+            }
+            const provider = record["provider"];
+            const model = record["model"];
+            const tier = record["tier"];
+            if (typeof provider !== "string" || typeof model !== "string" || typeof tier !== "string") {
+              return yield* Effect.fail(new Error("Missing required fields in gateway response"));
+            }
+            return {
+              sessionKey: typeof record["session_key"] === "string" ? record["session_key"] : "",
+              tier,
+              baseTier: typeof record["base_tier"] === "string" ? record["base_tier"] : "",
+              provider,
+              model,
+              deployment: typeof record["deployment"] === "string" ? record["deployment"] : "",
+              lastStatus: typeof record["last_status"] === "string" ? record["last_status"] : "",
+              ts: typeof record["ts"] === "number" ? record["ts"] : 0,
+            };
+          }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
             .search(input)

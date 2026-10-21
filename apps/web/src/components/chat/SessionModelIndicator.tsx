@@ -1,13 +1,24 @@
-import { formatSessionRouteLabel, type SessionRouteInfo } from "@/lib/sessionRoute";
+import { type ServerModelRouteInfo } from "@t3tools/contracts";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 
 interface SessionModelIndicatorProps {
-  readonly info: SessionRouteInfo | null;
+  readonly info: ServerModelRouteInfo | null;
   readonly isLoading: boolean;
   readonly error: Error | null;
   readonly onRefresh?: () => void;
   readonly className?: string;
+}
+
+/** 显示文本：glm/glm-5.3 (MEDIUM档) */
+function formatSessionRouteLabel(input: {
+  readonly provider: string;
+  readonly model: string;
+  readonly tier: string;
+}): string {
+  const { provider, model, tier } = input;
+  const section = provider && model ? `${provider}/${model}` : "";
+  return tier ? `${section} (${tier}档)` : section;
 }
 
 /**

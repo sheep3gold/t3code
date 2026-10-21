@@ -626,6 +626,21 @@ export const ServerConfig = Schema.Struct({
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
+/**
+ * Model gateway session route info, fetched from the gateway's /session/by-id/{id} endpoint.
+ */
+export const ServerModelRouteInfo = Schema.Struct({
+  sessionKey: TrimmedString,
+  tier: TrimmedString,
+  baseTier: TrimmedString,
+  provider: TrimmedString,
+  model: TrimmedString,
+  deployment: TrimmedString,
+  lastStatus: TrimmedString,
+  ts: Schema.Number,
+});
+export type ServerModelRouteInfo = typeof ServerModelRouteInfo.Type;
+
 export function resolveEnvironmentMachineKind(
   config: {
     readonly environment: Pick<ExecutionEnvironmentDescriptor, "platform">;
