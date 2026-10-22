@@ -25,6 +25,6 @@ export function formatSessionRouteLabel(input: {
   readonly tier: string;
 }): string {
   const { provider, model, tier } = input;
-  const section = provider && model ? `${provider}/${model}` : “”;
+  const section = provider && model ? `${provider}/${model}` : "";
   return tier ? `${section} (${tier}档)` : section;
 }

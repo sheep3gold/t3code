@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type ThreadId,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -36,6 +37,8 @@ import {
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { useClientSettings } from "../../hooks/useSettings";
+import { SessionModelIndicator } from "./SessionModelIndicator";
+import { useSessionModelRoute, extractProviderSessionId } from "~/hooks/useSessionModelRoute";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -48,6 +51,10 @@ interface ChatHeaderProps {
   rightPanelOpen: boolean;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
+  /** Thread projection for extracting provider session ID */
+  threadProjection: OrchestrationV2ThreadProjection | null;
+  modelRouteTrigger?: string | number | null;
+  showModelRoute: boolean;
 }
 
 export function resolveRenameCommit(input: {
@@ -76,6 +83,9 @@ export const ChatHeader = memo(function ChatHeader({
   rightPanelOpen,
   onNewThreadInProject,
   onOpenProjectSettings,
+  threadProjection,
+  modelRouteTrigger,
+  showModelRoute,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -87,6 +97,19 @@ export const ChatHeader = memo(function ChatHeader({
     activeThreadEnvironmentId,
     AuthOrchestrationOperateScope,
   );
+
+  // Model route info display
+  const providerSessionId = extractProviderSessionId(threadProjection);
+  const {
+    info: modelRouteInfo,
+    error: modelRouteError,
+    isLoading: modelRouteLoading,
+    refresh: refreshModelRoute,
+  } = useSessionModelRoute({
+    sessionId: providerSessionId,
+    enabled: isServerThread && showModelRoute && providerSessionId !== null,
+    trigger: modelRouteTrigger,
+  });
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -398,6 +421,15 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {isServerThread && showModelRoute && providerSessionId !== null && (
+        <SessionModelIndicator
+          info={modelRouteInfo}
+          isLoading={modelRouteLoading}
+          error={modelRouteError}
+          onRefresh={refreshModelRoute}
+          className="shrink-0"
+        />
+      )}
     </div>
   );
 });

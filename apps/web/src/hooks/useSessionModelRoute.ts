@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useReadApi } from "@/localApi";
-import { WS_METHODS } from "@t3tools/contracts";
+import { useReadApi } from "../localApi";
+import { WS_METHODS, type OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { type ServerModelRouteInfo } from "@t3tools/contracts";
 
 export interface UseSessionModelRouteInput {
@@ -8,7 +8,7 @@ export interface UseSessionModelRouteInput {
   readonly sessionId: string | null;
   readonly enabled: boolean;
   /** 变更时触发重新查询（如最新 turnId 变化，表示新消息已发送）。 */
-  readonly trigger?: string | number | null;
+  readonly trigger?: string | number | null | undefined;
 }
 
 export interface UseSessionModelRouteReturn {
@@ -17,6 +17,21 @@ export interface UseSessionModelRouteReturn {
   readonly isLoading: boolean;
   /** 手动刷新（例如用户点击指示器）。 */
   readonly refresh: () => Promise<void>;
+}
+
+/**
+ * 从 thread projection 中提取活跃 provider thread 的 providerSessionId。
+ */
+export function extractProviderSessionId(
+  projection: OrchestrationV2ThreadProjection | null,
+): string | null {
+  if (!projection) return null;
+  const activeProviderThreadId = projection.thread.activeProviderThreadId;
+  if (!activeProviderThreadId) return null;
+  const activeProviderThread = projection.providerThreads.find(
+    (pt) => pt.id === activeProviderThreadId,
+  );
+  return activeProviderThread?.providerSessionId ?? null;
 }
 
 export function useSessionModelRoute(input: UseSessionModelRouteInput): UseSessionModelRouteReturn {
