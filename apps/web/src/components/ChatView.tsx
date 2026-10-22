@@ -7929,6 +7929,9 @@ export default function ChatView(props: ChatViewProps) {
             onOpenThread={onOpenRelatedThreadStable}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
             onNewThreadInProject={handleNewThreadInActiveProjectStable}
+            threadProjection={serverProjection}
+            modelRouteTrigger={serverLatestRun?.runId ?? null}
+            showModelRoute={activeThread.modelSelection.model === "auto"}
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
               : {})}

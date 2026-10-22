@@ -14,6 +14,7 @@ import {
   PositiveInt,
   ProjectId,
   ThreadId,
+  TrimmedString,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import {
