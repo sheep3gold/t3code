@@ -1,15 +1,11 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useEnvironmentQuery } from "../state/query";
 import {
   WS_METHODS,
   type OrchestrationV2ThreadProjection,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { type ServerModelRouteInfo } from "@t3tools/contracts";
-import { type ScopedThreadRef } from "@t3tools/client-runtime/environment";
-import {
-  createEnvironmentRpcQueryAtomFamily,
-  selectEnvironmentQueryData,
-} from "@t3tools/client-runtime/state/runtime";
+import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import { connectionAtomRuntime } from "../connection/runtime";
 
 export interface UseSessionModelRouteInput {
@@ -53,23 +49,20 @@ const modelRouteQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntim
 
 export function useSessionModelRoute(input: UseSessionModelRouteInput): UseSessionModelRouteReturn {
   const { environmentId, sessionId, enabled, trigger } = input;
-  const result = useAtomValue(
+  const atom =
     enabled && sessionId !== null
       ? modelRouteQuery({
           environmentId,
           input: { providerSessionId: sessionId },
         })
-      : null,
-  );
-  const info = selectEnvironmentQueryData(result);
-  const error = result._tag === "Failure" ? result.cause : null;
-  const isLoading = result._tag === "Loading" || result.waiting;
+      : null;
+  const query = useEnvironmentQuery(atom);
+  const info = query.data as ServerModelRouteInfo | null;
+  const error = query.error ? new Error(query.error) : null;
+  const isLoading = query.isPending;
 
   const refresh = () => {
-    if (enabled && sessionId !== null) {
-      // The atom's refresh function is available through the registry
-      // For now, this is a no-op that relies on trigger changes
-    }
+    query.refresh();
   };
 
   return { info, error, isLoading, refresh };
