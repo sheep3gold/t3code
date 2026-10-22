@@ -722,6 +722,8 @@ export const make = Effect.gen(function* () {
       /** Present when the instance's transcript directory exists on disk. */
       hasDir: boolean;
       models: Map<string, { totalTokens: number; costUsd: number }>;
+      /** All-time tokens (unlimited history). */
+      allTimeTokens: number;
     }
     const byInstance = new Map<string, MutableInstance>();
     const instanceEntry = (instanceKey: string): MutableInstance => {
@@ -733,6 +735,7 @@ export const make = Effect.gen(function* () {
           unpricedRecords: 0,
           hasDir: false,
           models: new Map(),
+          allTimeTokens: 0,
         };
         byInstance.set(instanceKey, entry);
       }
@@ -754,6 +757,9 @@ export const make = Effect.gen(function* () {
       entry.models.set(record.model, model);
     };
 
+    // Global deduplication for all-time tokens (across all files and directories)
+    const allTimeSeen = new Set<string>();
+
     for (const scannedDir of scannedDirs) {
       const provider = scannedDir.provider;
       // Every configured instance claiming this physical directory shares the
@@ -770,6 +776,20 @@ export const make = Effect.gen(function* () {
       const seen = new Set<string>();
       for (const file of scannedDir.files ?? []) {
         for (const record of file.records) {
+          const tokens = totalTokens(record.totals);
+          if (tokens === 0 && record.reportedCostUsd === null) continue;
+
+          // Count all-time tokens (no time filter, global deduping)
+          if (record.dedupeKey !== null) {
+            if (!allTimeSeen.has(record.dedupeKey)) {
+              allTimeSeen.add(record.dedupeKey);
+              for (const entry of entries) entry.allTimeTokens += tokens;
+            }
+          } else {
+            for (const entry of entries) entry.allTimeTokens += tokens;
+          }
+
+          // Count window-specific tokens
           if (record.timestampMs < windowStartMs + MTIME_SLACK_MS) continue;
           if (record.dedupeKey !== null) {
             if (seen.has(record.dedupeKey)) continue;
@@ -788,7 +808,13 @@ export const make = Effect.gen(function* () {
 
     const instances: Array<UsageInstancesSummary["instances"][number]> = [];
     for (const [instanceId, entry] of byInstance) {
-      if (!entry.hasDir && entry.totalTokens === 0 && entry.costUsd === 0) continue;
+      if (
+        !entry.hasDir &&
+        entry.totalTokens === 0 &&
+        entry.costUsd === 0 &&
+        entry.allTimeTokens === 0
+      )
+        continue;
       instances.push({
         instanceId: ProviderInstanceId.make(instanceId),
         usage: {
@@ -796,6 +822,7 @@ export const make = Effect.gen(function* () {
           totalTokens: Math.max(0, Math.round(entry.totalTokens)),
           costUsd: entry.costUsd,
           unpricedRecords: entry.unpricedRecords,
+          allTimeTokens: Math.max(0, Math.round(entry.allTimeTokens)),
           models: [...entry.models.entries()]
             .map(([model, totals]) => ({
               model,
