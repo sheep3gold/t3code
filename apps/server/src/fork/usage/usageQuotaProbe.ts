@@ -23,10 +23,8 @@
  *   When the instance's `ANTHROPIC_BASE_URL` points at the Kimi Code plan
  *   (`api.kimi.com/coding`), it reads `GET /coding/v1/usages` instead — the
  *   endpoint kimi-cli's `/usage` renders: `used_ratio` per bucket for the
- *   5-hour window and the monthly quotas. Kimi CLI (the `kimi_cli` instance)
- *   uses its native OAuth token from `~/.kimi/credentials/kimi-code.json` first,
- *   falling back to the stable Claude-home etcd key when the token is missing
- *   or expired.
+ *   5-hour window and the monthly quotas. Kimi CLI uses its native OAuth
+ *   token first, falling back to the stable key in `~/.claude-kimi` when expired.
  * - `deepseek`: `GET api.deepseek.com/user/balance` (prepaid balance, CNY),
  *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
  * - `factory`: `GET api.factory.ai/api/organization/subscription/usage`, the
@@ -636,16 +634,13 @@ const readClaudeHomeApiKey = (
     );
   });
 
-/** Native Kimi CLI OAuth token from `~/.kimi/credentials/kimi-code.json`.
- * The token is short-lived (900 s from issue); when missing or expired the
- * caller should fall back to the stable Claude-home etcd key. */
+/** The native token expires after 900 seconds; the Claude-home key survives idle periods. */
 const readKimiCliOAuthToken = (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
+  homeDirectory: string,
 ): Effect.Effect<string> =>
   Effect.gen(function* () {
-    const homeDirectory = process.env.HOME ?? "";
-    if (homeDirectory.length === 0) return "";
     const credentialsPath = path.join(homeDirectory, ".kimi", KIMI_CLI_CREDENTIALS_FILE);
     const credentialsText = yield* fileSystem
       .readFileString(credentialsPath)
@@ -659,7 +654,7 @@ const readKimiCliOAuthToken = (
     if (typeof accessToken !== "string" || accessToken.length === 0) return "";
     if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return "";
     const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
-    if (expiresAt * 1000 < nowMs) return ""; // Expired (expires_at is epoch seconds)
+    if (expiresAt * 1000 <= nowMs + 30_000) return "";
     return accessToken;
   });
 
@@ -747,20 +742,10 @@ const kimiProbe = (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
-  useNativeToken: boolean = false,
 ): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
   Effect.gen(function* () {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    let key = "";
-    if (useNativeToken) {
-      // Try the native Kimi CLI OAuth token first (short-lived, 900 s).
-      key = yield* readKimiCliOAuthToken(fileSystem, path);
-    }
-    // Fall back to the stable Claude-home etcd key (either native token missing/expired,
-    // or this is the claude_kimi instance that doesn't have a native token).
-    if (key.length === 0) {
-      key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
-    }
+    const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
     if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
     if (yield* usesKimiCodePlan(fileSystem, path, home)) {
       return yield* kimiCodeProbe(client, key, checkedAt);
@@ -808,6 +793,38 @@ const kimiProbe = (
         },
       ],
     } satisfies ServerProviderUsageLimits;
+  });
+
+const kimiCliProbe = (
+  client: HttpClient.HttpClient,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  homeDirectory: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const nativeToken = yield* readKimiCliOAuthToken(fileSystem, path, homeDirectory);
+    const fallbackHome = path.join(homeDirectory, ".claude-kimi");
+    const fallbackKey = () =>
+      readClaudeHomeApiKey(fileSystem, path, fallbackHome, "kimi").pipe(
+        Effect.orElseSucceed(() => ""),
+      );
+    const key = nativeToken.length > 0 ? nativeToken : yield* fallbackKey();
+    if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
+    const result = yield* kimiCodeProbe(client, key, checkedAt).pipe(
+      Effect.catch((error) =>
+        nativeToken.length === 0
+          ? Effect.fail(error)
+          : fallbackKey().pipe(
+              Effect.flatMap((stableKey) =>
+                stableKey.length > 0
+                  ? kimiCodeProbe(client, stableKey, checkedAt)
+                  : Effect.fail(error),
+              ),
+            ),
+      ),
+    );
+    return result;
   });
 
 /* ------------------------------------------------------------------ */
@@ -1171,6 +1188,7 @@ type ProbeKind =
   | "claudeOAuth"
   | "workbuddy"
   | "kimi"
+  | "kimiCli"
   | "deepseek"
   | "factory"
   | "minimax"
@@ -1235,7 +1253,6 @@ const probeForInstance = (
   readonly kind: ProbeKind;
   readonly home: string | null;
   readonly etcdKey?: string;
-  readonly useNativeKimiToken?: boolean;
 } | null => {
   const instance = settings.providerInstances[instanceKey as never];
   if (instanceKey === "claude_glm")
@@ -1246,9 +1263,8 @@ const probeForInstance = (
   if (instanceKey === "codex_workbuddy") return { kind: "workbuddy", home: null };
   if (instanceKey === "claude_kimi")
     return { kind: "kimi", home: instanceHome(settings, instanceKey) };
-  if (instanceKey === "kimi_cli")
-    // Kimi CLI uses its native OAuth token first, falling back to the Claude-home key.
-    return { kind: "kimi", home: instanceHome(settings, "claude_kimi"), useNativeKimiToken: true };
+  if (instanceKey === "kimi_cli" && instance !== undefined)
+    return { kind: "kimiCli", home: process.env.HOME ?? null };
   if (instanceKey === "claude_deepseek")
     return { kind: "deepseek", home: instanceHome(settings, instanceKey) };
   if (instance?.driver === "antigravity") {
@@ -1323,21 +1339,23 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
           : probe.kind === "workbuddy"
             ? workbuddyProbe(fileSystem, path)
             : probe.kind === "kimi" && probe.home !== null
-              ? kimiProbe(client, fileSystem, path, probe.home, probe.useNativeKimiToken)
-              : probe.kind === "deepseek" && probe.home !== null
-                ? deepseekProbe(client, fileSystem, path, probe.home)
-                : probe.kind === "minimax" && probe.home !== null
-                  ? minimaxProbe(client, fileSystem, path, probe.home)
-                  : probe.kind === "factory"
-                    ? factoryProbe(probe.etcdKey)
-                    : probe.kind === "antigravity" && probe.home !== null
-                      ? antigravityProbe(fileSystem, path, probe.home)
-                      : Effect.fail(
-                          new UsageQuotaProbeError({
-                            probe: probe.kind,
-                            detail: "instance home could not be resolved",
-                          }),
-                        );
+              ? kimiProbe(client, fileSystem, path, probe.home)
+              : probe.kind === "kimiCli" && probe.home !== null
+                ? kimiCliProbe(client, fileSystem, path, probe.home)
+                : probe.kind === "deepseek" && probe.home !== null
+                  ? deepseekProbe(client, fileSystem, path, probe.home)
+                  : probe.kind === "minimax" && probe.home !== null
+                    ? minimaxProbe(client, fileSystem, path, probe.home)
+                    : probe.kind === "factory"
+                      ? factoryProbe(probe.etcdKey)
+                      : probe.kind === "antigravity" && probe.home !== null
+                        ? antigravityProbe(fileSystem, path, probe.home)
+                        : Effect.fail(
+                            new UsageQuotaProbeError({
+                              probe: probe.kind,
+                              detail: "instance home could not be resolved",
+                            }),
+                          );
 
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const limits = yield* run.pipe(
