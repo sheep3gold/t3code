@@ -430,4 +430,24 @@ describe("usageQuotaProbe", () => {
       assert.include(signedOut?.unavailable?.message ?? "", "未登录");
     }).pipe(Effect.scoped, Effect.provide(layers)),
   );
+
+  it.live("kiro probe is selected for acpRegistry instance with commandPath", () =>
+    Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const settings = {
+        providerInstances: {
+          kiro: {
+            driver: "acpRegistry",
+            config: { commandPath: "/usr/bin/kiro-cli" },
+          },
+        },
+      } as never;
+
+      // Probe is selected (not "unsupported"), but without kiro-cli DB it fails.
+      const limits = yield* readInstanceUsageLimits(settings, "kiro");
+      assert.isDefined(limits);
+      assert.strictEqual(limits?.unavailable?.reason, "probeFailed");
+      assert.include(limits?.unavailable?.message ?? "", "未登录");
+    }).pipe(Effect.scoped, Effect.provide(layers)),
+  );
 });
