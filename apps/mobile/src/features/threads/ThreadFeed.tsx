@@ -116,7 +116,7 @@ import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useThreadTranslation, type MessageTranslationState } from "../../state/translate";
-import { parseAssistantOptions } from "./assistant-options";
+import { parseAssistantOptions } from "@t3tools/client-runtime/assistantOptions";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";

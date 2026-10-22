@@ -195,7 +195,7 @@ import {
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
-import { parseAssistantOptions } from "./AssistantOptionChips";
+import { parseAssistantOptions } from "@t3tools/client-runtime/assistantOptions";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { WorkspaceEntryIcon, WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";

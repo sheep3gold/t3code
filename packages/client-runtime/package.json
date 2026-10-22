@@ -43,6 +43,10 @@
       "types": "./src/userMessage.ts",
       "default": "./src/userMessage.ts"
     },
+    "./assistantOptions": {
+      "types": "./src/assistantOptions.ts",
+      "default": "./src/assistantOptions.ts"
+    },
     "./prompt-links": {
       "types": "./src/promptLinks.ts",
       "default": "./src/promptLinks.ts"
