@@ -173,6 +173,8 @@ export const UsageInstanceUsage = Schema.Struct({
   costUsd: Schema.Number,
   /** Records whose tokens counted toward totals but had no matching rate. */
   unpricedRecords: NonNegativeInt,
+  /** Total tokens across all time (unlimited history). */
+  allTimeTokens: Schema.optional(NonNegativeInt),
   /** Per-model rollups, sorted by token total descending. */
   models: Schema.Array(
     Schema.Struct({
