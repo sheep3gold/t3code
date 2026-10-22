@@ -343,6 +343,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     isLoading: modelRouteLoading,
     refresh: refreshModelRoute,
   } = useSessionModelRoute({
+    environmentId: props.environmentId,
     sessionId: providerSessionId,
     enabled: props.selectedThread.modelSelection.model === "auto" && providerSessionId !== null,
     trigger: props.selectedThread.latestRun?.runId ?? null,
