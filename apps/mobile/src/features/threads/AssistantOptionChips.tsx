@@ -1,9 +1,10 @@
 import { Pressable, View } from "react-native";
 
+import { isOptionSelected } from "@t3tools/client-runtime/assistantOptions";
+
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
-import { isOptionSelected } from "./assistant-options";
 
 export interface AssistantOptionChipsProps {
   readonly options: ReadonlyArray<string>;

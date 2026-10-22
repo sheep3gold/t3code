@@ -122,7 +122,10 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { AssistantOptionChips } from "./AssistantOptionChips";
-import { parseAssistantOptions, toggleOptionInPrompt } from "./assistant-options";
+import {
+  resolveActiveOptionSource,
+  toggleOptionInPrompt,
+} from "@t3tools/client-runtime/assistantOptions";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
@@ -549,15 +552,36 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
       (entry) => "acknowledged" in entry && entry.acknowledged === true,
     );
   const selectedThreadFeed = props.selectedThreadFeed;
-  const activeOptionLabels = ((): ReadonlyArray<string> => {
-    for (let index = selectedThreadFeed.length - 1; index >= 0; index -= 1) {
-      const entry = selectedThreadFeed[index];
-      if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
-      if (entry.message.streaming) return [];
-      return parseAssistantOptions(entry.message.text)?.options ?? [];
-    }
-    return [];
-  })();
+  /**
+   * `[OPTIONS:]` chip candidates shown above the composer. They belong to the
+   * assistant turn that offered them: once the user replies, that turn is over
+   * and its candidates are a stale action the user should not be able to click.
+   */
+  const activeOptionSource = resolveActiveOptionSource(
+    selectedThreadFeed.flatMap((entry) =>
+      entry.type === "message"
+        ? [
+            {
+              id: entry.message.id,
+              role: entry.message.role,
+              text: entry.message.text,
+              streaming: entry.message.streaming,
+            },
+          ]
+        : [],
+    ),
+  );
+  /**
+   * The arrow consumes the candidate set. The send it starts makes every chip
+   * of that turn meaningless, so they go on the tap instead of waiting for the
+   * server to echo the message back — otherwise the same candidate could be
+   * sent twice.
+   */
+  const [sentOptionMessageId, setSentOptionMessageId] = useState<string | null>(null);
+  const activeOptionLabels =
+    activeOptionSource !== null && activeOptionSource.messageId !== sentOptionMessageId
+      ? activeOptionSource.options
+      : [];
   const hasCompactableConversation =
     selectedThreadFeed.some(
       (entry) =>
@@ -935,8 +959,10 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     const hasUserMessage = selectedThreadFeed.some(
       (entry) => entry.type === "message" && entry.message.role === "user",
     );
+    setSentOptionMessageId(activeOptionSource?.messageId ?? null);
     const messageId = await props.onSendMessage(followUp);
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
+      if (messageId === null) setSentOptionMessageId(null);
       return messageId;
     }
 
@@ -975,8 +1001,10 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     const hasUserMessage = selectedThreadFeed.some(
       (entry) => entry.type === "message" && entry.message.role === "user",
     );
+    setSentOptionMessageId(activeOptionSource?.messageId ?? null);
     const messageId = await props.onSendOption(label);
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
+      if (messageId === null) setSentOptionMessageId(null);
       return messageId;
     }
     void Haptics.selectionAsync();

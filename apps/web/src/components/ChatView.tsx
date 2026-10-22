@@ -301,10 +301,10 @@ import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations"
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useThreadTranslation } from "../hooks/useThreadTranslation";
 import {
-  AssistantOptionChips,
-  parseAssistantOptions,
+  resolveActiveOptionSource,
   toggleOptionInPrompt,
-} from "./chat/AssistantOptionChips";
+} from "@t3tools/client-runtime/assistantOptions";
+import { AssistantOptionChips } from "./chat/AssistantOptionChips";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -2849,20 +2849,22 @@ export default function ChatView(props: ChatViewProps) {
     environmentId: activeThread?.environmentId ?? null,
   });
   /**
-   * `[OPTIONS:]` chip candidates shown above the composer, read from the last
-   * assistant message only: an older turn's candidates are a stale action the
-   * user should not be able to click. Skipped while streaming so a half-emitted
-   * marker line does not render broken chips that then jump.
+   * `[OPTIONS:]` chip candidates shown above the composer. They belong to the
+   * assistant turn that offered them: once the user replies, that turn is over
+   * and its candidates are a stale action the user should not be able to click.
    */
-  const activeOptionLabels = ((): ReadonlyArray<string> => {
-    for (let i = timelineMessages.length - 1; i >= 0; i -= 1) {
-      const message = timelineMessages[i];
-      if (!message || message.role !== "assistant") continue;
-      if (message.streaming) return [];
-      return parseAssistantOptions(message.text ?? "")?.options ?? [];
-    }
-    return [];
-  })();
+  const activeOptionSource = resolveActiveOptionSource(timelineMessages);
+  /**
+   * The arrow consumes the candidate set. The send it starts makes every chip
+   * of that turn meaningless, so they go on the tap instead of waiting for the
+   * server to echo the message back — otherwise the same candidate could be
+   * sent twice.
+   */
+  const [sentOptionMessageId, setSentOptionMessageId] = useState<string | null>(null);
+  const activeOptionLabels =
+    activeOptionSource !== null && activeOptionSource.messageId !== sentOptionMessageId
+      ? activeOptionSource.options
+      : [];
   /** Selection state must follow the composer live, so subscribe to the draft text. */
   const composerPromptForOptions = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.prompt ?? "",
@@ -3412,7 +3414,11 @@ export default function ChatView(props: ChatViewProps) {
    * queues for the next tool boundary instead of being dropped.
    */
   const handleOptionSend = (label: string) => {
-    void sendAppMessageStable(label);
+    setSentOptionMessageId(activeOptionSource?.messageId ?? null);
+    void sendAppMessageStable(label).catch(() => {
+      // Nothing was sent, so the candidates are still the user's options.
+      setSentOptionMessageId(null);
+    });
   };
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
   const addTerminalContextToDraft = (selection: TerminalContextSelection) => {
