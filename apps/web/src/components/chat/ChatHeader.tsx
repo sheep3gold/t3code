@@ -106,6 +106,7 @@ export const ChatHeader = memo(function ChatHeader({
     isLoading: modelRouteLoading,
     refresh: refreshModelRoute,
   } = useSessionModelRoute({
+    environmentId: activeThreadEnvironmentId,
     sessionId: providerSessionId,
     enabled: isServerThread && showModelRoute && providerSessionId !== null,
     trigger: modelRouteTrigger,
