@@ -331,7 +331,6 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
 
-  // Model route info display
   const threadProjection = useThreadProjection({
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
@@ -344,6 +343,8 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
           servedProjection.thread.activeProviderThreadId,
         )
       : null;
+  const [servedModelBarHeight, setServedModelBarHeight] = useState(32);
+  const servedModelTopInset = servedModel === null ? 0 : servedModelBarHeight;
   const deviceState = useEnvironmentQuery(
     deviceEnvironment.state({ environmentId: props.environmentId, input: {} }),
   );
@@ -1121,7 +1122,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
               anchorMessageId={anchorMessageId}
               submittedMessageId={submittedMessageId}
               contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
-              contentTopInset={0}
+              contentTopInset={servedModelTopInset}
               contentBottomInset={
                 estimatedOverlayHeight +
                 (showFloatingStatus ? FLOATING_WORKING_CONTROL_COVERAGE : 0)
@@ -1142,6 +1143,17 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
         <View className="flex-1" />
       )}
 
+      {showContent && servedModel !== null ? (
+        <View
+          pointerEvents="none"
+          className="absolute left-0 right-0 border-b border-border bg-screen px-4 py-2"
+          style={{ top: navigationHeaderHeight }}
+          onLayout={(event) => setServedModelBarHeight(event.nativeEvent.layout.height)}
+        >
+          <SessionModelIndicator model={servedModel} />
+        </View>
+      ) : null}
+
       {showContent ? (
         <ThreadBrowserFloat
           key={selectedThreadKey}
@@ -1149,7 +1161,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
           threadId={props.selectedThread.id}
           tabs={browserTabs.tabs}
           loaded={browserTabs.loaded}
-          top={navigationHeaderHeight + 8}
+          top={navigationHeaderHeight + servedModelTopInset + 8}
           onOpen={openBrowserPreview}
         />
       ) : null}
@@ -1218,11 +1230,6 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                   }}
                 />
                 <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
-                  {servedModel !== null && (
-                    <View className="px-4 py-2">
-                      <SessionModelIndicator model={servedModel} />
-                    </View>
-                  )}
                   {props.queuedRunEdit !== null ? (
                     <Animated.View
                       className="shrink-0"

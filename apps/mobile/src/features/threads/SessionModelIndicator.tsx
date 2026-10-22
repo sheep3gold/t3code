@@ -8,8 +8,8 @@ interface SessionModelIndicatorProps {
 
 export function SessionModelIndicator({ model }: SessionModelIndicatorProps) {
   return (
-    <View accessibilityLabel={`auto model: ${model}`} className="self-start">
-      <AppText className="text-xs text-muted-foreground" numberOfLines={1}>
+    <View accessibilityLabel={`auto model: ${model}`} className="max-w-full self-start">
+      <AppText className="text-xs text-foreground" numberOfLines={1}>
         auto → {model}
       </AppText>
     </View>
