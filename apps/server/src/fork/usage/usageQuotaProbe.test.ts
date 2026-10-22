@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -112,132 +113,65 @@ describe("usageQuotaProbe", () => {
     );
   });
 
-  it.live("kimi and kimi_cli probes read the Kimi Code plan windows from the shared home", () => {
-    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
-    return Effect.gen(function* () {
-      clearUsageQuotaProbeCache();
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fileSystem.makeTempDirectoryScoped();
-      yield* fileSystem.writeFileString(
-        path.join(home, "settings.json"),
-        JSON.stringify({
-          env: {
-            ANTHROPIC_BASE_URL: "https://api.kimi.com/coding/",
-            ANTHROPIC_AUTH_TOKEN: "sk-kimi",
-          },
-        }),
-      );
-      const settings = {
-        providerInstances: {
-          claude_kimi: { driver: "claudeAgent", config: { homePath: home } },
-          kimi_cli: { driver: "acpRegistry" },
-        },
-      } as never;
-      const expectedWindows = [
-        {
-          id: "limit_5h",
-          kind: "session",
-          label: "5 小时窗口",
-          usedPercent: 25,
-          resetsAt: "2026-10-21T05:56:50Z",
-        },
-        {
-          id: "limit_month_total",
-          kind: "monthly",
-          label: "本月总额度",
-          usedPercent: 0.3,
-          resetsAt: "2026-11-21T00:56:51Z",
-        },
-      ] as const;
-      // claude_kimi uses the Claude-home key.
-      const claudeLimits = yield* readInstanceUsageLimits(settings, "claude_kimi");
-      assert.isUndefined(claudeLimits?.unavailable);
-      assert.deepStrictEqual(claudeLimits?.windows, expectedWindows);
-      // kimi_cli reads the Kimi Code plan windows (may use native token or fallback).
-      const kimiCliLimits = yield* readInstanceUsageLimits(settings, "kimi_cli");
-      assert.isUndefined(kimiCliLimits?.unavailable);
-      assert.deepStrictEqual(kimiCliLimits?.windows, expectedWindows);
-      // Both instances should hit the usages endpoint.
-      assert.strictEqual(requests.length, 2);
-      assert.strictEqual(requests[0].url, "https://api.kimi.com/coding/v1/usages");
-      assert.strictEqual(requests[1].url, "https://api.kimi.com/coding/v1/usages");
-      // claude_kimi always uses the Claude-home key.
-      assert.strictEqual(requests[0].authorization, "Bearer sk-kimi");
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        stubClient(
-          {
-            limits: [
-              {
-                window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
-                detail: { limit: "100", remaining: "75", resetTime: "2026-10-21T05:56:51Z" },
-              },
-            ],
-            usages: {
-              limit_5h: { used_ratio: 0.25, reset_time: "2026-10-21T05:56:50Z" },
-              limit_month_total: { used_ratio: 0.003, reset_time: "2026-11-21T00:56:51Z" },
-            },
-          },
-          requests,
-        ),
-      ),
-    );
-  });
+  it.live(
+    "kimi_cli reads native token without a claude_kimi instance, then falls back when expired",
+    () => {
+      const requests: Array<{ url: string; authorization?: string | undefined }> = [];
+      return Effect.gen(function* () {
+        clearUsageQuotaProbeCache();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fileSystem.makeTempDirectoryScoped();
+        const credentialDir = path.join(home, ".kimi", "credentials");
+        yield* fileSystem.makeDirectory(credentialDir, { recursive: true });
+        const settings = { providerInstances: { kimi_cli: { driver: "acpRegistry" } } } as never;
+        const originalHome = process.env.HOME;
+        process.env.HOME = home;
+        try {
+          const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+          yield* fileSystem.writeFileString(
+            path.join(credentialDir, "kimi-code.json"),
+            JSON.stringify({ access_token: "native-key", expires_at: nowMs / 1000 + 900 }),
+          );
+          const native = yield* readInstanceUsageLimits(settings, "kimi_cli");
+          assert.deepStrictEqual(
+            native?.windows.map((window) => window.usedPercent),
+            [25],
+          );
+          assert.deepStrictEqual(requests, [
+            { url: "https://api.kimi.com/coding/v1/usages", authorization: "Bearer native-key" },
+          ]);
 
-  it.live("kimi_cli reads the Kimi Code plan windows (uses native token or fallback)", () => {
-    const requests: Array<{ url: string; authorization?: string | undefined }> = [];
-    return Effect.gen(function* () {
-      clearUsageQuotaProbeCache();
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fileSystem.makeTempDirectoryScoped();
-      yield* fileSystem.writeFileString(
-        path.join(home, "settings.json"),
-        JSON.stringify({
-          env: {
-            ANTHROPIC_BASE_URL: "https://api.kimi.com/coding/",
-            ANTHROPIC_AUTH_TOKEN: "sk-kimi",
-          },
-        }),
+          clearUsageQuotaProbeCache();
+          yield* fileSystem.writeFileString(
+            path.join(credentialDir, "kimi-code.json"),
+            JSON.stringify({ access_token: "expired-key", expires_at: 1 }),
+          );
+          const fallbackHome = path.join(home, ".claude-kimi");
+          yield* fileSystem.makeDirectory(fallbackHome);
+          yield* fileSystem.writeFileString(
+            path.join(fallbackHome, "settings.json"),
+            JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "stable-key" } }),
+          );
+          const fallback = yield* readInstanceUsageLimits(settings, "kimi_cli");
+          assert.deepStrictEqual(
+            fallback?.windows.map((window) => window.usedPercent),
+            [25],
+          );
+          assert.deepStrictEqual(requests[1], {
+            url: "https://api.kimi.com/coding/v1/usages",
+            authorization: "Bearer stable-key",
+          });
+        } finally {
+          if (originalHome === undefined) delete process.env.HOME;
+          else process.env.HOME = originalHome;
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(stubClient({ usages: { limit_5h: { used_ratio: 0.25 } } }, requests)),
       );
-      const settings = {
-        providerInstances: {
-          claude_kimi: { driver: "claudeAgent", config: { homePath: home } },
-          kimi_cli: { driver: "acpRegistry" },
-        },
-      } as never;
-      const expectedWindows = [
-        {
-          id: "limit_5h",
-          kind: "session",
-          label: "5 小时窗口",
-          usedPercent: 25,
-          resetsAt: "2026-10-21T05:56:50Z",
-        },
-      ] as const;
-      // kimi_cli reads the Kimi Code plan windows (may use native token or fallback).
-      const kimiCliLimits = yield* readInstanceUsageLimits(settings, "kimi_cli");
-      assert.isUndefined(kimiCliLimits?.unavailable);
-      assert.deepStrictEqual(kimiCliLimits?.windows, expectedWindows);
-      // The request should hit the usages endpoint.
-      assert.strictEqual(requests.length, 1);
-      assert.strictEqual(requests[0].url, "https://api.kimi.com/coding/v1/usages");
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        stubClient(
-          {
-            usages: {
-              limit_5h: { used_ratio: 0.25, reset_time: "2026-10-21T05:56:50Z" },
-            },
-          },
-          requests,
-        ),
-      ),
-    );
-  });
+    },
+  );
 
   it.live("deepseek probe reports the CNY prepaid balance with its top-up/granted split", () => {
     const requests: Array<{ url: string; authorization?: string | undefined }> = [];
