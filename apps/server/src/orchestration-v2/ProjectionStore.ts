@@ -654,6 +654,9 @@ export function upsertProviderTurn(
     ...((next.tokenUsage ?? current?.tokenUsage) === undefined
       ? {}
       : { tokenUsage: next.tokenUsage ?? current?.tokenUsage }),
+    ...((next.servedModel ?? current?.servedModel) === undefined
+      ? {}
+      : { servedModel: next.servedModel ?? current?.servedModel }),
   });
 }
 
@@ -2299,7 +2302,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           }
           case "provider-turn.updated": {
             const existingRows =
-              event.payload.tokenUsage === undefined
+              event.payload.tokenUsage === undefined || event.payload.servedModel === undefined
                 ? yield* sql<PayloadRow>`
                     SELECT payload_json
                     FROM orchestration_v2_projection_provider_turns

@@ -4074,6 +4074,73 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("records the model each root request reports", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-served-model"),
+          text: "Continue.",
+          attachments: [],
+        }),
+      );
+      const snapshot = (id: string, uuid: string, model: string, parent: string | null = null) =>
+        claudeSdkFrame({
+          type: "assistant",
+          message: {
+            model,
+            id,
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: "Working." }],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: zeroUsage,
+          },
+          parent_tool_use_id: parent,
+          uuid,
+          session_id: WAKE_NATIVE_SESSION,
+        });
+      // The model gateway's `auto` names the deployment it picked on every response.
+      const frames = [
+        usageStreamFrame({
+          type: "message_start",
+          message: { id: "msg_a", model: "minimax/MiniMax-M3.1-Flash", usage: zeroUsage },
+        }),
+        snapshot("msg_a", "00000000-0000-4000-8000-000000000680", "minimax/MiniMax-M3.1-Flash"),
+        // A subagent's request and Claude's own notices say nothing about the root model.
+        usageStreamFrame(
+          {
+            type: "message_start",
+            message: { id: "msg_child", model: "kimi/k3", usage: zeroUsage },
+          },
+          "child-tool",
+        ),
+        snapshot("msg_child", "00000000-0000-4000-8000-000000000681", "kimi/k3", "child-tool"),
+        snapshot("msg_notice", "00000000-0000-4000-8000-000000000682", "<synthetic>"),
+        // A later request of the same turn is routed elsewhere.
+        snapshot("msg_b", "00000000-0000-4000-8000-000000000683", "glm/glm-5.3"),
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000684", result: "Done." }),
+      ];
+      for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
+      const terminal = yield* Queue.take(harness.terminalReceipts);
+      assert.equal(terminal.status, "completed");
+      const served = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" && event.providerTurn.servedModel !== undefined
+          ? [event.providerTurn.servedModel]
+          : [],
+      );
+      assert.deepEqual(served, ["minimax/MiniMax-M3.1-Flash", "glm/glm-5.3"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect("fills zero message_start input from a positive assistant snapshot", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;

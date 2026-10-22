@@ -1,102 +1,33 @@
-import { type ServerModelRouteInfo } from "@t3tools/contracts";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 
 interface SessionModelIndicatorProps {
-  readonly info: ServerModelRouteInfo | null;
-  readonly isLoading: boolean;
-  readonly error: Error | null;
-  readonly onRefresh?: () => void;
+  /** `provider/model` as the model gateway reports it, e.g. `minimax/MiniMax-M3.1-Flash`. */
+  readonly model: string;
   readonly className?: string;
 }
 
-/** 显示文本：glm/glm-5.3 (MEDIUM档) */
-function formatSessionRouteLabel(input: {
-  readonly provider: string;
-  readonly model: string;
-  readonly tier: string;
-}): string {
-  const { provider, model, tier } = input;
-  const section = provider && model ? `${provider}/${model}` : "";
-  return tier ? `${section} (${tier}档)` : section;
-}
-
-/**
- * 显示当前会话实际使用的模型（provider/model 和档位）。
- * 失败或加载中时显示占位符，点击可刷新。
- */
-export function SessionModelIndicator({
-  info,
-  isLoading,
-  error,
-  onRefresh,
-  className,
-}: SessionModelIndicatorProps) {
-  const label = info ? formatSessionRouteLabel(info) : null;
-  const showPlaceholder = !label || isLoading;
-
-  const handleClick = () => {
-    if (onRefresh) {
-      void onRefresh();
-    }
-  };
-
-  if (showPlaceholder) {
-    if (isLoading) {
-      return <span className={cn("text-xs text-muted-foreground", className)}>加载中...</span>;
-    }
-    if (error) {
-      return (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                onClick={handleClick}
-                className={cn(
-                  "text-xs text-muted-foreground hover:text-foreground cursor-pointer",
-                  className,
-                )}
-                aria-label="模型信息不可用，点击重试"
-              />
-            }
-          >
-            模型信息不可用
-          </TooltipTrigger>
-          <TooltipPopup side="bottom">{error.message || "无法获取模型路由信息"}</TooltipPopup>
-        </Tooltip>
-      );
-    }
-    return null;
-  }
-
+/** 选 auto 时显示最近一次请求实际落到的模型（网关在响应里报的 provider/模型）。 */
+export function SessionModelIndicator({ model, className }: SessionModelIndicatorProps) {
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <button
-            type="button"
-            onClick={handleClick}
-            className={cn(
-              "text-xs text-muted-foreground hover:text-foreground cursor-pointer transition-colors",
-              className,
-            )}
-            aria-label={`当前模型: ${label}`}
+          <span
+            className={cn("max-w-64 truncate text-xs text-muted-foreground", className)}
+            aria-label={`auto 实际模型: ${model}`}
           />
         }
       >
-        {label}
+        auto → {model}
       </TooltipTrigger>
       <TooltipPopup side="bottom">
         <div className="space-y-1">
-          <div className="font-medium">当前模型</div>
+          <div className="font-medium">auto 实际模型</div>
+          <div className="text-xs text-muted-foreground">{model}</div>
           <div className="text-xs text-muted-foreground">
-            {info?.provider}/{info?.model}
+            按最近一次请求更新，降级换模型时会跟着变
           </div>
-          <div className="text-xs text-muted-foreground">档位: {info?.tier}</div>
-          {info?.tier !== info?.baseTier && (
-            <div className="text-xs text-muted-foreground">基础档位: {info?.baseTier}</div>
-          )}
         </div>
       </TooltipPopup>
     </Tooltip>

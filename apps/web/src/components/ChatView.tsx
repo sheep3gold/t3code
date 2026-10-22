@@ -376,7 +376,11 @@ import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSki
 import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useProjectClone } from "../state/projectClones";
-import { projectCloneDisplayName, projectCloneProgressSummary } from "@t3tools/contracts";
+import {
+  latestServedModel,
+  projectCloneDisplayName,
+  projectCloneProgressSummary,
+} from "@t3tools/contracts";
 import {
   type EnvironmentPresentation,
   useEnvironmentProviders,
@@ -7929,9 +7933,14 @@ export default function ChatView(props: ChatViewProps) {
             onOpenThread={onOpenRelatedThreadStable}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
             onNewThreadInProject={handleNewThreadInActiveProjectStable}
-            threadProjection={serverProjection}
-            modelRouteTrigger={serverLatestRun?.runId ?? null}
-            showModelRoute={activeThread.modelSelection.model === "auto"}
+            servedModel={
+              activeThread.modelSelection.model === "auto" && serverProjection !== null
+                ? latestServedModel(
+                    serverProjection.providerTurns,
+                    serverProjection.thread.activeProviderThreadId,
+                  )
+                : null
+            }
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
               : {})}
