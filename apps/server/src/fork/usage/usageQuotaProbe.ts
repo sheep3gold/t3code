@@ -1080,7 +1080,7 @@ const ANTIGRAVITY_TOKEN_FILE = "antigravity-acp/acp_token.json";
 const ANTIGRAVITY_USER_AGENT = "antigravity/1.1.1 linux/amd64";
 
 /* ------------------------------------------------------------------ */
-/* Kiro (CodeWhisperer GetUsageLimits)                                 */
+/* Kiro (CodeWhisperer GetUsageLimits via xjp proxy)                   */
 /* ------------------------------------------------------------------ */
 
 const CODEWHISPERER_USAGE_TARGET = "AmazonCodeWhispererService.GetUsageLimits";
@@ -1101,7 +1101,6 @@ interface CodeWhispererUsageLimits {
 }
 
 const kiroProbe = (
-  client: HttpClient.HttpClient,
   homeDirectory: string,
   commandPath: string,
 ): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
@@ -1112,23 +1111,15 @@ const kiroProbe = (
       return windowUnavailable(checkedAt, "kiro-cli 未登录或没有凭证");
     }
 
-    const url = `https://codewhisperer.${token.region}.amazonaws.com/`;
-    const document = yield* client
-      .execute(
-        HttpClientRequest.post(url).pipe(
-          HttpClientRequest.setHeader("x-amz-target", CODEWHISPERER_USAGE_TARGET),
-          HttpClientRequest.setHeader("Content-Type", "application/x-amz-json-1.0"),
-          HttpClientRequest.setHeader("Authorization", `Bearer ${token.accessToken}`),
-          HttpClientRequest.bodyText("{}", "application/x-amz-json-1.0"),
-        ),
-      )
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap((response) => response.text),
-        Effect.flatMap(decodeJson),
-        Effect.timeout(PROBE_TIMEOUT),
-        Effect.mapError(probeError("kiro")),
-      );
+    const hostname = `codewhisperer.${token.region}.amazonaws.com`;
+    const document = yield* getJsonViaXjp(
+      "kiro",
+      hostname,
+      "/",
+      token.accessToken,
+      { "x-amz-target": CODEWHISPERER_USAGE_TARGET },
+      { contentType: "application/x-amz-json-1.0", body: "{}" },
+    );
 
     const limits =
       typeof document === "object" && document !== null
@@ -1448,7 +1439,7 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
                       : probe.kind === "antigravity" && probe.home !== null
                         ? antigravityProbe(fileSystem, path, probe.home)
                         : probe.kind === "kiro" && probe.home !== null && probe.commandPath !== undefined
-                          ? kiroProbe(client, probe.home, probe.commandPath)
+                          ? kiroProbe(probe.home, probe.commandPath)
                           : Effect.fail(
                               new UsageQuotaProbeError({
                                 probe: probe.kind,

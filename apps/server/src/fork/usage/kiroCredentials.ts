@@ -89,7 +89,8 @@ const readStoredToken = (homeDirectory: string): KiroOauthToken | null => {
 /**
  * Ask kiro-cli to renew its token. `whoami` is the cheapest command that
  * forces the refresh; whether it actually renewed is decided by re-reading
- * the database, so a failure here needs no special handling.
+ * the database, so a failure here needs no special handling. The CLI itself
+ * also rides the xjp proxy to match the CodeWhisperer API call path.
  */
 const refreshStoredToken = (homeDirectory: string, commandPath: string): Effect.Effect<void> =>
   Effect.promise(
@@ -98,7 +99,15 @@ const refreshStoredToken = (homeDirectory: string, commandPath: string): Effect.
         NodeChildProcess.execFile(
           commandPath,
           ["whoami"],
-          { timeout: REFRESH_TIMEOUT_MS, env: { ...process.env, HOME: homeDirectory } },
+          {
+            timeout: REFRESH_TIMEOUT_MS,
+            env: {
+              ...process.env,
+              HOME: homeDirectory,
+              HTTP_PROXY: "http://127.0.0.1:2080",
+              HTTPS_PROXY: "http://127.0.0.1:2080",
+            },
+          },
           () => resolve(),
         );
       }),
