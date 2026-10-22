@@ -3045,6 +3045,8 @@ interface ActiveClaudeTurnContext {
   // as zeros, so they only fill in input the stream has not reported. A
   // compaction makes the usage stale (null) without forgetting the request.
   streamUsage: { readonly messageId: string; usage: ClaudeMessageUsage | null } | null;
+  // The model the latest root request reported, last sent on the provider turn.
+  servedModel: string | null;
   readonly toolCalls: Map<string, ActiveClaudeToolCall>;
   readonly ignoredTaskIds: Set<string>;
   readonly announcedUsageLimits: Set<string>;
@@ -3806,6 +3808,39 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               startedAt: context.startedAt,
               completedAt: null,
               tokenUsage,
+            },
+          });
+        });
+
+        // A routing endpoint (the model gateway's `auto`) names the model it picked on each
+        // response, so the turn records it as soon as a request reports a different one.
+        const noteServedModel = Effect.fnUntraced(function* (
+          context: ActiveClaudeTurnContext,
+          reported: unknown,
+        ) {
+          const model = typeof reported === "string" ? reported.trim() : "";
+          if (model.length === 0 || model === "<synthetic>" || model === context.servedModel)
+            return;
+          context.servedModel = model;
+          yield* emitProviderEvent({
+            type: "provider_turn.updated",
+            driver: CLAUDE_PROVIDER,
+            threadId: context.input.threadId,
+            providerTurn: {
+              id: context.providerTurnId,
+              providerThreadId: context.input.providerThread.id,
+              nodeId: context.input.rootNodeId,
+              runAttemptId: context.input.attemptId,
+              nativeTurnRef: {
+                driver: CLAUDE_PROVIDER,
+                nativeId: context.nativeTurnId,
+                strength: "strong",
+              },
+              ordinal: context.providerTurnOrdinal,
+              status: "running",
+              startedAt: context.startedAt,
+              completedAt: null,
+              servedModel: model,
             },
           });
         });
@@ -7014,6 +7049,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (event.type === "message_start") {
               reasoning.messageId = event.message.id;
               reasoning.streamBlocks.clear();
+              yield* noteServedModel(context, event.message.model);
               const usage: ClaudeMessageUsage | undefined = event.message.usage;
               context.streamUsage =
                 usage === undefined ? null : { messageId: event.message.id, usage };
@@ -7323,6 +7359,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
             }
             const parentToolUseId = message.parent_tool_use_id;
+            if (parentToolUseId === null) yield* noteServedModel(context, message.message.model);
             const snapshotModel =
               typeof message.message.model === "string" ? message.message.model.trim() : "";
             // Claude's own notices (a usage limit, an API error) carry
@@ -8727,6 +8764,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 blocks: new Map(),
               },
               streamUsage: null,
+              servedModel: null,
               toolCalls: new Map(),
               ignoredTaskIds: new Set(),
               announcedUsageLimits: new Set(),

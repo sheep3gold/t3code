@@ -293,7 +293,6 @@ import {
   OtlpEndpointCheckInput,
   OtlpEndpointCheckResult,
   ServerConfig,
-  ServerModelRouteInfo,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -505,7 +504,6 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
-  serverGetModelRoute: "server.getModelRoute",
 
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
@@ -612,14 +610,6 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
   }),
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([EnvironmentAuthorizationError, ProviderSetupError]),
-});
-
-const WsServerGetModelRouteRpc = Rpc.make(WS_METHODS.serverGetModelRoute, {
-  payload: Schema.Struct({
-    providerSessionId: TrimmedNonEmptyString,
-  }),
-  success: ServerModelRouteInfo,
-  error: Schema.Union([Schema.Unknown]),
 });
 
 const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
@@ -2104,7 +2094,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeviceDetailRpc,
   WsDeviceActionRpc,
   WsSubscribeDeviceStateRpc,
-  WsServerGetModelRouteRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,

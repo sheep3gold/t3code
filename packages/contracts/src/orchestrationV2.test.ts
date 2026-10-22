@@ -24,6 +24,7 @@ import {
 } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  latestServedModel,
   OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
   OrchestrationV2Command,
@@ -1552,5 +1553,20 @@ describe("latestProviderTurnForAttempt", () => {
     ];
     expect(latestProviderTurnForAttempt(turns, RunAttemptId.make("goal-attempt"))?.id).toBe("last");
     expect(latestProviderTurnForAttempt(turns, null)).toBeUndefined();
+  });
+});
+
+describe("latestServedModel", () => {
+  it("returns the newest reported model on the provider thread", () => {
+    const thread = ProviderThreadId.make("pt-auto");
+    const turns = [
+      { providerThreadId: thread, ordinal: 1, servedModel: "minimax/MiniMax-M3.1-Flash" },
+      { providerThreadId: thread, ordinal: 3, servedModel: "glm/glm-5.3" },
+      { providerThreadId: thread, ordinal: 4 },
+      { providerThreadId: ProviderThreadId.make("pt-other"), ordinal: 9, servedModel: "kimi/k3" },
+    ];
+    expect(latestServedModel(turns, thread)).toBe("glm/glm-5.3");
+    expect(latestServedModel(turns, ProviderThreadId.make("pt-none"))).toBeNull();
+    expect(latestServedModel(turns, null)).toBeNull();
   });
 });

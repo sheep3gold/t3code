@@ -5,7 +5,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { SessionModelIndicator } from "./SessionModelIndicator";
-import { useSessionModelRoute, extractProviderSessionId } from "../../hooks/useSessionModelRoute";
+import { latestServedModel } from "@t3tools/contracts";
 import { useThreadProjection } from "../../state/use-thread-detail";
 import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
@@ -336,18 +336,14 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
   });
-  const providerSessionId = extractProviderSessionId(threadProjection?.projection ?? null);
-  const {
-    info: modelRouteInfo,
-    error: modelRouteError,
-    isLoading: modelRouteLoading,
-    refresh: refreshModelRoute,
-  } = useSessionModelRoute({
-    environmentId: props.environmentId,
-    sessionId: providerSessionId,
-    enabled: props.selectedThread.modelSelection.model === "auto" && providerSessionId !== null,
-    trigger: props.selectedThread.latestRun?.runId ?? null,
-  });
+  const servedProjection = threadProjection?.projection ?? null;
+  const servedModel =
+    props.selectedThread.modelSelection.model === "auto" && servedProjection !== null
+      ? latestServedModel(
+          servedProjection.providerTurns,
+          servedProjection.thread.activeProviderThreadId,
+        )
+      : null;
   const deviceState = useEnvironmentQuery(
     deviceEnvironment.state({ environmentId: props.environmentId, input: {} }),
   );
@@ -1222,17 +1218,11 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                   }}
                 />
                 <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
-                  {props.selectedThread.modelSelection.model === "auto" &&
-                    providerSessionId !== null && (
-                      <View className="px-4 py-2">
-                        <SessionModelIndicator
-                          info={modelRouteInfo}
-                          isLoading={modelRouteLoading}
-                          error={modelRouteError}
-                          onRefresh={refreshModelRoute}
-                        />
-                      </View>
-                    )}
+                  {servedModel !== null && (
+                    <View className="px-4 py-2">
+                      <SessionModelIndicator model={servedModel} />
+                    </View>
+                  )}
                   {props.queuedRunEdit !== null ? (
                     <Animated.View
                       className="shrink-0"

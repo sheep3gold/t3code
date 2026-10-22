@@ -982,8 +982,31 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
+  /**
+   * The model the provider reports for the turn's latest request. A routing endpoint such as the
+   * model gateway's `auto` answers with the model it actually picked, which can change between
+   * requests of one turn.
+   */
+  servedModel: Schema.optional(Schema.String),
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
+
+/** The model that answered the newest request on a provider thread, if the provider reported one. */
+export function latestServedModel(
+  providerTurns: ReadonlyArray<
+    Pick<OrchestrationV2ProviderTurn, "providerThreadId" | "ordinal" | "servedModel">
+  >,
+  providerThreadId: ProviderThreadId | null | undefined,
+): string | null {
+  let latest: { readonly ordinal: number; readonly model: string } | null = null;
+  for (const turn of providerTurns) {
+    if (turn.providerThreadId !== providerThreadId || turn.servedModel === undefined) continue;
+    if (latest === null || turn.ordinal > latest.ordinal) {
+      latest = { ordinal: turn.ordinal, model: turn.servedModel };
+    }
+  }
+  return latest?.model ?? null;
+}
 
 /**
  * A Codex goal keeps one run open across several native turns, so an attempt's first turn is not
