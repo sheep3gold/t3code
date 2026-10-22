@@ -60,6 +60,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 import { makeFactoryApiKeyResolver } from "./factoryApiKey.ts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { ensureKiroOauthToken, type KiroOauthToken } from "./kiroCredentials.ts";
 
 /** Instances refresh at most this often; the page polls every 30s, and
  * Anthropic's OAuth usage endpoint answers bursts with 429s. */
@@ -1078,6 +1079,88 @@ const ANTIGRAVITY_TOKEN_FILE = "antigravity-acp/acp_token.json";
 /** Code Assist rejects quota reads without a client user agent (403 SUBSCRIPTION_REQUIRED). */
 const ANTIGRAVITY_USER_AGENT = "antigravity/1.1.1 linux/amd64";
 
+/* ------------------------------------------------------------------ */
+/* Kiro (CodeWhisperer GetUsageLimits)                                 */
+/* ------------------------------------------------------------------ */
+
+const CODEWHISPERER_USAGE_TARGET = "AmazonCodeWhispererService.GetUsageLimits";
+
+interface CodeWhispererUsageBreakdown {
+  readonly usageLimitWithPrecision?: number;
+  readonly currentUsageWithPrecision?: number;
+  readonly overageCap?: number;
+  readonly overageRate?: number;
+}
+
+interface CodeWhispererUsageLimits {
+  readonly subscriptionInfo?: {
+    readonly subscriptionTitle?: string;
+  };
+  readonly nextDateReset?: number;
+  readonly usageBreakdownList?: CodeWhispererUsageBreakdown[];
+}
+
+const kiroProbe = (
+  client: HttpClient.HttpClient,
+  homeDirectory: string,
+  commandPath: string,
+): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
+  Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const token = yield* ensureKiroOauthToken(homeDirectory, commandPath);
+    if (token === null) {
+      return windowUnavailable(checkedAt, "kiro-cli 未登录或没有凭证");
+    }
+
+    const url = `https://codewhisperer.${token.region}.amazonaws.com/`;
+    const document = yield* client
+      .execute(
+        HttpClientRequest.post(url).pipe(
+          HttpClientRequest.setHeader("x-amz-target", CODEWHISPERER_USAGE_TARGET),
+          HttpClientRequest.setHeader("Content-Type", "application/x-amz-json-1.0"),
+          HttpClientRequest.setHeader("Authorization", `Bearer ${token.accessToken}`),
+          HttpClientRequest.bodyText("{}", "application/x-amz-json-1.0"),
+        ),
+      )
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.text),
+        Effect.flatMap(decodeJson),
+        Effect.timeout(PROBE_TIMEOUT),
+        Effect.mapError(probeError("kiro")),
+      );
+
+    const limits =
+      typeof document === "object" && document !== null
+        ? (document as CodeWhispererUsageLimits)
+        : {};
+    const breakdown = limits.usageBreakdownList?.[0];
+    if (breakdown === undefined || typeof breakdown.usageLimitWithPrecision !== "number") {
+      return windowUnavailable(checkedAt, "CodeWhisperer 未返回额度窗口");
+    }
+
+    const limit = breakdown.usageLimitWithPrecision;
+    const used = breakdown.currentUsageWithPrecision ?? 0;
+    const remaining = Math.max(0, limit - used);
+    const usedPercent = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+
+    const windows: ServerProviderUsageWindow[] = [
+      {
+        id: "kiro_credits",
+        kind: "monthly",
+        label: limits.subscriptionInfo?.subscriptionTitle ?? "KIRO Credits",
+        usedPercent: Math.round(usedPercent * 10) / 10,
+        remaining: Math.round(remaining * 100) / 100,
+        remainingUnit: "credits",
+        ...(typeof limits.nextDateReset === "number" && limits.nextDateReset > 0
+          ? { resetsAt: isoFromEpochMs(limits.nextDateReset * 1000) }
+          : {}),
+      },
+    ];
+
+    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+  });
+
 const antigravityGroupName = (displayName: string | undefined): string =>
   displayName === undefined
     ? "模型"
@@ -1192,7 +1275,8 @@ type ProbeKind =
   | "deepseek"
   | "factory"
   | "minimax"
-  | "antigravity";
+  | "antigravity"
+  | "kiro";
 
 const HOME_ENV_BY_DRIVER: Record<string, string> = {
   claudeAgent: "CLAUDE_CONFIG_DIR",
@@ -1253,6 +1337,7 @@ const probeForInstance = (
   readonly kind: ProbeKind;
   readonly home: string | null;
   readonly etcdKey?: string;
+  readonly commandPath?: string;
 } | null => {
   const instance = settings.providerInstances[instanceKey as never];
   if (instanceKey === "claude_glm")
@@ -1294,6 +1379,18 @@ const probeForInstance = (
       kind: "factory",
       home: null,
       ...(etcdKey !== undefined ? { etcdKey } : {}),
+    };
+  }
+  if (instance !== undefined && (instanceKey === "kiro" || instance.driver === "acpRegistry")) {
+    const configCommandPath = ((instance?.config ?? {}) as { commandPath?: unknown }).commandPath;
+    const commandPath =
+      typeof configCommandPath === "string" && configCommandPath.trim().length > 0
+        ? configCommandPath.trim()
+        : instanceEnvVariable(settings, instanceKey, "KIRO_CLI_PATH");
+    return {
+      kind: "kiro",
+      home: process.env.HOME ?? null,
+      ...(commandPath !== null ? { commandPath } : {}),
     };
   }
   return null;
@@ -1350,12 +1447,14 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
                       ? factoryProbe(probe.etcdKey)
                       : probe.kind === "antigravity" && probe.home !== null
                         ? antigravityProbe(fileSystem, path, probe.home)
-                        : Effect.fail(
-                            new UsageQuotaProbeError({
-                              probe: probe.kind,
-                              detail: "instance home could not be resolved",
-                            }),
-                          );
+                        : probe.kind === "kiro" && probe.home !== null && probe.commandPath !== undefined
+                          ? kiroProbe(client, probe.home, probe.commandPath)
+                          : Effect.fail(
+                              new UsageQuotaProbeError({
+                                probe: probe.kind,
+                                detail: "instance home could not be resolved",
+                              }),
+                            );
 
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const limits = yield* run.pipe(
