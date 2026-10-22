@@ -23,8 +23,10 @@
  *   When the instance's `ANTHROPIC_BASE_URL` points at the Kimi Code plan
  *   (`api.kimi.com/coding`), it reads `GET /coding/v1/usages` instead — the
  *   endpoint kimi-cli's `/usage` renders: `used_ratio` per bucket for the
- *   5-hour window and the monthly quotas. Kimi CLI shares that plan and probe,
- *   using the stable Claude-home key rather than its short-lived OAuth token.
+ *   5-hour window and the monthly quotas. Kimi CLI (the `kimi_cli` instance)
+ *   uses its native OAuth token from `~/.kimi/credentials/kimi-code.json` first,
+ *   falling back to the stable Claude-home etcd key when the token is missing
+ *   or expired.
  * - `deepseek`: `GET api.deepseek.com/user/balance` (prepaid balance, CNY),
  *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
  * - `factory`: `GET api.factory.ai/api/organization/subscription/usage`, the
@@ -72,6 +74,7 @@ const PROBE_TIMEOUT = "10 seconds";
 const CLAUDE_SETTINGS_FILE = "settings.json";
 const CLAUDE_CREDENTIALS_FILE = ".credentials.json";
 const WORKBUDDY_ACCOUNTS_DIR = "/home/ubuntu/.workbuddy2api-hub/accounts";
+const KIMI_CLI_CREDENTIALS_FILE = "credentials/kimi-code.json";
 /** Credits older than this are labelled stale rather than silently served. */
 const WORKBUDDY_CREDITS_STALE_MS = 24 * 60 * 60 * 1000;
 const GLM_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
@@ -633,6 +636,33 @@ const readClaudeHomeApiKey = (
     );
   });
 
+/** Native Kimi CLI OAuth token from `~/.kimi/credentials/kimi-code.json`.
+ * The token is short-lived (900 s from issue); when missing or expired the
+ * caller should fall back to the stable Claude-home etcd key. */
+const readKimiCliOAuthToken = (
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+): Effect.Effect<string> =>
+  Effect.gen(function* () {
+    const homeDirectory = process.env.HOME ?? "";
+    if (homeDirectory.length === 0) return "";
+    const credentialsPath = path.join(homeDirectory, ".kimi", KIMI_CLI_CREDENTIALS_FILE);
+    const credentialsText = yield* fileSystem
+      .readFileString(credentialsPath)
+      .pipe(Effect.orElseSucceed(() => ""));
+    if (credentialsText.length === 0) return "";
+    const credentials = yield* decodeJson(credentialsText).pipe(Effect.orElseSucceed(() => null));
+    if (typeof credentials !== "object" || credentials === null) return "";
+    const record = credentials as Record<string, unknown>;
+    const accessToken = record.access_token;
+    const expiresAt = record.expires_at;
+    if (typeof accessToken !== "string" || accessToken.length === 0) return "";
+    if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return "";
+    const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
+    if (expiresAt * 1000 < nowMs) return ""; // Expired (expires_at is epoch seconds)
+    return accessToken;
+  });
+
 /* ------------------------------------------------------------------ */
 /* Kimi (Moonshot prepaid balance, or the Kimi Code plan windows)       */
 /* ------------------------------------------------------------------ */
@@ -717,10 +747,20 @@ const kimiProbe = (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
+  useNativeToken: boolean = false,
 ): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
   Effect.gen(function* () {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
+    let key = "";
+    if (useNativeToken) {
+      // Try the native Kimi CLI OAuth token first (short-lived, 900 s).
+      key = yield* readKimiCliOAuthToken(fileSystem, path);
+    }
+    // Fall back to the stable Claude-home etcd key (either native token missing/expired,
+    // or this is the claude_kimi instance that doesn't have a native token).
+    if (key.length === 0) {
+      key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
+    }
     if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
     if (yield* usesKimiCodePlan(fileSystem, path, home)) {
       return yield* kimiCodeProbe(client, key, checkedAt);
@@ -1195,6 +1235,7 @@ const probeForInstance = (
   readonly kind: ProbeKind;
   readonly home: string | null;
   readonly etcdKey?: string;
+  readonly useNativeKimiToken?: boolean;
 } | null => {
   const instance = settings.providerInstances[instanceKey as never];
   if (instanceKey === "claude_glm")
@@ -1203,8 +1244,11 @@ const probeForInstance = (
     return { kind: "claudeOAuth", home: instanceHome(settings, instanceKey) };
   }
   if (instanceKey === "codex_workbuddy") return { kind: "workbuddy", home: null };
-  if (instanceKey === "claude_kimi" || instanceKey === "kimi_cli")
-    return { kind: "kimi", home: instanceHome(settings, "claude_kimi") };
+  if (instanceKey === "claude_kimi")
+    return { kind: "kimi", home: instanceHome(settings, instanceKey) };
+  if (instanceKey === "kimi_cli")
+    // Kimi CLI uses its native OAuth token first, falling back to the Claude-home key.
+    return { kind: "kimi", home: instanceHome(settings, "claude_kimi"), useNativeKimiToken: true };
   if (instanceKey === "claude_deepseek")
     return { kind: "deepseek", home: instanceHome(settings, instanceKey) };
   if (instance?.driver === "antigravity") {
@@ -1279,7 +1323,7 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
           : probe.kind === "workbuddy"
             ? workbuddyProbe(fileSystem, path)
             : probe.kind === "kimi" && probe.home !== null
-              ? kimiProbe(client, fileSystem, path, probe.home)
+              ? kimiProbe(client, fileSystem, path, probe.home, probe.useNativeKimiToken)
               : probe.kind === "deepseek" && probe.home !== null
                 ? deepseekProbe(client, fileSystem, path, probe.home)
                 : probe.kind === "minimax" && probe.home !== null
