@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - shells out to kiro-cli and opens its SQLite token store read-only at the Node boundary
 /**
  * Kiro CLI credentials for the usage probe.
  *
@@ -56,9 +57,9 @@ const readStoredToken = (homeDirectory: string): KiroOauthToken | null => {
       readOnly: true,
       timeout: 2_000,
     });
-    const row = database
-      .prepare("select value from auth_kv where key = ?")
-      .get(KIRO_TOKEN_KEY) as { value?: unknown } | undefined;
+    const row = database.prepare("select value from auth_kv where key = ?").get(KIRO_TOKEN_KEY) as
+      | { value?: unknown }
+      | undefined;
     if (row === undefined || typeof row.value !== "string") return null;
     const stored = JSON.parse(row.value) as {
       readonly access_token?: unknown;
