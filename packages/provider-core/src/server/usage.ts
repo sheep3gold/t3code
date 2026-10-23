@@ -101,6 +101,12 @@ export interface ProviderUsageScan {
     | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
     | null;
   readonly refreshing?: true;
+  /**
+   * The configured instances this source belongs to. Transcript sources are
+   * attributed by directory instead; a scan that reads per-instance stores
+   * names its owners here.
+   */
+  readonly instanceIds?: ReadonlyArray<ProviderInstanceId>;
 }
 
 export interface ProviderUsageScanInput<Config> {

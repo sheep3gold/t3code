@@ -130,7 +130,8 @@ export interface ProviderDriver<Config, R = never, UsageR = never> {
   readonly create: (
     input: ProviderDriverCreateInput<Config>,
   ) => Effect.Effect<ProviderInstance, ProviderDriverError, R | Scope.Scope>;
-  readonly usage?: ProviderUsageReader<Config, UsageR>;
+  /** A registry driver hosts several agents, each of which may keep its own usage store. */
+  readonly usage?: ProviderUsageReader<Config, UsageR> | ReadonlyArray<ProviderUsageReader<Config, UsageR>>;
 }
 
 export type AnyProviderDriver<R = never, UsageR = unknown> = ProviderDriver<any, R, UsageR>;
