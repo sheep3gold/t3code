@@ -221,6 +221,19 @@ function removePath(
   });
 }
 
+// `git worktree add` needs a path outside the repo, so it lands next to the scoped temp dir
+// and outlives it unless removed explicitly.
+function siblingWorktreePath(
+  repoDir: string,
+  prefix: string,
+): Effect.Effect<string, never, FileSystem.FileSystem | Scope.Scope> {
+  const worktreePath = NodePath.join(repoDir, "..", `${prefix}-${NodePath.basename(repoDir)}`);
+  return Effect.as(
+    Effect.addFinalizer(() => Effect.ignore(removePath(worktreePath))),
+    worktreePath,
+  );
+}
+
 function makeDirectory(
   dirPath: string,
 ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
@@ -6283,11 +6296,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["add", "existing.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-existing-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-existing");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
 
       const setupCalls: ProjectSetupScriptRunner.ProjectSetupScriptRunnerInput[] = [];
@@ -6340,11 +6349,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Reused stale PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-reused-stale"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-reused-stale-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-reused-stale");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-reused-stale"]);
 
       yield* runGit(repoDir, ["checkout", "-b", "author-push", "origin/feature/pr-reused-stale"]);
@@ -6395,11 +6400,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Reused setup PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-reused-setup"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-reused-setup-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-reused-setup");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-reused-setup"]);
 
       yield* runGit(repoDir, ["checkout", "-b", "setup-author-push", "feature/pr-reused-setup"]);
@@ -6460,11 +6461,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Reused current PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-reused-current"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-reused-current-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-reused-current");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-reused-current"]);
       const currentHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
 
@@ -6515,11 +6512,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Force-pushed PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-force-pushed"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-force-pushed-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-force-pushed");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-force-pushed"]);
       const staleHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
 
@@ -6589,11 +6582,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Local commit PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-local-commit"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-local-commit-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-local-commit");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-local-commit"]);
       const upstreamHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
 
@@ -6667,11 +6656,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Dirty worktree PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-dirty-worktree"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-dirty-worktree-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-dirty-worktree");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-dirty-worktree"]);
       const staleHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
 
@@ -6887,11 +6872,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Contributor commit on the fork main"]);
       yield* runGit(repoDir, ["push", "-u", "fork-seed", "fork-main-collision:main"]);
       yield* runGit(repoDir, ["checkout", "-b", "feature/root-work", "main"]);
-      const mainWorktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `local-main-${NodePath.basename(repoDir)}`,
-      );
+      const mainWorktreePath = yield* siblingWorktreePath(repoDir, "local-main");
       yield* runGit(repoDir, ["worktree", "add", mainWorktreePath, "main"]);
       const localMainBefore = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
       // Leave the fork tracking ref stale so an unnecessary fetch would change it.
@@ -7110,11 +7091,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Reused fork PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-reused-fork"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = NodePath.join(
-        repoDir,
-        "..",
-        `pr-reused-fork-${NodePath.basename(repoDir)}`,
-      );
+      const worktreePath = yield* siblingWorktreePath(repoDir, "pr-reused-fork");
       yield* runGit(repoDir, [
         "worktree",
         "add",
