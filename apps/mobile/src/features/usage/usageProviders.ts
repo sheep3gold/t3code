@@ -11,6 +11,7 @@ export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "pi",
   "kimi",
   "minimax",
+  "kiro",
 ];
 
 /** The usage series a provider driver reports under, or null for drivers without one. */
@@ -29,6 +30,7 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   pi: "Pi",
   kimi: "Kimi CLI",
   minimax: "MiniMax Code",
+  kiro: "Kiro CLI",
 };
 
 export function useProviderColors(): Record<UsageProviderKind, string> {
@@ -43,6 +45,7 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     pi: "#4d9f8a",
     kimi: "#6b7fd7",
     minimax: "#e0566b",
+    kiro: "#7c5cbf",
   };
 }
 

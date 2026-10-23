@@ -21,6 +21,7 @@ export const UsageProviderKind = Schema.Literals([
   "pi",
   "kimi",
   "minimax",
+  "kiro",
 ]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
@@ -174,8 +175,22 @@ export const UsageInstanceUsage = Schema.Struct({
   costUsd: Schema.Number,
   /** Records whose tokens counted toward totals but had no matching rate. */
   unpricedRecords: NonNegativeInt,
+  /** Tokens used since the start of today (UTC), same estimation as totalTokens. */
+  todayTokens: Schema.optional(NonNegativeInt),
   /** Total tokens across all time (unlimited history). */
   allTimeTokens: Schema.optional(NonNegativeInt),
+  /**
+   * Billed credits for credit-metered providers (Kiro). Absent elsewhere.
+   * Token figures for those providers are estimates derived from context
+   * occupancy; credits are the provider's own billing numbers.
+   */
+  credits: Schema.optional(
+    Schema.Struct({
+      today: Schema.Number,
+      trailing7Days: Schema.Number,
+      allTime: Schema.Number,
+    }),
+  ),
   /** Per-model rollups, sorted by token total descending. */
   models: Schema.Array(
     Schema.Struct({
