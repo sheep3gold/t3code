@@ -19,6 +19,11 @@ export interface UsageRecord {
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
   readonly reportedCostUsd: number | null;
+  /**
+   * Billed credits for providers whose plans meter in credits instead of
+   * tokens (Kiro). Absent for every token-metered provider.
+   */
+  readonly credits?: number | null;
   readonly speed: UsageSpeed;
   readonly dedupeKey: string | null;
 }

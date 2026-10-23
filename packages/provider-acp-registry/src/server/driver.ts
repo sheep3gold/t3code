@@ -26,6 +26,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { AcpRegistryAdapterV2Driver, type AcpRegistryAdapterV2DriverEnv } from "./adapter.ts";
 import { kimiUsageReader } from "./kimiUsage.ts";
+import { kiroUsageReader } from "./kiroUsage.ts";
 import { minimaxUsageReader } from "./minimaxUsage.ts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
@@ -478,9 +479,10 @@ export const AcpRegistryDriver: ProviderDriver<
   },
   configSchema: AcpRegistrySettings,
   defaultConfig: () => decodeSettings({}),
-  // Only Kimi CLI and MiniMax Code keep per-response token usage; each reader
-  // stays empty for the other registry agents.
-  usage: [kimiUsageReader, minimaxUsageReader],
+  // Kimi CLI and MiniMax Code keep exact per-request token usage; Kiro CLI
+  // sessions carry per-turn credits and context occupancy, from which token
+  // figures are estimated. Each reader stays empty for the other agents.
+  usage: [kimiUsageReader, minimaxUsageReader, kiroUsageReader],
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;

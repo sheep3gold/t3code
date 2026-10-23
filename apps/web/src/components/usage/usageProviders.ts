@@ -50,6 +50,11 @@ export const PROVIDER_PRESENTATION = {
     color: "#e0566b",
     driverKind: ProviderDriverKind.make("acpRegistry"),
   },
+  kiro: {
+    label: "Kiro CLI",
+    color: "#7c5cbf",
+    driverKind: ProviderDriverKind.make("acpRegistry"),
+  },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
 export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];

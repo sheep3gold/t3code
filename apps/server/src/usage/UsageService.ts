@@ -707,7 +707,8 @@ export const make = Effect.gen(function* () {
     // Midnight-to-midnight UTC arithmetic, so `days` counts calendar days
     // ending today rather than a rolling 24h multiple.
     const DAY_MS = 24 * 60 * 60 * 1000;
-    const sinceDayStartMs = Math.floor(startedAtMs / DAY_MS) * DAY_MS - (days - 1) * DAY_MS;
+    const todayStartMs = Math.floor(startedAtMs / DAY_MS) * DAY_MS;
+    const sinceDayStartMs = todayStartMs - (days - 1) * DAY_MS;
     const windowStartMs = sinceDayStartMs - MTIME_SLACK_MS;
     const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
@@ -729,8 +730,15 @@ export const make = Effect.gen(function* () {
       /** Present when the instance's transcript directory exists on disk. */
       hasDir: boolean;
       models: Map<string, { totalTokens: number; costUsd: number }>;
+      /** Tokens since the start of today (UTC). */
+      todayTokens: number;
       /** All-time tokens (unlimited history). */
       allTimeTokens: number;
+      /** Billed credits (Kiro); null until a credit-metered record shows up. */
+      creditsToday: number;
+      creditsWindow: number;
+      creditsAllTime: number;
+      hasCredits: boolean;
     }
     const byInstance = new Map<string, MutableInstance>();
     const instanceEntry = (instanceKey: string): MutableInstance => {
@@ -742,7 +750,12 @@ export const make = Effect.gen(function* () {
           unpricedRecords: 0,
           hasDir: false,
           models: new Map(),
+          todayTokens: 0,
           allTimeTokens: 0,
+          creditsToday: 0,
+          creditsWindow: 0,
+          creditsAllTime: 0,
+          hasCredits: false,
         };
         byInstance.set(instanceKey, entry);
       }
@@ -785,25 +798,55 @@ export const make = Effect.gen(function* () {
       for (const file of scannedDir.files ?? []) {
         for (const record of file.records) {
           const tokens = totalTokens(record.totals);
-          if (tokens === 0 && record.reportedCostUsd === null) continue;
+          const credits =
+            typeof record.credits === "number" && Number.isFinite(record.credits)
+              ? record.credits
+              : 0;
+          if (tokens === 0 && record.reportedCostUsd === null && credits === 0) continue;
+
+          const isToday = record.timestampMs >= todayStartMs;
+          const inWindow = record.timestampMs >= windowStartMs + MTIME_SLACK_MS;
 
           // Count all-time tokens (no time filter, global deduping)
           if (record.dedupeKey !== null) {
             if (!allTimeSeen.has(record.dedupeKey)) {
               allTimeSeen.add(record.dedupeKey);
-              for (const entry of entries) entry.allTimeTokens += tokens;
+              for (const entry of entries) {
+                entry.allTimeTokens += tokens;
+                if (credits > 0) {
+                  entry.creditsAllTime += credits;
+                  entry.hasCredits = true;
+                }
+                if (isToday) {
+                  entry.todayTokens += tokens;
+                  if (credits > 0) entry.creditsToday += credits;
+                }
+              }
             }
           } else {
-            for (const entry of entries) entry.allTimeTokens += tokens;
+            for (const entry of entries) {
+              entry.allTimeTokens += tokens;
+              if (credits > 0) {
+                entry.creditsAllTime += credits;
+                entry.hasCredits = true;
+              }
+              if (isToday) {
+                entry.todayTokens += tokens;
+                if (credits > 0) entry.creditsToday += credits;
+              }
+            }
           }
 
           // Count window-specific tokens
-          if (record.timestampMs < windowStartMs + MTIME_SLACK_MS) continue;
+          if (!inWindow) continue;
           if (record.dedupeKey !== null) {
             if (seen.has(record.dedupeKey)) continue;
             seen.add(record.dedupeKey);
           }
-          for (const entry of entries) accumulate(entry, record);
+          for (const entry of entries) {
+            if (credits > 0) entry.creditsWindow += credits;
+            accumulate(entry, record);
+          }
         }
       }
     }
@@ -820,7 +863,8 @@ export const make = Effect.gen(function* () {
         !entry.hasDir &&
         entry.totalTokens === 0 &&
         entry.costUsd === 0 &&
-        entry.allTimeTokens === 0
+        entry.allTimeTokens === 0 &&
+        !entry.hasCredits
       )
         continue;
       instances.push({
@@ -830,7 +874,17 @@ export const make = Effect.gen(function* () {
           totalTokens: Math.max(0, Math.round(entry.totalTokens)),
           costUsd: entry.costUsd,
           unpricedRecords: entry.unpricedRecords,
+          todayTokens: Math.max(0, Math.round(entry.todayTokens)),
           allTimeTokens: Math.max(0, Math.round(entry.allTimeTokens)),
+          ...(entry.hasCredits
+            ? {
+                credits: {
+                  today: entry.creditsToday,
+                  trailing7Days: entry.creditsWindow,
+                  allTime: entry.creditsAllTime,
+                },
+              }
+            : {}),
           models: [...entry.models.entries()]
             .map(([model, totals]) => ({
               model,
