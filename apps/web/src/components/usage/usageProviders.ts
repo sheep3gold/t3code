@@ -40,6 +40,16 @@ export const PROVIDER_PRESENTATION = {
     color: "#4d9f8a",
     driverKind: ProviderDriverKind.make("pi"),
   },
+  kimi: {
+    label: "Kimi CLI",
+    color: "#6b7fd7",
+    driverKind: ProviderDriverKind.make("acpRegistry"),
+  },
+  minimax: {
+    label: "MiniMax Code",
+    color: "#e0566b",
+    driverKind: ProviderDriverKind.make("acpRegistry"),
+  },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
 export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];

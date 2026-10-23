@@ -85,12 +85,18 @@ const CACHE_RETENTION_DAYS = 92;
 
 const TRANSCRIPT_READ_CONCURRENCY = 4;
 
-const transcriptReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
-  driver.usage?.kind === "transcripts" ? [{ driver, reader: driver.usage }] : [],
+const driverReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) => {
+  const usage = driver.usage;
+  const readers = usage === undefined ? [] : "kind" in usage ? [usage] : usage;
+  return readers.map((reader) => ({ driver, reader }));
+});
+
+const transcriptReaders = driverReaders.flatMap(({ driver, reader }) =>
+  reader.kind === "transcripts" ? [{ driver, reader }] : [],
 );
 
-const scanReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
-  driver.usage?.kind === "scan" ? [{ driver, reader: driver.usage }] : [],
+const scanReaders = driverReaders.flatMap(({ driver, reader }) =>
+  reader.kind === "scan" ? [{ driver, reader }] : [],
 );
 
 const transcriptFormats = new Map(
@@ -549,6 +555,7 @@ export const make = Effect.gen(function* () {
       | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
       | null;
     readonly refreshing?: true;
+    readonly instanceIds?: ReadonlyArray<ProviderInstanceId>;
   }
 
   const scanTranscriptDir = Effect.fn("UsageService.scanTranscriptDir")(function* (
@@ -764,7 +771,8 @@ export const make = Effect.gen(function* () {
       const provider = scannedDir.provider;
       // Every configured instance claiming this physical directory shares the
       // attribution; a shared home carries its usage under each alias id.
-      const ownerKeys = dirOwners.get(`${provider}\0${scannedDir.dir}`) ?? [];
+      const ownerKeys =
+        dirOwners.get(`${provider}\0${scannedDir.dir}`) ?? scannedDir.instanceIds ?? [];
       if (ownerKeys.length === 0) continue;
       const entries = ownerKeys.map((ownerKey) => instanceEntry(ownerKey));
       for (const entry of entries) {
