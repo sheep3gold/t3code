@@ -16,6 +16,9 @@ deploy:
     - "apps/server/dist/"
   backup_exclude:
     - "node_modules/"
+    # /opt/t3code 里残留的开发态数据与 worktree 副本，不是发布产物
+    - ".t3"
+    - ".wt-*"
     - ".generated/"
     - "apps/web/dist/"
     - "apps/server/dist/"
