@@ -5896,9 +5896,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           // session config omits them). Failing the open here wedges the run
           // in a retry loop; skip like the out-of-range values below and let
           // the agent default apply.
+          // `_t3/` ids are synthetic options a flavor consumes itself
+          // (Kimi's Thinking toggle picks a model variant), not agent config.
           const unsupportedConfigIds = configSelections
             .map((selection) => selection.id)
-            .filter((id) => !availableConfigIds.has(id));
+            .filter((id) => !availableConfigIds.has(id) && !id.startsWith("_t3/"));
           if (unsupportedConfigIds.length > 0) {
             yield* Effect.logWarning(
               "ACP session does not expose requested configuration option(s)",

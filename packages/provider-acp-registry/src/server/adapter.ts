@@ -33,6 +33,7 @@ import {
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
+import { resolveThinkingVariant } from "./thinkingVariants.ts";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
@@ -186,11 +187,12 @@ export const applyAcpRegistryModelSelection: NonNullable<
       return undefined;
     }
     const models = setup.models;
-    if (models == null || !models.availableModels.some((model) => model.modelId === requested)) {
-      return undefined;
-    }
-    yield* runtime.setSessionModel(requested);
-    return requested;
+    if (models == null) return undefined;
+    const availableIds = new Set(models.availableModels.map((model) => model.modelId));
+    const variant = resolveThinkingVariant(requested, modelSelection.options, availableIds);
+    if (!availableIds.has(variant)) return undefined;
+    yield* runtime.setSessionModel(variant);
+    return variant;
   });
 
 export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(function* (
