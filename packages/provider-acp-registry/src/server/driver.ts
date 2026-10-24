@@ -28,6 +28,11 @@ import { AcpRegistryAdapterV2Driver, type AcpRegistryAdapterV2DriverEnv } from "
 import { kimiUsageReader } from "./kimiUsage.ts";
 import { kiroUsageReader } from "./kiroUsage.ts";
 import { minimaxUsageReader } from "./minimaxUsage.ts";
+import {
+  ACP_THINKING_OPTION_ID,
+  collapseThinkingVariants,
+  collapsedModelId,
+} from "./thinkingVariants.ts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
@@ -70,6 +75,12 @@ const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
 // is detected on the next refresh.
 const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
 const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
+const THINKING_TOGGLE = {
+  id: ACP_THINKING_OPTION_ID,
+  label: "Thinking",
+  type: "boolean",
+  currentValue: true,
+} as const;
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
@@ -98,11 +109,17 @@ function modelsFromDiscovery(
     | undefined,
   customModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
-  const discovered = discovery?.models ?? [];
+  const discovered = collapseThinkingVariants(discovery?.models ?? []);
+  const configOptions = discovery?.configOptions ?? [];
   const capabilities =
-    discovery === undefined || discovery.configOptions.length === 0
+    configOptions.length === 0
       ? EMPTY_CAPABILITIES
-      : createModelCapabilities({ optionDescriptors: discovery.configOptions });
+      : createModelCapabilities({ optionDescriptors: configOptions });
+  const thinkingCapabilities = createModelCapabilities({
+    optionDescriptors: [...configOptions, THINKING_TOGGLE].slice(0, 16),
+  });
+  const currentModelId =
+    discovery?.currentModelId == null ? null : collapsedModelId(discovery.currentModelId);
   const builtInModels: ReadonlyArray<ServerProviderModel> =
     discovered.length === 0
       ? [
@@ -118,8 +135,8 @@ function modelsFromDiscovery(
           slug: model.id,
           name: model.name,
           isCustom: false,
-          ...(model.id === discovery?.currentModelId ? { isDefault: true } : {}),
-          capabilities,
+          ...(model.id === currentModelId ? { isDefault: true } : {}),
+          capabilities: model.thinking === "toggle" ? thinkingCapabilities : capabilities,
         }));
   return providerModelsFromSettings(builtInModels, customModels, capabilities);
 }
