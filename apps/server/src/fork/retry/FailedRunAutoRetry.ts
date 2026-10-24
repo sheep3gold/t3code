@@ -26,7 +26,6 @@ const RETRY_DELAYS_MS = [30_000, 60_000, 120_000] as const;
 const MESSAGE_PREFIX = "auto-retry";
 const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "preparing",
-  "queued",
   "starting",
   "running",
   "waiting",
@@ -69,7 +68,7 @@ export function autoRetryCommand(
   const run = runs.find((candidate) => candidate.id === runId);
   if (run === undefined || run.status !== "failed") return null;
   if (latestExecutedRun(runs)?.id !== run.id) return null;
-  // A queued or in-flight run means the user (or another worker) already moved on.
+  // An in-flight run means the user (or another worker) already moved on.
   if (runs.some((candidate) => ACTIVE_RUN_STATUSES.has(candidate.status))) return null;
   if (
     thread.archivedAt !== null ||
@@ -79,6 +78,17 @@ export function autoRetryCommand(
   )
     return null;
   if (!isTransientFailure(latestRootProviderFailure(run, projection.turnItems))) return null;
+  const queued = runs.filter((candidate) => candidate.status === "queued");
+  // A held queue needs a deliberate resume; an unheld queued message is already
+  // the user's chosen follow-up, so run it instead of inserting a duplicate.
+  if (queued.some((candidate) => candidate.queueHeld === true)) return null;
+  if (queued.length > 0) {
+    return {
+      type: "queue.resume",
+      commandId: CommandId.make(`${MESSAGE_PREFIX}:queue:${run.id}`),
+      threadId: thread.id,
+    };
+  }
   const lineage = retryLineage(run);
   if (lineage.attempt >= MAX_AUTO_RETRY_ATTEMPTS) return null;
   const attempt = lineage.attempt + 1;

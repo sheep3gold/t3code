@@ -133,8 +133,14 @@ describe("FailedRunAutoRetry", () => {
     const id = failed.id;
     // The user already sent a newer message that finished.
     expect(autoRetryCommand(projection([failed, run("run-3", 3, "completed")]), id)).toBeNull();
-    // A queued or running follow-up is in flight.
-    expect(autoRetryCommand(projection([failed, run("run-3", 3, "queued")]), id)).toBeNull();
+    // An unheld queued message is the user's follow-up; resume it without a new prompt.
+    expect(autoRetryCommand(projection([failed, run("run-3", 3, "queued")]), id)).toMatchObject({
+      type: "queue.resume",
+      commandId: "auto-retry:queue:run-2",
+    });
+    expect(
+      autoRetryCommand(projection([failed, { ...run("run-3", 3, "queued"), queueHeld: true }]), id),
+    ).toBeNull();
     expect(autoRetryCommand(projection([failed, run("run-3", 3, "running")]), id)).toBeNull();
     // Waiting on the user, or the thread was archived or settled.
     expect(
