@@ -100,6 +100,7 @@ import {
 } from "@t3tools/provider-core/server/handoffBudget";
 import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../provider/ClaudeModelCatalog.ts";
 import { wantsCustomModelsOnly } from "../fork/provider/customModelsOnly.ts";
+import { canAutoRetry } from "../fork/retry/FailedRunAutoRetryPolicy.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -1434,6 +1435,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         failedRun?.workspacePreparation?.type === "worktree" &&
         projection.thread.worktreePath === null;
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      // Finish a recoverable failed turn before touching messages queued behind it.
+      if (
+        settings.autoRetryFailedThreads &&
+        failedRun !== null &&
+        failedRun.id === options?.failedRunId &&
+        projection.thread.settledOverride !== "settled" &&
+        projection.runtimeRequests.every((request) => request.status !== "pending") &&
+        canAutoRetry(failedRun, latestRootProviderFailure(failedRun, projection.turnItems))
+      ) {
+        return;
+      }
       const projectOverride =
         settings.projectSettingsOverrides[projection.thread.projectId]?.providerInstances?.[
           queuedRun.providerInstanceId

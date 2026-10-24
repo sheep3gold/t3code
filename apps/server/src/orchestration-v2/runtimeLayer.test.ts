@@ -50,6 +50,7 @@ import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { autoRetryCommand } from "../fork/retry/FailedRunAutoRetry.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
@@ -262,25 +263,27 @@ const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: str
     }),
   );
 
-const layerTest = Layer.mergeAll(
-  RuntimeLayer.layer,
-  RuntimeLayer.layerEventSink,
-  ProjectStore.layer,
-  ProjectionStore.layer,
-  EffectOutbox.layer,
-  ThreadCommandExecutor.layer,
-).pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
+const makeLayerTest = (autoRetryFailedThreads = false) =>
+  Layer.mergeAll(
+    RuntimeLayer.layer,
+    RuntimeLayer.layerEventSink,
+    ProjectStore.layer,
+    ProjectionStore.layer,
+    EffectOutbox.layer,
+    ThreadCommandExecutor.layer,
+  ).pipe(
+    Layer.provide(McpSessionRegistryTestkit.layer),
+    Layer.provide(McpProviderSessions.layer),
+    Layer.provide(SqlitePersistence.layerMemory),
+    Layer.provide(layerCheckpointStoreTest),
+    Layer.provide(layerServerConfig),
+    Layer.provide(ServerSettings.layerTest({ autoRetryFailedThreads })),
+    Layer.provide(layerTestProviderInstanceRegistry),
+    Layer.provide(layerGitWorkflowTest),
+    Layer.provide(layerProjectServiceTest),
+    Layer.provide(layerPlatformTest),
+  );
+const layerTest = makeLayerTest();
 
 const layerLegacyImportTest = RuntimeLayer.layer.pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
@@ -4928,6 +4931,141 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         })
         .pipe(Effect.flip);
       assert.equal(cancelAgainError._tag, "OrchestratorDispatchError");
+    }),
+  );
+});
+
+it.layer(makeLayerTest(true))("auto-retry with queued messages", (it) => {
+  it.effect("finishes the failed turn before starting the next queued message", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-retry-before-queue");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId: ProjectId.make(`${threadId}:project`),
+        title: "Retry before queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      for (const [index, text] of ["Unfinished", "Next message"].entries()) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:${index}`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:message:${index}`),
+          text,
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: index === 0 ? "start_immediately" : "queue_after_active" },
+        });
+      }
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const unfinished = before.runs[0]!;
+      const queued = before.runs[1]!;
+      const promoted = yield* Queue.unbounded<RunId>();
+      const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* eventSink.stream({ threadId, afterSequence }).pipe(
+        Stream.runForEach((stored) =>
+          stored.event.type === "run.updated" &&
+          stored.event.payload.id === queued.id &&
+          stored.event.payload.status === "starting"
+            ? Queue.offer(promoted, queued.id)
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      const unfinishedRootNodeId = unfinished.rootNodeId;
+      if (unfinishedRootNodeId === null) return yield* Effect.die("Expected root node");
+      const unfinishedRootNode = unfinishedRootNodeId;
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make(`${threadId}:error`),
+            type: "turn-item.updated",
+            threadId,
+            runId: unfinished.id,
+            nodeId: unfinishedRootNode,
+            providerInstanceId: unfinished.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make(`${threadId}:error`),
+              type: "error",
+              threadId,
+              runId: unfinished.id,
+              nodeId: unfinishedRootNode,
+              providerThreadId: unfinished.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "failed",
+              title: "Provider failure",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              failure: {
+                class: "provider_error",
+                message: "Internal error",
+                code: "-32603",
+                retryable: null,
+              },
+            },
+          },
+          {
+            id: EventId.make(`${threadId}:failed`),
+            type: "run.updated",
+            threadId,
+            runId: unfinished.id,
+            nodeId: unfinishedRootNode,
+            providerInstanceId: unfinished.providerInstanceId,
+            occurredAt: now,
+            payload: { ...unfinished, status: "failed", completedAt: now },
+          },
+        ],
+      });
+      const failed = yield* orchestrator.getThreadProjection(threadId);
+      const retry = autoRetryCommand(failed, unfinished.id);
+      if (retry?.type !== "message.dispatch") return yield* Effect.die("Expected continuation");
+      yield* orchestrator.dispatch(retry);
+      const recovering = yield* orchestrator.getThreadProjection(threadId);
+      const retryRun = recovering.runs.find((run) => run.userMessageId === retry.messageId);
+      assert.isDefined(retryRun);
+      assert.equal(queued.status, "queued");
+      assert.equal(recovering.runs.find((run) => run.id === queued.id)?.status, "queued");
+      assert.notEqual(recovering.runs.find((run) => run.id === queued.id)?.queueHeld, true);
+      assert.equal(yield* Queue.size(promoted), 0);
+
+      const completedAt = DateTime.add(now, { seconds: 1 });
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make(`${threadId}:retry-completed`),
+            type: "run.updated",
+            threadId,
+            runId: retryRun.id,
+            nodeId: retryRun.rootNodeId ?? undefined,
+            providerInstanceId: retryRun.providerInstanceId,
+            occurredAt: completedAt,
+            payload: { ...retryRun, status: "completed", completedAt },
+          },
+        ],
+      });
+      assert.equal(yield* Queue.take(promoted), queued.id);
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.runs.find((run) => run.id === queued.id)?.status, "starting");
     }),
   );
 });

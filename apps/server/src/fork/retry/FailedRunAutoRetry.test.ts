@@ -123,6 +123,15 @@ describe("FailedRunAutoRetry", () => {
         "run-5" as OrchestrationV2Run["id"],
       ),
     ).toBeNull();
+    expect(
+      autoRetryCommand(
+        projection([
+          run("run-5", 5, "failed", `auto-retry:${MAX_AUTO_RETRY_ATTEMPTS}:run-2`),
+          run("run-6", 6, "queued"),
+        ]),
+        "run-5" as OrchestrationV2Run["id"],
+      ),
+    ).toBeNull();
     expect(retryDelayMs(run("run-2", 2, "failed"))).toBeLessThan(
       retryDelayMs(run("run-3", 3, "failed", "auto-retry:2:run-2")),
     );
@@ -133,14 +142,17 @@ describe("FailedRunAutoRetry", () => {
     const id = failed.id;
     // The user already sent a newer message that finished.
     expect(autoRetryCommand(projection([failed, run("run-3", 3, "completed")]), id)).toBeNull();
-    // An unheld queued message is the user's follow-up; resume it without a new prompt.
-    expect(autoRetryCommand(projection([failed, run("run-3", 3, "queued")]), id)).toMatchObject({
-      type: "queue.resume",
-      commandId: "auto-retry:queue:run-2",
-    });
-    expect(
-      autoRetryCommand(projection([failed, { ...run("run-3", 3, "queued"), queueHeld: true }]), id),
-    ).toBeNull();
+    // The unfinished turn must recover before either kind of queued follow-up.
+    for (const queued of [
+      run("run-3", 3, "queued"),
+      { ...run("run-3", 3, "queued"), queueHeld: true },
+    ]) {
+      expect(autoRetryCommand(projection([failed, queued]), id)).toMatchObject({
+        type: "message.dispatch",
+        commandId: "auto-retry:1:run-2",
+        dispatchMode: { type: "start_immediately" },
+      });
+    }
     expect(autoRetryCommand(projection([failed, run("run-3", 3, "running")]), id)).toBeNull();
     // Waiting on the user, or the thread was archived or settled.
     expect(

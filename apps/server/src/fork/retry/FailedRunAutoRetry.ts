@@ -2,7 +2,6 @@ import {
   CommandId,
   MessageId,
   type OrchestrationV2Command,
-  type OrchestrationV2ProviderFailure,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type ThreadId,
@@ -20,8 +19,9 @@ import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../../serverActivation.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import { canAutoRetry, MAX_AUTO_RETRY_ATTEMPTS, retryLineage } from "./FailedRunAutoRetryPolicy.ts";
 
-export const MAX_AUTO_RETRY_ATTEMPTS = 3;
+export { isTransientFailure, MAX_AUTO_RETRY_ATTEMPTS } from "./FailedRunAutoRetryPolicy.ts";
 const RETRY_DELAYS_MS = [30_000, 60_000, 120_000] as const;
 const MESSAGE_PREFIX = "auto-retry";
 const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
@@ -30,32 +30,6 @@ const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "running",
   "waiting",
 ]);
-
-/**
- * Only failures that can plausibly succeed on a second try. Usage limits have
- * their own recovery worker; permission and validation errors repeat
- * deterministically. A provider error without a code is our own guard (for
- * example a handoff that cannot fit the window) and would fail the same way.
- */
-export function isTransientFailure(failure: OrchestrationV2ProviderFailure | null): boolean {
-  if (failure === null || failure.retryable === false) return false;
-  if (failure.class === "usage_limit") return false;
-  if (failure.class === "permission_error" || failure.class === "validation_error") return false;
-  if (failure.retryable === true) return true;
-  if (failure.class === "transport_error") return true;
-  return failure.class === "provider_error" && failure.code !== null;
-}
-
-/** Retries chain through their message ids, so the cap survives restarts. */
-export function retryLineage(run: Pick<OrchestrationV2Run, "id" | "userMessageId">): {
-  readonly originRunId: string;
-  readonly attempt: number;
-} {
-  const match = /^auto-retry:(\d+):(.+)$/.exec(run.userMessageId);
-  return match
-    ? { originRunId: match[2]!, attempt: Number(match[1]) }
-    : { originRunId: run.id, attempt: 0 };
-}
 
 export function autoRetryCommand(
   projection: Pick<
@@ -77,20 +51,8 @@ export function autoRetryCommand(
     projection.runtimeRequests.some((request) => request.status === "pending")
   )
     return null;
-  if (!isTransientFailure(latestRootProviderFailure(run, projection.turnItems))) return null;
-  const queued = runs.filter((candidate) => candidate.status === "queued");
-  // A held queue needs a deliberate resume; an unheld queued message is already
-  // the user's chosen follow-up, so run it instead of inserting a duplicate.
-  if (queued.some((candidate) => candidate.queueHeld === true)) return null;
-  if (queued.length > 0) {
-    return {
-      type: "queue.resume",
-      commandId: CommandId.make(`${MESSAGE_PREFIX}:queue:${run.id}`),
-      threadId: thread.id,
-    };
-  }
+  if (!canAutoRetry(run, latestRootProviderFailure(run, projection.turnItems))) return null;
   const lineage = retryLineage(run);
-  if (lineage.attempt >= MAX_AUTO_RETRY_ATTEMPTS) return null;
   const attempt = lineage.attempt + 1;
   const identity = `${MESSAGE_PREFIX}:${attempt}:${lineage.originRunId}`;
   return {
