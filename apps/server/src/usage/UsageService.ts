@@ -610,7 +610,7 @@ export const make = Effect.gen(function* () {
   });
 
   const collectDirs = Effect.fn("UsageService.collectDirs")(function* (
-    windowStartMs: number,
+    scanStartMs: number,
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
     awaitRefresh: boolean,
@@ -625,7 +625,13 @@ export const make = Effect.gen(function* () {
         usageInstances(driver, settings)
           .pipe(
             Effect.flatMap((instances) =>
-              reader.scan({ instances, settings, windowStartMs, retentionCutoffMs, awaitRefresh }),
+              reader.scan({
+                instances,
+                settings,
+                windowStartMs: scanStartMs,
+                retentionCutoffMs,
+                awaitRefresh,
+              }),
             ),
           )
           .pipe(
@@ -652,7 +658,7 @@ export const make = Effect.gen(function* () {
     // time, so open files stay at `TRANSCRIPT_READ_CONCURRENCY`. The result
     // keeps this order, since aggregation keeps the first copy of a duplicate.
     const [transcripts, scanDirs] = yield* Effect.all(
-      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs)), scans],
+      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, scanStartMs)), scans],
       { concurrency: "unbounded" },
     );
     const scanned: readonly ScannedDir[] = [...transcripts, ...scanDirs.flat()];
@@ -711,11 +717,17 @@ export const make = Effect.gen(function* () {
     const sinceDayStartMs = todayStartMs - (days - 1) * DAY_MS;
     const windowStartMs = sinceDayStartMs - MTIME_SLACK_MS;
     const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    // All-time is the whole retained history, so the scan has to reach back to
+    // the retention cutoff, which is also where the scan cache drops files.
+    // The trailing figures are then picked out of the scanned records by their
+    // own timestamp, so widening the scan never changes them: a transcript's
+    // mtime is never older than its last record.
+    const historyStartMs = retentionCutoffMs;
 
     const [, scannedDirs, dirOwners] = yield* Effect.all(
       [
         ensureRates(false),
-        collectDirs(windowStartMs, settings, retentionCutoffMs, false),
+        collectDirs(historyStartMs, settings, retentionCutoffMs, false),
         instanceTranscriptDirs(settings),
       ],
       { concurrency: "unbounded" },

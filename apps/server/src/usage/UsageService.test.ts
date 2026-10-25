@@ -2381,4 +2381,54 @@ describe("UsageService", () => {
       assert.deepStrictEqual(reported, ["claudeAgent", "claude_alias"]);
     }).pipe(Effect.scoped),
   );
+
+  /**
+   * All-time is the retained history, so a transcript last touched long
+   * before the trailing window still counts towards it. Reading only the
+   * window's files would report it as never used.
+   */
+  it.live("reports all-time tokens from transcripts older than the trailing window", () =>
+    Effect.gen(function* () {
+      const { home } = yield* setup;
+      const nowMs = yield* Clock.currentTimeMillis;
+      const oldMs = nowMs - 30 * 86_400_000;
+      const oldIso = DateTime.formatIso(DateTime.makeUnsafe(oldMs));
+      const instanceHome = NodePath.join(home, "claude-old");
+      const dir = NodePath.join(instanceHome, "projects", "proj");
+      const transcript = NodePath.join(dir, "session.jsonl");
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(dir, { recursive: true });
+        await NodeFSP.writeFile(transcript, recentClaudeLine(1, 5, oldIso));
+        // The scan picks transcripts by mtime, so age the file itself too.
+        await NodeFSP.utimes(transcript, oldMs / 1000, oldMs / 1000);
+      });
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-instance-all-time-test",
+            home,
+            ratesDocument: {
+              "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+            },
+            settings: {
+              providerInstances: {
+                [ProviderInstanceId.make("claude_xjp")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: instanceHome },
+                },
+              },
+            },
+          }),
+        ),
+      );
+      const summary = yield* service.readInstances({ days: 7 });
+      const usage = summary.instances.find(
+        (entry) => entry.instanceId === ("claude_xjp" as never),
+      )?.usage;
+      assert.isDefined(usage, "the instance has a transcript home, so it must be reported");
+      // The record is outside the trailing window, so only all-time sees it.
+      assert.strictEqual(usage?.totalTokens, 0);
+      assert.strictEqual(usage?.allTimeTokens, 15);
+    }).pipe(Effect.scoped),
+  );
 });
