@@ -1,16 +1,28 @@
 import type {
   OrchestrationV2ProviderFailure,
   OrchestrationV2Run,
+  OrchestrationV2ServerCommand,
   OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
+import { EventId, type OrchestrationV2DomainEvent } from "@t3tools/contracts";
+import { expect, it } from "@effect/vitest";
+import { describe } from "vite-plus/test";
 import * as DateTime from "effect/DateTime";
-import { describe, expect, it } from "vite-plus/test";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
+import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import {
   autoRetryCommand,
   isTransientFailure,
   MAX_AUTO_RETRY_ATTEMPTS,
-  retryDelayMs,
+  startFailedRunAutoRetry,
 } from "./FailedRunAutoRetry.ts";
 
 type Projection = Parameters<typeof autoRetryCommand>[0];
@@ -132,9 +144,6 @@ describe("FailedRunAutoRetry", () => {
         "run-5" as OrchestrationV2Run["id"],
       ),
     ).toBeNull();
-    expect(retryDelayMs(run("run-2", 2, "failed"))).toBeLessThan(
-      retryDelayMs(run("run-3", 3, "failed", "auto-retry:2:run-2")),
-    );
   });
 
   it("leaves the thread alone once something else happened", () => {
@@ -175,4 +184,39 @@ describe("FailedRunAutoRetry", () => {
       autoRetryCommand(projection([failed], { ...apiError, class: "usage_limit" }), id),
     ).toBeNull();
   });
+
+  it.effect("continues a transient failure right away, without waiting out a backoff", () =>
+    Effect.gen(function* () {
+      const dispatched = yield* Deferred.make<OrchestrationV2ServerCommand>();
+      const failed = run("run-2", 2, "failed");
+      const event: OrchestrationV2DomainEvent = {
+        id: EventId.make("event-failed"),
+        threadId: failed.threadId,
+        occurredAt: at(2),
+        type: "run.updated",
+        payload: failed,
+      };
+      const layer = Layer.mergeAll(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          streamDomainEvents: Stream.fromIterable([event]),
+        }),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadRecords: () => Effect.succeed(projection([failed]) as never),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          dispatch: (command) =>
+            Deferred.succeed(dispatched, command).pipe(
+              Effect.andThen(Effect.succeed({ sequence: 1, storedEvents: [] })),
+            ),
+        }),
+        Layer.mock(ServerSettings.ServerSettingsService)({
+          getSettings: Effect.succeed({ autoRetryFailedThreads: true } as never),
+        }),
+        // A backoff would leave the retry pending until the clock is advanced.
+        TestClock.layer(),
+      );
+      yield* startFailedRunAutoRetry.pipe(Effect.provide(layer));
+      expect((yield* Deferred.await(dispatched)).commandId).toBe("auto-retry:1:run-2");
+    }),
+  );
 });
