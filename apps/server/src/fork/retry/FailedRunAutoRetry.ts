@@ -10,7 +10,6 @@ import {
   latestExecutedRun,
   latestRootProviderFailure,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -22,7 +21,6 @@ import * as ServerSettings from "../../serverSettings.ts";
 import { canAutoRetry, MAX_AUTO_RETRY_ATTEMPTS, retryLineage } from "./FailedRunAutoRetryPolicy.ts";
 
 export { isTransientFailure, MAX_AUTO_RETRY_ATTEMPTS } from "./FailedRunAutoRetryPolicy.ts";
-const RETRY_DELAYS_MS = [30_000, 60_000, 120_000] as const;
 const MESSAGE_PREFIX = "auto-retry";
 const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "preparing",
@@ -68,17 +66,12 @@ export function autoRetryCommand(
   };
 }
 
-export function retryDelayMs(run: Pick<OrchestrationV2Run, "id" | "userMessageId">): number {
-  const { attempt } = retryLineage(run);
-  return RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)]!;
-}
-
 /**
  * Settings → General → "Auto-retry failed threads". Watches every thread for a
- * run that ends failed on a transient provider error, waits a short backoff,
- * re-checks that nothing else happened on the thread, then sends a
- * continuation. Off by default; flipping the switch takes effect on the next
- * failure without a restart.
+ * run that ends failed on a transient provider error and continues it right
+ * away: the provider usually recovers on the next request, and a wait only
+ * gives the user time to race the retry by hand. Off by default; flipping the
+ * switch takes effect on the next failure without a restart.
  */
 export const startFailedRunAutoRetry = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -98,14 +91,10 @@ export const startFailedRunAutoRetry = Effect.gen(function* () {
       })
       .pipe(Effect.map((projection) => autoRetryCommand(projection, runId)));
 
-  // A failed run can be re-published (checkpoint, title); keep one timer per run.
+  // A failed run can be re-published (checkpoint, title); keep one retry per run.
   const pending = new Set<string>();
 
   const retry = Effect.fnUntraced(function* (threadId: ThreadId, run: OrchestrationV2Run) {
-    if (!(yield* enabled)) return;
-    if ((yield* evaluate(threadId, run.id)) === null) return;
-    yield* Effect.sleep(Duration.millis(retryDelayMs(run)));
-    // The user may have replied, stopped the thread, or turned the switch off meanwhile.
     if (!(yield* enabled)) return;
     const command = yield* evaluate(threadId, run.id);
     if (command === null) return;
