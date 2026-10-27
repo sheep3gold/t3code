@@ -49,10 +49,15 @@ export function autoRetryCommand(
     projection.runtimeRequests.some((request) => request.status === "pending")
   )
     return null;
-  if (!canAutoRetry(run, latestRootProviderFailure(run, projection.turnItems))) return null;
+  const runIndex = runs.indexOf(run);
+  const previousRun = runIndex > 0 ? runs[runIndex - 1] : undefined;
+  if (!canAutoRetry(run, latestRootProviderFailure(run, projection.turnItems), previousRun))
+    return null;
   const lineage = retryLineage(run);
-  const attempt = lineage.attempt + 1;
-  const identity = `${MESSAGE_PREFIX}:${attempt}:${lineage.originRunId}`;
+  // If the previous run succeeded, start a fresh chain (attempt 1).
+  const attempt = previousRun?.status === "completed" ? 1 : lineage.attempt + 1;
+  const originRunId = previousRun?.status === "completed" ? run.id : lineage.originRunId;
+  const identity = `${MESSAGE_PREFIX}:${attempt}:${originRunId}`;
   return {
     type: "message.dispatch",
     commandId: CommandId.make(identity),

@@ -27,10 +27,14 @@ export function retryLineage(run: Pick<OrchestrationV2Run, "id" | "userMessageId
 export function canAutoRetry(
   run: OrchestrationV2Run,
   failure: OrchestrationV2ProviderFailure | null,
+  previousRun?: OrchestrationV2Run,
 ): boolean {
+  const lineage = retryLineage(run);
+  // Reset the counter if the previous run succeeded: the cap only guards
+  // against consecutive invalid retries, not permanent consumption by a chain
+  // that recovered.
+  const attempt = previousRun?.status === "completed" ? 0 : lineage.attempt;
   return (
-    run.status === "failed" &&
-    isTransientFailure(failure) &&
-    retryLineage(run).attempt < MAX_AUTO_RETRY_ATTEMPTS
+    run.status === "failed" && isTransientFailure(failure) && attempt < MAX_AUTO_RETRY_ATTEMPTS
   );
 }
