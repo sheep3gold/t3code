@@ -90,9 +90,9 @@ const StageWorkspaceConfig = Schema.Struct({
     Schema.Record(
       Schema.String,
       Schema.Struct({
-        peerDependenciesMeta: Schema.Record(
-          Schema.String,
-          Schema.Struct({ optional: Schema.Boolean }),
+        dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+        peerDependenciesMeta: Schema.optional(
+          Schema.Record(Schema.String, Schema.Struct({ optional: Schema.Boolean })),
         ),
       }),
     ),
@@ -105,6 +105,10 @@ type StageWorkspaceConfig = typeof StageWorkspaceConfig.Type;
 const STAGE_PACKAGE_EXTENSIONS = {
   "electron-webauthn": { peerDependenciesMeta: { typescript: { optional: true } } },
   "@electron-webauthn/macos": { peerDependenciesMeta: { typescript: { optional: true } } },
+  // Fork: @cursor/sdk loads `zod/v4` at runtime but only declares zod as a peer.
+  // The staged `--prod` install no longer pulls it in, so the bundled server
+  // crashed with "Cannot find module 'zod/v4'". Pin it as a real dependency.
+  "@cursor/sdk": { dependencies: { zod: "4.6.5" } },
 } as const;
 
 const RepoRoot = Effect.service(Path.Path).pipe(
