@@ -52,12 +52,10 @@ export function SettingsArtifactsRouteScreen() {
     <ArtifactList
       project={project}
       onOpen={(slug) =>
-        navigation.navigate("SettingsSheet", {
-          screen: "SettingsContent",
-          params: {
-            screen: "SettingsArtifactDetail",
-            params: { environmentId: project.environmentId, projectId: project.id, slug },
-          },
+        navigation.navigate("SettingsArtifactDetail", {
+          environmentId: project.environmentId,
+          projectId: project.id,
+          slug,
         })
       }
     />
