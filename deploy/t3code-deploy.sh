@@ -77,6 +77,20 @@ restore_lock() {
 trap restore_lock EXIT
 
 install -d -m 0755 "$GENERATED" "$BACKUP_ROOT"
+
+# release-hub rsyncs without --delete (the live dir holds data it must keep),
+# so source files removed upstream linger in $SRC and break tsc/vite. Prune
+# TypeScript sources that release-hub's checkout (the rsync source) no longer
+# tracks. Skipped when that checkout is missing, so nothing is deleted blind.
+RH_CHECKOUT=/opt/release-hub/work/t3code
+if git -C "$RH_CHECKOUT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  tracked=$(mktemp)
+  git -C "$RH_CHECKOUT" ls-files apps packages scripts | sort >"$tracked"
+  (cd "$SRC" && find apps packages scripts -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' \) \
+      -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.astro/*' | sort |
+    comm -23 - "$tracked" | while IFS= read -r stale; do rm -f -- "$SRC/$stale"; echo "pruned stale source: $stale"; done)
+  rm -f "$tracked"
+fi
 cp "$SRC"/deploy/spdx-cache/v3.28.0/*.json "$GENERATED"/
 
 # CI=true：无 TTY 时 pnpm 需要它才肯清掉 modules 目录（node 版本变化触发）。
