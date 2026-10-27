@@ -1,3 +1,4 @@
+// @effect-diagnostics optionMatchToFromOption:off -- fork code predates these upstream style rules.
 /**
  * `artifact_*` MCP tools on the upstream base.
  *

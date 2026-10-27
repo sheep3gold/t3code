@@ -27,7 +27,7 @@ const handlers = HttpApiBuilder.group(
     return handlers.handleRaw(
       "translate",
       Effect.fn("environment.translate.translate")(function* ({ request }) {
-        const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+        const session = yield* serverAuth.authenticateWebSocketUpgrade(request, "rpc").pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
             failEnvironmentAuthInvalid(
               EnvironmentAuth.serverAuthCredentialReason(error),

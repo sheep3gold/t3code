@@ -1178,20 +1178,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // A gateway-backed instance only serves its configured models; the
       // bundled catalog and `-large` variants would be rejected upstream.
       const customOnly = wantsCustomModelsOnly(instanceSettings?.environment ?? []);
-      const windowFor = (selection: ModelSelection) =>
-        Effect.gen(function* () {
-          const session = yield* providerSessions.get(input.providerSessionId).pipe(
-            Effect.map(Option.getOrUndefined),
-            Effect.catchCause(() => Effect.succeed(undefined)),
-          );
-          const sessionWindow = session?.getModelContextWindow?.(selection, input.cwd);
-          if (sessionWindow !== undefined) return sessionWindow;
-          const fromSettings = customEntries.find(
-            (entry) => entry.slug === selection.model,
-          )?.contextWindowTokens;
-          if (fromSettings !== null && fromSettings !== undefined) return fromSettings;
-          return knownModelContextWindowTokens(selection.model);
-        });
+      const windowFor = Effect.fn("orchestrationV2.handoffBudgetFallback.windowFor")(function* (
+        selection: ModelSelection,
+      ) {
+        const session = yield* providerSessions.get(input.providerSessionId).pipe(
+          Effect.catchCause(() => Effect.succeedNone),
+          Effect.map(Option.getOrUndefined),
+        );
+        const sessionWindow = session?.getModelContextWindow?.(selection, input.cwd);
+        if (sessionWindow !== undefined) return sessionWindow;
+        const fromSettings = customEntries.find(
+          (entry) => entry.slug === selection.model,
+        )?.contextWindowTokens;
+        if (fromSettings !== null && fromSettings !== undefined) return fromSettings;
+        return knownModelContextWindowTokens(selection.model);
+      });
       const minCost = pendingHandoffs.reduce((sum, handoff) => sum + handoffMinCost(handoff), 0);
       const fits = (window: number | undefined) =>
         !modelWindowOverflows({

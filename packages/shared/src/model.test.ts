@@ -10,6 +10,7 @@ import {
   getProviderOptionCurrentLabel,
   getProviderOptionDescriptors,
   readCustomModelEntries,
+  toCustomModelSetting,
   modelSelectionsEqual,
 } from "./model.ts";
 

@@ -38,9 +38,24 @@ import { buildCodexAdditionalContext } from "./CodexDeveloperInstructions.ts";
 import { DocumentText } from "./DocumentText.ts";
 import { ProviderRegistry } from "./ProviderRegistry.ts";
 import budget from "./agentContextBudget.json" with { type: "json" };
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as AgentMemories from "../fork/memory/AgentMemories.ts";
+import * as Artifacts from "../fork/artifacts/Artifacts.ts";
+import * as ThreadLedger from "../fork/ledger/ThreadLedger.ts";
+import * as ThreadSchedules from "../fork/schedules/ThreadSchedules.ts";
+import * as ThreadWorkflows from "../fork/workflows/ThreadWorkflows.ts";
 
 // Registration only stores tool definitions, so the handlers' services are never called.
 const toolHandlerServices = Layer.mergeAll(
+  // Fork-only toolkits (src/fork) register through McpHttpServer.layerTools too.
+  Layer.mock(ProjectStore.ProjectStoreV2)({}),
+  Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+  Layer.mock(AgentMemories.AgentMemoryRepository)({}),
+  Layer.mock(Artifacts.ArtifactRepository)({}),
+  Layer.mock(ThreadLedger.ThreadLedgerRepository)({}),
+  Layer.mock(ThreadSchedules.ThreadScheduleRepository)({}),
+  Layer.mock(ThreadWorkflows.ThreadWorkflowRepository)({}),
   Layer.mock(DeviceService)({}),
   Layer.mock(DocumentText)({}),
   Layer.mock(GitVcsDriver)({}),

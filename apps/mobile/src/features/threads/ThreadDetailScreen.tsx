@@ -1246,19 +1246,20 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   };
 
   const handleOptionSend = async (label: string) => {
+    const scope = threadScope.current.signal;
     const targetThreadKey = selectedThreadKey;
     const hasUserMessage = selectedThreadFeed.some(
       (entry) => entry.type === "message" && entry.message.role === "user",
     );
     setSentOptionMessageId(activeOptionSource?.messageId ?? null);
     const messageId = await props.onSendOption(label);
-    if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
+    if (messageId === null || scope.aborted) {
       if (messageId === null) setSentOptionMessageId(null);
       return messageId;
     }
     void Haptics.selectionAsync();
     clearUsageLimitsFor(targetThreadKey);
-    setSubmittedMessageId(messageId);
+    feedRef.current?.resetEndFollow();
     setAnchorMessageId(
       resolveThreadFeedSubmissionAnchor({
         currentAnchorMessageId: anchorMessageId,
@@ -1266,6 +1267,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
         hasStartedTurn: props.selectedThread.latestRun !== null,
         hasUserMessage,
         queuedMessageCount: props.selectedThreadQueueCount,
+        deliveryDeferred: props.connectionStateLabel !== "connected",
       }),
     );
     return messageId;

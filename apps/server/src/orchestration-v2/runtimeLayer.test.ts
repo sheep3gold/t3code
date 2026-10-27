@@ -6520,6 +6520,7 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
             now,
             autoResume: true,
             snooze: false,
+            fallback: false,
           })).find((row) => row.id === threadId),
         );
         const stoppedShell = (yield* orchestrator.getShellSnapshot()).threads.find(
@@ -6818,7 +6819,12 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
       if (scenario === "stop") {
         assert.deepInclude(after.thread.limitRecovery, { runId: run.id, autoResume: false });
         const projections = yield* ProjectionStore.ProjectionStoreV2;
-        const sweep = { now: yield* DateTime.now, autoResume: true, snooze: false };
+        const sweep = {
+          now: yield* DateTime.now,
+          autoResume: true,
+          snooze: false,
+          fallback: false,
+        };
         assert.isUndefined(
           (yield* projections.getLimitRecoveryCandidates(sweep)).find((row) => row.id === threadId),
         );

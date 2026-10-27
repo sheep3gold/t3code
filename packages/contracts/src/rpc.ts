@@ -820,8 +820,7 @@ const ServerSkillDeleteInput = Schema.Struct({
   name: TrimmedNonEmptyString,
 });
 
-const ServerSkillFileError = Schema.Struct({
-  _tag: Schema.Literal("ServerSkillFileError"),
+const ServerSkillFileError = Schema.TaggedStruct("ServerSkillFileError", {
   operation: Schema.Literals(["read", "upsert", "delete"]),
   instanceId: ProviderInstanceId,
   skillName: TrimmedNonEmptyString,

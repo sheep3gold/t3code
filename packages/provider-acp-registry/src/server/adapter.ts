@@ -181,6 +181,7 @@ function makeAcpRegistryRuntime(
  * report the unstable session `models` state (Kimi CLI) are switched through
  * `session/set_model` instead, and only to a model they listed.
  */
+// @effect-diagnostics-next-line effectFnOpportunity:off -- assigned to a flavor hook type.
 export const applyAcpRegistryModelSelection: NonNullable<
   AcpAdapterV2Flavor["applyModelSelection"]
 > = ({ runtime, startResult, modelSelection }) =>

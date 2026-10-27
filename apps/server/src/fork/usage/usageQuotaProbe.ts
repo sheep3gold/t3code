@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
 /**
  * usageQuotaProbe — per-request, short-cached quota reads for the provider
  * usage summary endpoint.
@@ -1447,7 +1448,9 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
                       ? factoryProbe(probe.etcdKey)
                       : probe.kind === "antigravity" && probe.home !== null
                         ? antigravityProbe(fileSystem, path, probe.home)
-                        : probe.kind === "kiro" && probe.home !== null && probe.commandPath !== undefined
+                        : probe.kind === "kiro" &&
+                            probe.home !== null &&
+                            probe.commandPath !== undefined
                           ? kiroProbe(client, probe.home, probe.commandPath)
                           : Effect.fail(
                               new UsageQuotaProbeError({

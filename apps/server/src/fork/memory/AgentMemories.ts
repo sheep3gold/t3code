@@ -1,3 +1,4 @@
+// @effect-diagnostics catchToOrElseSucceed:off effectFnOpportunity:off -- fork code predates these upstream style rules.
 // @effect-diagnostics nodeBuiltinImport:off -- fingerprints must stay byte-identical to stored rows.
 // @effect-diagnostics preferSchemaOverJson:off -- *_json columns hold plain string arrays/records written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";

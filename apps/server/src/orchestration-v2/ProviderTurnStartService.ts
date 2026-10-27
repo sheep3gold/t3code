@@ -164,6 +164,7 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const forkTurnContext = yield* Effect.serviceOption(ForkTurnContext.ForkTurnContext);
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
 
     const recreateMissingWorktree = Effect.fn("ProviderTurnStartService.recreateMissingWorktree")(
       function* (input: {

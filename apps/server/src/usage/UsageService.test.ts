@@ -30,7 +30,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "effect/Scheduler";
-import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
