@@ -90,9 +90,9 @@ const StageWorkspaceConfig = Schema.Struct({
     Schema.Record(
       Schema.String,
       Schema.Struct({
-        dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-        peerDependenciesMeta: Schema.optional(
-          Schema.Record(Schema.String, Schema.Struct({ optional: Schema.Boolean })),
+        peerDependenciesMeta: Schema.Record(
+          Schema.String,
+          Schema.Struct({ optional: Schema.Boolean }),
         ),
       }),
     ),
@@ -105,10 +105,6 @@ type StageWorkspaceConfig = typeof StageWorkspaceConfig.Type;
 const STAGE_PACKAGE_EXTENSIONS = {
   "electron-webauthn": { peerDependenciesMeta: { typescript: { optional: true } } },
   "@electron-webauthn/macos": { peerDependenciesMeta: { typescript: { optional: true } } },
-  // Fork: @cursor/sdk loads `zod/v4` at runtime but only declares zod as a peer.
-  // The staged `--prod` install no longer pulls it in, so the bundled server
-  // crashed with "Cannot find module 'zod/v4'". Pin it as a real dependency.
-  "@cursor/sdk": { dependencies: { zod: "4.6.5" } },
 } as const;
 
 const RepoRoot = Effect.service(Path.Path).pipe(
@@ -1420,6 +1416,16 @@ export function resolveFffNativeDependencies(
       ["gnu", "musl"].map((libc) => [`@ff-labs/fff-bin-linux-${architecture}-${libc}`, version]),
     ),
   );
+}
+
+// Fork: @cursor/sdk requires `zod/v4` at runtime but lists zod only as a peer, and the
+// staged `--prod` install does not add it, so the packaged backend crashed with
+// "Cannot find module 'zod/v4'". Stage zod explicitly whenever the SDK ships.
+export const CURSOR_SDK_ZOD_VERSION = "4.6.5";
+export function withCursorSdkPeers(dependencies: Record<string, string>): Record<string, string> {
+  return "@cursor/sdk" in dependencies && !("zod" in dependencies)
+    ? { ...dependencies, zod: CURSOR_SDK_ZOD_VERSION }
+    : dependencies;
 }
 
 // macOS and Linux share one app.asar; stage the union of both bundles' external dependencies.
@@ -3801,7 +3807,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     );
   }
 
-  const stageDependencies =
+  const stageDependencies = withCursorSdkPeers(
     options.platform === "win"
       ? { ...resolvedDesktopRuntimeDependencies }
       : resolveMergedStageDependencies({
@@ -3810,7 +3816,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
           desktopDependencies: resolvedDesktopRuntimeDependencies,
           arch: options.arch,
           fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
-        });
+        }),
+  );
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
