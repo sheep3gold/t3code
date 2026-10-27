@@ -108,7 +108,10 @@ import {
 } from "@t3tools/provider-core/server/handoffBudget";
 import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../provider/ClaudeModelCatalog.ts";
 import { wantsCustomModelsOnly } from "../fork/provider/customModelsOnly.ts";
-import { canAutoRetry } from "../fork/retry/FailedRunAutoRetryPolicy.ts";
+import {
+  AUTO_RETRY_PROGRESS_ITEM_TYPES,
+  canAutoRetry,
+} from "../fork/retry/FailedRunAutoRetryPolicy.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -1634,10 +1637,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         failedRun !== null &&
         failedRun.id === options?.failedRunId &&
         projection.thread.settledOverride !== "settled" &&
-        projection.runtimeRequests.every((request) => request.status !== "pending") &&
-        canAutoRetry(failedRun, latestRootProviderFailure(failedRun, projection.turnItems))
+        projection.runtimeRequests.every((request) => request.status !== "pending")
       ) {
-        return;
+        // The command projection omits tools; read only this failed run's progress
+        // so queue promotion and the retry worker agree on a recovered retry budget.
+        const progress = yield* projectionStore
+          .getThreadRecords(threadId, ["turnItems"], {
+            turnItemTypes: AUTO_RETRY_PROGRESS_ITEM_TYPES,
+            turnItemStatuses: ["completed"],
+            turnItemRunIds: [failedRun.id],
+          })
+          .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+        if (
+          canAutoRetry(
+            failedRun,
+            latestRootProviderFailure(failedRun, projection.turnItems),
+            progress.turnItems,
+          )
+        ) {
+          return;
+        }
       }
       const projectOverride =
         settings.projectSettingsOverrides[projection.thread.projectId]?.providerInstances?.[

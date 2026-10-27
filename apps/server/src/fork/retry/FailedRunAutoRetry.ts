@@ -18,7 +18,12 @@ import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../../serverActivation.ts";
 import * as ServerSettings from "../../serverSettings.ts";
-import { canAutoRetry, MAX_AUTO_RETRY_ATTEMPTS, retryLineage } from "./FailedRunAutoRetryPolicy.ts";
+import {
+  AUTO_RETRY_PROGRESS_ITEM_TYPES,
+  canAutoRetry,
+  MAX_AUTO_RETRY_ATTEMPTS,
+  retryLineage,
+} from "./FailedRunAutoRetryPolicy.ts";
 
 export { isTransientFailure, MAX_AUTO_RETRY_ATTEMPTS } from "./FailedRunAutoRetryPolicy.ts";
 const MESSAGE_PREFIX = "auto-retry";
@@ -49,15 +54,13 @@ export function autoRetryCommand(
     projection.runtimeRequests.some((request) => request.status === "pending")
   )
     return null;
-  const runIndex = runs.indexOf(run);
-  const previousRun = runIndex > 0 ? runs[runIndex - 1] : undefined;
-  if (!canAutoRetry(run, latestRootProviderFailure(run, projection.turnItems), previousRun))
+  if (
+    !canAutoRetry(run, latestRootProviderFailure(run, projection.turnItems), projection.turnItems)
+  )
     return null;
-  const lineage = retryLineage(run);
-  // If the previous run succeeded, start a fresh chain (attempt 1).
-  const attempt = previousRun?.status === "completed" ? 1 : lineage.attempt + 1;
-  const originRunId = previousRun?.status === "completed" ? run.id : lineage.originRunId;
-  const identity = `${MESSAGE_PREFIX}:${attempt}:${originRunId}`;
+  const lineage = retryLineage(run, projection.turnItems);
+  const attempt = lineage.attempt + 1;
+  const identity = `${MESSAGE_PREFIX}:${attempt}:${lineage.originRunId}`;
   return {
     type: "message.dispatch",
     commandId: CommandId.make(identity),
@@ -91,7 +94,7 @@ export const startFailedRunAutoRetry = Effect.gen(function* () {
   const evaluate = (threadId: ThreadId, runId: OrchestrationV2Run["id"]) =>
     projections
       .getThreadRecords(threadId, ["runs", "turnItems", "runtimeRequests"], {
-        turnItemTypes: ["error"],
+        turnItemTypes: ["error", ...AUTO_RETRY_PROGRESS_ITEM_TYPES],
         turnItemRunIds: [runId],
       })
       .pipe(Effect.map((projection) => autoRetryCommand(projection, runId)));
