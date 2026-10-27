@@ -721,7 +721,9 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
     turnItems: [],
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
-    Layer.provide(ServerSettings.layerTest()),
+    // The fork keeps queues running when threads continue after a server update;
+    // this case covers the hold path.
+    Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: false })),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
