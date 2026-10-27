@@ -1418,6 +1418,16 @@ export function resolveFffNativeDependencies(
   );
 }
 
+// Fork: @cursor/sdk requires `zod/v4` at runtime but lists zod only as a peer, and the
+// staged `--prod` install does not add it, so the packaged backend crashed with
+// "Cannot find module 'zod/v4'". Stage zod explicitly whenever the SDK ships.
+export const CURSOR_SDK_ZOD_VERSION = "4.6.5";
+export function withCursorSdkPeers(dependencies: Record<string, string>): Record<string, string> {
+  return "@cursor/sdk" in dependencies && !("zod" in dependencies)
+    ? { ...dependencies, zod: CURSOR_SDK_ZOD_VERSION }
+    : dependencies;
+}
+
 // macOS and Linux share one app.asar; stage the union of both bundles' external dependencies.
 export function resolveMergedStageDependencies(input: {
   readonly platform: "mac" | "linux";
@@ -3797,7 +3807,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     );
   }
 
-  const stageDependencies =
+  const stageDependencies = withCursorSdkPeers(
     options.platform === "win"
       ? { ...resolvedDesktopRuntimeDependencies }
       : resolveMergedStageDependencies({
@@ -3806,7 +3816,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
           desktopDependencies: resolvedDesktopRuntimeDependencies,
           arch: options.arch,
           fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
-        });
+        }),
+  );
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,

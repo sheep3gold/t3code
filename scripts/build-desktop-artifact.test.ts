@@ -1671,3 +1671,14 @@ it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated t
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it("stages zod alongside @cursor/sdk", async () => {
+  const { withCursorSdkPeers, CURSOR_SDK_ZOD_VERSION } =
+    await import("./build-desktop-artifact.ts");
+  assert.deepEqual(withCursorSdkPeers({ "@cursor/sdk": "1.0.38" }), {
+    "@cursor/sdk": "1.0.38",
+    zod: CURSOR_SDK_ZOD_VERSION,
+  });
+  assert.equal(withCursorSdkPeers({ "@cursor/sdk": "1.0.38", zod: "3.25.76" }).zod, "3.25.76");
+  assert.deepEqual(withCursorSdkPeers({ effect: "4.0.5" }), { effect: "4.0.5" });
+});
