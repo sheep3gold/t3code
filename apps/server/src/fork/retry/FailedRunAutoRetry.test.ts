@@ -3,6 +3,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2ServerCommand,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { EventId, type OrchestrationV2DomainEvent } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -53,6 +54,31 @@ function run(
     startedAt: at(ordinal),
     completedAt: status === "running" || status === "queued" ? null : at(ordinal),
   } as unknown as OrchestrationV2Run;
+}
+
+function progressItem(
+  failed: OrchestrationV2Run,
+  overrides: Partial<OrchestrationV2TurnItem> = {},
+): OrchestrationV2TurnItem {
+  return {
+    id: `tool-${failed.id}`,
+    threadId: failed.threadId,
+    runId: failed.id,
+    nodeId: `tool-node-${failed.id}`,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "completed",
+    title: null,
+    startedAt: failed.startedAt,
+    completedAt: failed.completedAt,
+    updatedAt: failed.completedAt,
+    type: "command_execution",
+    input: "git status --short",
+    ...overrides,
+  } as OrchestrationV2TurnItem;
 }
 
 function projection(
@@ -185,10 +211,12 @@ describe("FailedRunAutoRetry", () => {
     ).toBeNull();
   });
 
-  it.effect("continues a transient failure right away, without waiting out a backoff", () =>
+  it.effect.each([false, true])("retries immediately with recovered progress=%s", (recovered) =>
     Effect.gen(function* () {
       const dispatched = yield* Deferred.make<OrchestrationV2ServerCommand>();
-      const failed = run("run-2", 2, "failed");
+      const failed = run("run-2", 2, "failed", recovered ? "auto-retry:3:run-1" : "message-run-2");
+      const snapshot = projection([failed]);
+      const turnItems = [...snapshot.turnItems, ...(recovered ? [progressItem(failed)] : [])];
       const event: OrchestrationV2DomainEvent = {
         id: EventId.make("event-failed"),
         threadId: failed.threadId,
@@ -201,7 +229,17 @@ describe("FailedRunAutoRetry", () => {
           streamDomainEvents: Stream.fromIterable([event]),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getThreadRecords: () => Effect.succeed(projection([failed]) as never),
+          getThreadRecords: (_threadId, _records, filter) =>
+            Effect.succeed({
+              ...snapshot,
+              turnItems: turnItems.filter(
+                (item) =>
+                  (filter?.turnItemTypes === undefined ||
+                    filter.turnItemTypes.includes(item.type)) &&
+                  (filter?.turnItemRunIds === undefined ||
+                    filter.turnItemRunIds.includes(item.runId)),
+              ),
+            } as never),
         }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           dispatch: (command) =>
@@ -219,4 +257,116 @@ describe("FailedRunAutoRetry", () => {
       expect((yield* Deferred.await(dispatched)).commandId).toBe("auto-retry:1:run-2");
     }),
   );
+
+  it("starts fresh after a completed retry and a new user message", () => {
+    const runs = [
+      run("run-1", 1, "failed"),
+      run("run-2", 2, "completed", "auto-retry:1:run-1"),
+      run("run-3", 3, "failed"),
+    ];
+    const command = autoRetryCommand(projection(runs), "run-3" as OrchestrationV2Run["id"]);
+    expect(command?.commandId).toBe("auto-retry:1:run-3");
+  });
+
+  it.each([
+    "command_execution",
+    "file_change",
+    "file_search",
+    "web_search",
+    "dynamic_tool",
+  ] as const)("starts a fresh chain after a successful %s even at the retry cap", (type) => {
+    const failed = run("run-4", 4, "failed", "auto-retry:3:run-1");
+    const snapshot = projection([failed]);
+    const recovered = {
+      ...snapshot,
+      turnItems: [...snapshot.turnItems, progressItem(failed, { type })],
+    };
+    const command = autoRetryCommand(recovered, failed.id);
+    expect(command).toMatchObject({
+      commandId: "auto-retry:1:run-4",
+      messageId: "auto-retry:1:run-4",
+      text: expect.stringContaining("Automatic retry 1/3"),
+    });
+    expect(autoRetryCommand(recovered, failed.id)).toEqual(command);
+
+    const next = run("run-5", 5, "failed", "auto-retry:1:run-4");
+    const nextSnapshot = projection([failed, next]);
+    expect(
+      autoRetryCommand(
+        { ...nextSnapshot, turnItems: [...nextSnapshot.turnItems, ...recovered.turnItems] },
+        next.id,
+      )?.commandId,
+    ).toBe("auto-retry:2:run-4");
+  });
+
+  it.each([
+    { status: "pending" },
+    { status: "running" },
+    { status: "failed" },
+    { status: "cancelled" },
+    { status: "interrupted" },
+    { exitCode: 1 },
+    { outputIndicatesFailure: true },
+    { toolNonExecutionKind: "denied" },
+    { type: "assistant_message", text: "Let me try again." },
+    { type: "reasoning", text: "Thinking" },
+    { type: "user_message" },
+    { type: "system_notice" },
+    { type: "checkpoint" },
+  ] satisfies ReadonlyArray<Partial<OrchestrationV2TurnItem>>)(
+    "does not reset for an unsuccessful tool or bookkeeping item: %j",
+    (overrides) => {
+      const failed = run("run-4", 4, "failed", "auto-retry:3:run-1");
+      const snapshot = projection([failed]);
+      expect(
+        autoRetryCommand(
+          {
+            ...snapshot,
+            turnItems: [...snapshot.turnItems, progressItem(failed, overrides)],
+          },
+          failed.id,
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it("does not reset for successful work in an earlier run", () => {
+    const earlier = run("run-1", 1, "failed");
+    const failed = run("run-4", 4, "failed", "auto-retry:3:run-1");
+    const snapshot = projection([earlier, failed]);
+    expect(
+      autoRetryCommand(
+        {
+          ...snapshot,
+          turnItems: [...snapshot.turnItems, progressItem(earlier)],
+        },
+        failed.id,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not retry permanent errors even after successful work", () => {
+    const failed = run("run-4", 4, "failed", "auto-retry:3:run-1");
+    const snapshot = projection([failed], { ...apiError, class: "usage_limit" });
+    expect(
+      autoRetryCommand(
+        {
+          ...snapshot,
+          turnItems: [...snapshot.turnItems, progressItem(failed)],
+        },
+        failed.id,
+      ),
+    ).toBeNull();
+  });
+
+  it("still caps at 3 consecutive failures when there is no intervening success", () => {
+    // Without a success, the chain should still enforce the cap.
+    const runs = [
+      run("run-1", 1, "failed"),
+      run("run-2", 2, "failed", "auto-retry:1:run-1"),
+      run("run-3", 3, "failed", "auto-retry:2:run-1"),
+      run("run-4", 4, "failed", "auto-retry:3:run-1"),
+    ];
+    expect(autoRetryCommand(projection(runs), "run-4" as OrchestrationV2Run["id"])).toBeNull();
+  });
 });
