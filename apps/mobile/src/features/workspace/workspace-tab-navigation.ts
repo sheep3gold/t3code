@@ -17,10 +17,15 @@ type PullRequestSelection = NonNullable<WorkspaceSelections["pullRequests"]>;
 /** Opened when Settings has columns and none of its pages has been opened yet. */
 export const DEFAULT_SETTINGS_PAGE = "SettingsEnvironments" satisfies SettingsPageTarget;
 
-// Pages a Settings row opens, minus Project overview: it shows the project chosen in the
-// Settings scope, which resets whenever Settings closes.
+// Pages a Settings row opens, minus the project-scoped pages (overview, artifacts, schedules):
+// they show the project chosen in the Settings scope, which resets whenever Settings closes.
+const PROJECT_SCOPED_SETTINGS_PAGES: ReadonlySet<string> = new Set([
+  "SettingsProjectOverview",
+  "SettingsArtifacts",
+  "SettingsSchedules",
+]);
 const REMEMBERED_SETTINGS_PAGES: ReadonlySet<string> = new Set(
-  SETTINGS_PAGE_TARGETS.filter((page) => page !== "SettingsProjectOverview"),
+  SETTINGS_PAGE_TARGETS.filter((page) => !PROJECT_SCOPED_SETTINGS_PAGES.has(page)),
 );
 
 export function rememberedSettingsPage(selections: WorkspaceSelections): SettingsPageTarget {
