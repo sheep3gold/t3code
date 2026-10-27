@@ -155,6 +155,17 @@ const olderBootServiceHome = Effect.fn("olderBootServiceHome")(
           return undefined;
       }
     } else {
+      // Fork: 124 runs this server directly as the boot unit's main process with a
+      // self-built dist, while runtime/ still records the older official launcher.
+      // A unit whose MainPID is this process is us, not an older service.
+      const mainPid = yield* run("systemctl", [
+        "--user",
+        "show",
+        "--property=MainPID",
+        "--value",
+        BOOT_SERVICE_UNIT_FILE,
+      ]);
+      if (mainPid.code === 0 && mainPid.stdout.trim() === String(process.pid)) return undefined;
       const active = yield* run("systemctl", ["--user", "is-active", BOOT_SERVICE_UNIT_FILE]);
       // A unit waiting out its Restart= delay is activating, with exit code 3.
       loaded = active.code === 0 || (active.code === 3 && active.stdout.trim() === "activating");
