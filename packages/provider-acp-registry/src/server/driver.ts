@@ -665,7 +665,11 @@ export const AcpRegistryDriver: ProviderDriver<
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: () => checkProvider,
       checkProvider,
-      enrichSnapshot: ({ snapshot, getSnapshot, publishSnapshot }) => {
+      enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
+        snapshot,
+        getSnapshot,
+        publishSnapshot,
+      }) {
         if (!snapshot.installed) return Effect.void;
         const publishEnrichment = (
           Option.isSome(runtimeCoordinator)
@@ -747,7 +751,7 @@ export const AcpRegistryDriver: ProviderDriver<
             discard: true,
           },
         );
-      },
+      }),
     }).pipe(
       Effect.mapError(
         (cause) =>
