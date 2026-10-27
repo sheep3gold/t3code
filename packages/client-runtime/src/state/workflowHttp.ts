@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";

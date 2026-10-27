@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off effectSucceedWithVoid:off -- fork code predates these upstream style rules.
 import {
   EnvironmentTranslateUnavailableError,
   EnvironmentTranslateUpstreamError,

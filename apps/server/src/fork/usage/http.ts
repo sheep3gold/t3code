@@ -1,3 +1,4 @@
+// @effect-diagnostics effectSucceedWithVoid:off -- fork code predates these upstream style rules.
 /**
  * `/api/provider-usage-summary` on the upstream base.
  *

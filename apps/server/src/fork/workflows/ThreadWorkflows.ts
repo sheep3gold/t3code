@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off preferSucceedSomeOrNone:off -- fork code predates these upstream style rules.
 // @effect-diagnostics preferSchemaOverJson:off -- depends_on_json holds a plain number array written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";

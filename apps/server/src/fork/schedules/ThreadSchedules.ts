@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
 // @effect-diagnostics preferSchemaOverJson:off -- skip_dates_json holds a plain string array written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";

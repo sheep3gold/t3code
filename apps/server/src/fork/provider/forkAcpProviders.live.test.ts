@@ -1,4 +1,5 @@
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as CodexManagedTokenBroker from "../../provider/CodexManagedTokenBroker.ts";
 import * as SourceControlProviderRegistry from "../../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -126,6 +127,10 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
       ),
       NodeServices.layer,
       FetchHttpClient.layer,
+      // The live ACP test never starts a managed Codex turn.
+      Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
+        endpoint: Effect.succeed("unused-private-pipe"),
+      }),
       OpenCodeRuntime.layer.pipe(
         Layer.provide(OpenCodeServerLedger.layerTest),
         Layer.provide(layerPlatformTest),

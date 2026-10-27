@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
 /**
  * Thread work ledger on the upstream base.
  *

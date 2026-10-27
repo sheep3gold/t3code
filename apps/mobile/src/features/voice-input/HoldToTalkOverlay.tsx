@@ -33,7 +33,7 @@ const HINT_TOLERANCE = 40;
  * finger through the translucent backdrop.
  */
 export const HoldToTalkOverlay = memo(function HoldToTalkOverlay(props: {
-  readonly audioLevels: SharedValue<number[]>;
+  readonly audioLevels: SharedValue<ReadonlyArray<number>>;
   readonly cancelArmed: boolean;
   readonly elapsedSeconds: number;
   readonly gestureY: SharedValue<number>;

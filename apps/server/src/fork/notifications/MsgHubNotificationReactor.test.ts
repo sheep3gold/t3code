@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSucceedSomeOrNone:off -- fork code predates these upstream style rules.
 import { assert, it } from "@effect/vitest";
 import { afterEach, vi } from "vite-plus/test";
 import {

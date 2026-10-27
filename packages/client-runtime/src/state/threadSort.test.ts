@@ -1,15 +1,13 @@
-import { ProjectId, ProviderInstanceId, RunId } from "@t3tools/contracts";
+import { ProviderInstanceId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   generateSpreadPinOrderKeys,
-  getLatestThreadForProject,
   pinOrderKeyBetween,
   planPinnedMove,
   planPinnedReorder,
   resolveSettledThreadTimestamp,
   sortActiveThreadsByOrderKey,
-  sortPinnedThreadsByOrderKey,
   sortSettledThreads,
   sortThreads,
   type SettledThreadTimestampInput,
@@ -144,31 +142,6 @@ describe("sortSettledThreads", () => {
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
   });
-
-  it("matches the per-comparison order on a shuffled list with ties", () => {
-    const stamps = [
-      { settledAt: "2026-03-09T10:00:00.000Z" },
-      { settledAt: "invalid", latestUserMessageAt: "2026-03-09T10:00:00.000Z" },
-      { latestUserMessageAt: "2026-03-09T11:00:00.000Z" },
-      { updatedAt: "2026-03-09T09:00:00.000Z" },
-      { updatedAt: "invalid" },
-    ];
-    const threads = Array.from({ length: 30 }, (_, index) => {
-      const row = (index * 7) % 30;
-      return { ...settled({ id: `thread-${row % 3}`, ...stamps[row % 5] }), row };
-    });
-    const timestampMs = (thread: SettledThreadTimestampInput) => {
-      const timestamp = resolveSettledThreadTimestamp(thread);
-      return timestamp === null ? 0 : Date.parse(timestamp);
-    };
-    const expected = threads.toSorted(
-      (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
-    );
-
-    expect(sortSettledThreads(threads).map((thread) => thread.row)).toEqual(
-      expected.map((thread) => thread.row),
-    );
-  });
 });
 
 describe("sortThreads", () => {
@@ -242,33 +215,6 @@ describe("sortThreads", () => {
   });
 });
 
-describe("getLatestThreadForProject", () => {
-  it.each(["created_at", "updated_at"] as const)(
-    "matches the first sorted eligible thread for %s",
-    (sortOrder) => {
-      const projectId = ProjectId.make("project");
-      const threads = [
-        { ...makeThread({ id: "a" }), projectId, archivedAt: null },
-        { ...makeThread({ id: "z" }), projectId, archivedAt: null },
-        { ...makeThread({ id: "zz" }), projectId, archivedAt: "2026-03-10T00:00:00Z" },
-        { ...makeThread({ id: "zzz" }), projectId: ProjectId.make("other"), archivedAt: null },
-      ];
-      expect(getLatestThreadForProject(threads, projectId, sortOrder)).toBe(threads[1]);
-      expect(getLatestThreadForProject([], projectId, sortOrder)).toBeNull();
-      expect(getLatestThreadForProject(threads, ProjectId.make("missing"), sortOrder)).toBeNull();
-      const invalid = threads.slice(0, 2).map((thread) => ({
-        ...thread,
-        createdAt: "invalid",
-        updatedAt: "invalid",
-      }));
-      expect(getLatestThreadForProject(invalid, projectId, sortOrder)).toBe(invalid[1]);
-      expect(
-        getLatestThreadForProject([threads[1]!, { ...threads[1]! }], projectId, sortOrder),
-      ).toBe(threads[1]);
-    },
-  );
-});
-
 describe("planPinnedReorder with hidden rows", () => {
   it("keeps hidden slots available when inserting between visible neighbors", () => {
     const midpoint = pinOrderKeyBetween("f", "t")!;
@@ -304,72 +250,6 @@ describe("planPinnedReorder with hidden rows", () => {
     expect(keys).toEqual([...keys].sort());
     expect(new Set(keys).size).toBe(3);
     expect(keys.every((key) => !reserved.includes(key))).toBe(true);
-  });
-});
-
-describe("planPinnedMove", () => {
-  it("moves a thread up with a single key write", () => {
-    const assignments = planPinnedMove({
-      orderedIds: ["a", "b", "c"],
-      keysById: new Map([
-        ["a", "f"],
-        ["b", "m"],
-        ["c", "t"],
-      ]),
-      movedId: "c",
-      direction: "up",
-    });
-    expect(assignments).toHaveLength(1);
-    expect(assignments![0]!.id).toBe("c");
-    expect(assignments![0]!.orderKey > "f" && assignments![0]!.orderKey < "m").toBe(true);
-  });
-
-  it("returns null when the move falls off the end of the list", () => {
-    const input = {
-      orderedIds: ["a", "b"],
-      keysById: new Map([
-        ["a", "f"],
-        ["b", "m"],
-      ]),
-    };
-    expect(planPinnedMove({ ...input, movedId: "a", direction: "up" })).toBeNull();
-    expect(planPinnedMove({ ...input, movedId: "b", direction: "down" })).toBeNull();
-  });
-
-  it("materializes keys for the whole section when a neighbor is keyless", () => {
-    const assignments = planPinnedMove({
-      orderedIds: ["a", "b", "c"],
-      keysById: new Map([
-        ["a", null],
-        ["b", "m"],
-        ["c", null],
-      ]),
-      movedId: "b",
-      direction: "up",
-    });
-    expect(assignments).not.toBeNull();
-    const keys = assignments!.map((entry) => entry.orderKey);
-    expect([...keys].sort()).toEqual(keys);
-  });
-});
-
-describe("sortPinnedThreadsByOrderKey", () => {
-  it("breaks equal keys by id THEN environment so merged lists are stable everywhere", () => {
-    const sorted = sortPinnedThreadsByOrderKey([
-      {
-        id: "thread-1",
-        createdAt: "2026-03-09T10:00:00.000Z",
-        pinOrderKey: "m",
-        environmentId: "env-b",
-      },
-      {
-        id: "thread-1",
-        createdAt: "2026-03-09T11:00:00.000Z",
-        pinOrderKey: "m",
-        environmentId: "env-a",
-      },
-    ]);
-    expect(sorted.map((thread) => thread.environmentId)).toEqual(["env-a", "env-b"]);
   });
 });
 

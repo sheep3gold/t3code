@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";

@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
 import type { EnvironmentId } from "@t3tools/contracts";
 import { EnvironmentTranslateUnavailableError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";

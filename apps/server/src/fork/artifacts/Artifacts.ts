@@ -1,3 +1,4 @@
+// @effect-diagnostics effectFnOpportunity:off preferSucceedSomeOrNone:off -- fork code predates these upstream style rules.
 /**
  * Versioned project artifacts on the upstream base.
  *

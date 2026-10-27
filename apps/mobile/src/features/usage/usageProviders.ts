@@ -12,9 +12,9 @@ export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "kimi",
   "minimax",
   "kiro",
+  "muse",
 ];
 
-/** The usage series a provider driver reports under, or null for drivers without one. */
 export function usageProviderKind(driver: string): UsageProviderKind | null {
   if (driver === "claudeAgent") return "claude";
   return PROVIDER_ORDER.find((kind) => kind === driver) ?? null;
@@ -31,6 +31,7 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   kimi: "Kimi CLI",
   minimax: "MiniMax Code",
   kiro: "Kiro CLI",
+  muse: "Muse Code",
 };
 
 export function useProviderColors(): Record<UsageProviderKind, string> {
@@ -46,6 +47,7 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     kimi: "#6b7fd7",
     minimax: "#e0566b",
     kiro: "#7c5cbf",
+    muse: "#0866ff",
   };
 }
 
