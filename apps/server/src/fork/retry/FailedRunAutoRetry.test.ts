@@ -219,4 +219,38 @@ describe("FailedRunAutoRetry", () => {
       expect((yield* Deferred.await(dispatched)).commandId).toBe("auto-retry:1:run-2");
     }),
   );
+
+  it("resets the retry counter when the previous run succeeded", () => {
+    // Run 1 failed, auto-retry:1 → run 2 succeeded, run 3 failed again.
+    // The new failure should start a fresh chain (attempt 1), not continue from 2.
+    const runs = [
+      run("run-1", 1, "failed"),
+      run("run-2", 2, "completed", "auto-retry:1:run-1"),
+      run("run-3", 3, "failed"),
+    ];
+    const command = autoRetryCommand(projection(runs), "run-3" as OrchestrationV2Run["id"]);
+    expect(command?.commandId).toBe("auto-retry:1:run-3");
+  });
+
+  it("resets the counter even if the success came from a different thread state", () => {
+    // The predecessor completed regardless of message ID pattern.
+    const runs = [
+      run("run-1", 1, "failed"),
+      run("run-2", 2, "completed", "manual-user-retry"),
+      run("run-3", 3, "failed"),
+    ];
+    const command = autoRetryCommand(projection(runs), "run-3" as OrchestrationV2Run["id"]);
+    expect(command?.commandId).toBe("auto-retry:1:run-3");
+  });
+
+  it("still caps at 3 consecutive failures when there is no intervening success", () => {
+    // Without a success, the chain should still enforce the cap.
+    const runs = [
+      run("run-1", 1, "failed"),
+      run("run-2", 2, "failed", "auto-retry:1:run-1"),
+      run("run-3", 3, "failed", "auto-retry:2:run-1"),
+      run("run-4", 4, "failed", "auto-retry:3:run-1"),
+    ];
+    expect(autoRetryCommand(projection(runs), "run-4" as OrchestrationV2Run["id"])).toBeNull();
+  });
 });
