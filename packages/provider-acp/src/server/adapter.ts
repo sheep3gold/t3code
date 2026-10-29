@@ -117,6 +117,7 @@ import {
   isProviderNativeImageAttachment,
   providerMessageTextWithAttachmentPaths,
 } from "@t3tools/provider-core/server/attachmentPrompt";
+import { fitProviderImageEffect } from "@t3tools/provider-core/server/providerImageFit";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
@@ -7214,10 +7215,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   }),
               ),
             );
+            // Fork: oversized images fail the whole turn upstream; fit them first.
+            const fitted = yield* fitProviderImageEffect({
+              bytes,
+              mimeType: attachment.mimeType,
+            });
             prompt.push({
               type: "image",
-              data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
+              data: Buffer.from(fitted.bytes).toString("base64"),
+              mimeType: fitted.mimeType,
             });
           }
           if (prompt.length === 0) {

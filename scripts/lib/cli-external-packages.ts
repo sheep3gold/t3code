@@ -10,6 +10,9 @@ export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "@yuuang/",
   "@ff-labs/",
   "@napi-rs/keyring",
+  // Fork: sharp loads a per-platform libvips binary from @img/*.
+  "sharp",
+  "@img/",
   "@clerk/electron-passkeys",
   "node-gyp-build",
   "node-addon-api",
@@ -30,10 +33,15 @@ const CURSOR_RUNTIME_DEPENDENCIES = [
   "@fastify/busboy",
 ] as const;
 
+// Fork: sharp's own runtime closure; it loads them from disk beside itself.
+const SHARP_RUNTIME_DEPENDENCIES = ["detect-libc", "semver"] as const;
+
 export function isRuntimeExternalCliDependency(id: string): boolean {
   return (
     CLI_RUNTIME_EXTERNAL_PREFIXES.some((prefix) => id.startsWith(prefix)) ||
-    CURSOR_RUNTIME_DEPENDENCIES.some((name) => id === name || id.startsWith(`${name}/`))
+    [...CURSOR_RUNTIME_DEPENDENCIES, ...SHARP_RUNTIME_DEPENDENCIES].some(
+      (name) => id === name || id.startsWith(`${name}/`),
+    )
   );
 }
 

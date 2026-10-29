@@ -182,6 +182,7 @@ import {
 } from "@t3tools/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import { providerMessageTextWithAttachmentPaths } from "@t3tools/provider-core/server/attachmentPrompt";
+import { fitProviderImageEffect } from "@t3tools/provider-core/server/providerImageFit";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   ProviderAdapterDriverCreateError,
@@ -2197,7 +2198,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
         detail: `Invalid attachment id '${attachment.id}'`,
       });
     }
-    const bytes = yield* input.fileSystem.readFile(attachmentPath).pipe(
+    const rawBytes = yield* input.fileSystem.readFile(attachmentPath).pipe(
       Effect.mapError(
         (cause) =>
           new ProviderAdapter.ProviderAdapterProtocolError({
@@ -2208,6 +2209,12 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
           }),
       ),
     );
+    // Fork: the API rejects images over 5 MiB of base64; fit them first.
+    const fitted = yield* fitProviderImageEffect({
+      bytes: rawBytes,
+      mimeType: attachment.mimeType,
+    });
+    const bytes = fitted.bytes;
     const retainedBytes = 4 * Math.ceil(bytes.length / 3) + 128;
     if (retainedBytes > input.pdfReservation.budget.remainingBytes) continue;
     input.pdfReservation.budget.pending.bytes += retainedBytes;
@@ -2216,7 +2223,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
       type: "image",
       source: {
         type: "base64",
-        media_type: attachment.mimeType,
+        media_type: fitted.mimeType as typeof attachment.mimeType,
         data: Buffer.from(bytes).toString("base64"),
       },
     };

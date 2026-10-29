@@ -14,6 +14,30 @@ export const AUTO_RETRY_PROGRESS_ITEM_TYPES = [
   "dynamic_tool",
 ] as const satisfies ReadonlyArray<OrchestrationV2TurnItem["type"]>;
 
+/** Anything the provider showed the user; its absence means the prompt never landed. */
+export const AUTO_RETRY_OUTPUT_ITEM_TYPES = ["assistant_message"] as const satisfies ReadonlyArray<
+  OrchestrationV2TurnItem["type"]
+>;
+
+/**
+ * True when the run ended without any reply or tool call. Reasoning alone does
+ * not count: it streams before a provider persists the turn.
+ */
+export function failedBeforeAnyOutput(
+  run: Pick<OrchestrationV2Run, "id">,
+  turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+): boolean {
+  return !turnItems.some(
+    (item) =>
+      item.runId === run.id &&
+      (
+        [...AUTO_RETRY_PROGRESS_ITEM_TYPES, ...AUTO_RETRY_OUTPUT_ITEM_TYPES] as ReadonlyArray<
+          OrchestrationV2TurnItem["type"]
+        >
+      ).includes(item.type),
+  );
+}
+
 /** Only failures that can plausibly succeed on a second try. */
 export function isTransientFailure(failure: OrchestrationV2ProviderFailure | null): boolean {
   if (failure === null || failure.retryable === false) return false;
