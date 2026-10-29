@@ -20,7 +20,9 @@ import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import {
+  type AutoRetryOriginMessage,
   autoRetryCommand,
+  autoRetryOriginMessageId,
   isTransientFailure,
   MAX_AUTO_RETRY_ATTEMPTS,
   startFailedRunAutoRetry,
@@ -117,6 +119,24 @@ function projection(
     OrchestrationV2ThreadProjection,
     "thread" | "runs" | "turnItems" | "runtimeRequests"
   >;
+}
+
+const imageAttachment = {
+  type: "image",
+  id: "thread-1-image-1",
+  name: "IMG_6590.png",
+  mimeType: "image/png",
+  sizeBytes: 4_554_175,
+} as const;
+
+function userMessage(
+  id: string,
+  text: string,
+  attachments: ReadonlyArray<object> = [],
+): AutoRetryOriginMessage & { readonly role: "user" } {
+  return { id, role: "user", text, attachments } as unknown as AutoRetryOriginMessage & {
+    readonly role: "user";
+  };
 }
 
 describe("FailedRunAutoRetry", () => {
@@ -217,6 +237,7 @@ describe("FailedRunAutoRetry", () => {
       const failed = run("run-2", 2, "failed", recovered ? "auto-retry:3:run-1" : "message-run-2");
       const snapshot = projection([failed]);
       const turnItems = [...snapshot.turnItems, ...(recovered ? [progressItem(failed)] : [])];
+      const messages = [userMessage("message-run-2", "看看这几张图", [imageAttachment])];
       const event: OrchestrationV2DomainEvent = {
         id: EventId.make("event-failed"),
         threadId: failed.threadId,
@@ -232,6 +253,10 @@ describe("FailedRunAutoRetry", () => {
           getThreadRecords: (_threadId, _records, filter) =>
             Effect.succeed({
               ...snapshot,
+              messages: messages.filter(
+                (message) =>
+                  filter?.messageIds === undefined || filter.messageIds.includes(message.id),
+              ),
               turnItems: turnItems.filter(
                 (item) =>
                   (filter?.turnItemTypes === undefined ||
@@ -254,7 +279,14 @@ describe("FailedRunAutoRetry", () => {
         TestClock.layer(),
       );
       yield* startFailedRunAutoRetry.pipe(Effect.provide(layer));
-      expect((yield* Deferred.await(dispatched)).commandId).toBe("auto-retry:1:run-2");
+      const command = yield* Deferred.await(dispatched);
+      expect(command.commandId).toBe("auto-retry:1:run-2");
+      // Without any output the original message and its images go out again.
+      expect(command).toMatchObject(
+        recovered
+          ? { attachments: [], text: expect.stringContaining("Continue where you left off") }
+          : { attachments: [imageAttachment], text: expect.stringContaining("看看这几张图") },
+      );
     }),
   );
 
@@ -368,5 +400,86 @@ describe("FailedRunAutoRetry", () => {
       run("run-4", 4, "failed", "auto-retry:3:run-1"),
     ];
     expect(autoRetryCommand(projection(runs), "run-4" as OrchestrationV2Run["id"])).toBeNull();
+  });
+
+  it("replays the original message and images when the run failed before any output", () => {
+    const failed = run("run-2", 2, "failed");
+    const snapshot = projection([run("run-1", 1, "completed"), failed]);
+    expect(autoRetryOriginMessageId(snapshot, failed.id)).toBe("message-run-2");
+    const command = autoRetryCommand(
+      snapshot,
+      failed.id,
+      userMessage("message-run-2", "帮忙看看这几个可以吗", [imageAttachment]),
+    );
+    expect(command).toMatchObject({
+      commandId: "auto-retry:1:run-2",
+      attachments: [imageAttachment],
+      text: expect.stringMatching(/^帮忙看看这几个可以吗\n\n\(Automatic retry 1\/3: /),
+    });
+  });
+
+  it("keeps replaying the first message across a chain of empty failures", () => {
+    const runs = [run("run-2", 2, "failed"), run("run-3", 3, "failed", "auto-retry:1:run-2")];
+    const snapshot = projection(runs);
+    expect(autoRetryOriginMessageId(snapshot, "run-3" as OrchestrationV2Run["id"])).toBe(
+      "message-run-2",
+    );
+    const command = autoRetryCommand(
+      snapshot,
+      "run-3" as OrchestrationV2Run["id"],
+      userMessage("message-run-2", "原始问题", [imageAttachment]),
+    );
+    expect(command).toMatchObject({
+      commandId: "auto-retry:2:run-2",
+      attachments: [imageAttachment],
+      text: expect.stringContaining("Automatic retry 2/3"),
+    });
+  });
+
+  it.each([
+    { type: "assistant_message", text: "Half an answer" },
+    { type: "command_execution" },
+    { type: "dynamic_tool", status: "failed" },
+  ] satisfies ReadonlyArray<Partial<OrchestrationV2TurnItem>>)(
+    "continues instead of replaying once the provider produced output: %j",
+    (overrides) => {
+      const failed = run("run-2", 2, "failed");
+      const snapshot = projection([failed]);
+      const withOutput = {
+        ...snapshot,
+        turnItems: [...snapshot.turnItems, progressItem(failed, overrides)],
+      };
+      expect(autoRetryOriginMessageId(withOutput, failed.id)).toBeNull();
+      expect(
+        autoRetryCommand(
+          withOutput,
+          failed.id,
+          userMessage("message-run-2", "q", [imageAttachment]),
+        ),
+      ).toMatchObject({
+        attachments: [],
+        text: expect.stringContaining("Continue where you left off"),
+      });
+    },
+  );
+
+  it("replays a native slash command verbatim and ignores an unrelated message", () => {
+    const failed = run("run-2", 2, "failed");
+    const snapshot = projection([failed]);
+    expect(
+      autoRetryCommand(snapshot, failed.id, userMessage("message-run-2", "/compact")),
+    ).toMatchObject({
+      text: "/compact",
+    });
+    expect(
+      autoRetryCommand(
+        snapshot,
+        failed.id,
+        userMessage("message-other", "stale", [imageAttachment]),
+      ),
+    ).toMatchObject({
+      attachments: [],
+      text: expect.stringContaining("Continue where you left off"),
+    });
   });
 });

@@ -2,6 +2,7 @@ import {
   CommandId,
   MessageId,
   type OrchestrationV2Command,
+  type OrchestrationV2ConversationMessage,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type ThreadId,
@@ -19,8 +20,10 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import { forkParked } from "../../serverActivation.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import {
+  AUTO_RETRY_OUTPUT_ITEM_TYPES,
   AUTO_RETRY_PROGRESS_ITEM_TYPES,
   canAutoRetry,
+  failedBeforeAnyOutput,
   MAX_AUTO_RETRY_ATTEMPTS,
   retryLineage,
 } from "./FailedRunAutoRetryPolicy.ts";
@@ -34,12 +37,40 @@ const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "waiting",
 ]);
 
+export type AutoRetryOriginMessage = Pick<
+  OrchestrationV2ConversationMessage,
+  "id" | "text" | "attachments" | "context"
+>;
+
+/**
+ * Fork: a run that failed before any output usually never reached the
+ * provider's history (Kiro drops rejected prompts), so resend the message.
+ */
+function replayText(original: string, attempt: number): string {
+  // A native slash command must stay the first token and must not gain prose.
+  if (original.trimStart().startsWith("/")) return original;
+  const note = `(Automatic retry ${attempt}/${MAX_AUTO_RETRY_ATTEMPTS}: the previous attempt failed before any reply, so the original message is sent again.)`;
+  return original.trim().length === 0 ? note : `${original}\n\n${note}`;
+}
+
+/** The user message a retry of `runId` would replay, if it needs one. */
+export function autoRetryOriginMessageId(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "turnItems">,
+  runId: OrchestrationV2Run["id"],
+): OrchestrationV2Run["userMessageId"] | null {
+  const run = projection.runs.find((candidate) => candidate.id === runId);
+  if (run === undefined || !failedBeforeAnyOutput(run, projection.turnItems)) return null;
+  const { originRunId } = retryLineage(run, projection.turnItems);
+  return projection.runs.find((candidate) => candidate.id === originRunId)?.userMessageId ?? null;
+}
+
 export function autoRetryCommand(
   projection: Pick<
     OrchestrationV2ThreadProjection,
     "thread" | "runs" | "turnItems" | "runtimeRequests"
   >,
   runId: OrchestrationV2Run["id"],
+  originMessage?: AutoRetryOriginMessage | null,
 ): OrchestrationV2Command | null {
   const { thread, runs } = projection;
   const run = runs.find((candidate) => candidate.id === runId);
@@ -61,13 +92,26 @@ export function autoRetryCommand(
   const lineage = retryLineage(run, projection.turnItems);
   const attempt = lineage.attempt + 1;
   const identity = `${MESSAGE_PREFIX}:${attempt}:${lineage.originRunId}`;
+  const originRun = runs.find((candidate) => candidate.id === lineage.originRunId);
+  const replay =
+    originMessage !== undefined &&
+    originMessage !== null &&
+    originRun !== undefined &&
+    originMessage.id === originRun.userMessageId &&
+    failedBeforeAnyOutput(run, projection.turnItems)
+      ? originMessage
+      : null;
   return {
     type: "message.dispatch",
     commandId: CommandId.make(identity),
     messageId: MessageId.make(identity),
     threadId: thread.id,
-    text: `Continue where you left off. (Automatic retry ${attempt}/${MAX_AUTO_RETRY_ATTEMPTS} after a transient provider error.)`,
-    attachments: [],
+    text:
+      replay === null
+        ? `Continue where you left off. (Automatic retry ${attempt}/${MAX_AUTO_RETRY_ATTEMPTS} after a transient provider error.)`
+        : replayText(replay.text, attempt),
+    ...(replay?.context === undefined ? {} : { context: replay.context }),
+    attachments: replay === null ? [] : [...replay.attachments],
     dispatchMode: { type: "start_immediately" },
     createdBy: "user",
     creationSource: "server",
@@ -91,13 +135,33 @@ export const startFailedRunAutoRetry = Effect.gen(function* () {
     Effect.map((preferences) => preferences.autoRetryFailedThreads),
   );
 
-  const evaluate = (threadId: ThreadId, runId: OrchestrationV2Run["id"]) =>
-    projections
-      .getThreadRecords(threadId, ["runs", "turnItems", "runtimeRequests"], {
-        turnItemTypes: ["error", ...AUTO_RETRY_PROGRESS_ITEM_TYPES],
+  const evaluate = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    runId: OrchestrationV2Run["id"],
+  ) {
+    const projection = yield* projections.getThreadRecords(
+      threadId,
+      ["runs", "turnItems", "runtimeRequests"],
+      {
+        turnItemTypes: [
+          "error",
+          ...AUTO_RETRY_PROGRESS_ITEM_TYPES,
+          ...AUTO_RETRY_OUTPUT_ITEM_TYPES,
+        ],
         turnItemRunIds: [runId],
-      })
-      .pipe(Effect.map((projection) => autoRetryCommand(projection, runId)));
+      },
+    );
+    const originMessageId = autoRetryOriginMessageId(projection, runId);
+    const originMessage =
+      originMessageId === null
+        ? null
+        : ((yield* projections.getThreadRecords(threadId, ["messages"], {
+            messageIds: [originMessageId],
+          })).messages.find(
+            (message) => message.id === originMessageId && message.role === "user",
+          ) ?? null);
+    return autoRetryCommand(projection, runId, originMessage);
+  });
 
   // A failed run can be re-published (checkpoint, title); keep one retry per run.
   const pending = new Set<string>();

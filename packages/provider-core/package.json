@@ -15,6 +15,10 @@
       "types": "./src/server/attachmentPrompt.ts",
       "import": "./src/server/attachmentPrompt.ts"
     },
+    "./server/providerImageFit": {
+      "types": "./src/server/providerImageFit.ts",
+      "import": "./src/server/providerImageFit.ts"
+    },
     "./server/auth": {
       "types": "./src/server/auth.ts",
       "import": "./src/server/auth.ts"
@@ -191,7 +195,8 @@
   "dependencies": {
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "sharp": "0.35.4"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
