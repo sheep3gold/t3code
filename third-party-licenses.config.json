@@ -868,6 +868,14 @@
       "name": "iobuffer",
       "license": "MIT",
       "sourceUrl": "https://github.com/image-js/iobuffer"
+    },
+    {
+      "license": "LGPL-3.0-or-later",
+      "repositoryUrl": "https://github.com/lovell/sharp-libvips",
+      "generatedNotice": {
+        "licenseId": "LGPL-3.0-or-later",
+        "copyrights": ["Copyright (c) libvips contributors and Lovell Fuller"]
+      }
     }
   ]
 }
