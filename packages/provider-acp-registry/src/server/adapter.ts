@@ -9,6 +9,7 @@ import {
   extractDevinSubagentUpdate,
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
+import { findModelConfigOption } from "@t3tools/provider-acp/server/runtimeModel";
 import {
   copilotClientCapabilitiesMeta,
   extractCopilotSubagentUpdate,
@@ -177,9 +178,9 @@ function makeAcpRegistryRuntime(
 }
 
 /**
- * Model config options are the portable way to pick a model. Agents that only
- * report the unstable session `models` state (Kimi CLI) are switched through
- * `session/set_model` instead, and only to a model they listed.
+ * Kimi CLI lists `model` and `model,thinking`; T3 shows one model with a Thinking
+ * toggle and opens the matching variant here. Everything else (`null`) uses the
+ * default ACP model selection.
  */
 export const applyAcpRegistryModelSelection: NonNullable<
   AcpAdapterV2Flavor["applyModelSelection"]
@@ -189,20 +190,13 @@ export const applyAcpRegistryModelSelection: NonNullable<
   modelSelection,
 }) {
   const requested = modelSelection.model;
-  if (requested.length === 0 || requested === "auto" || requested === "default") {
-    return undefined;
-  }
-  const setup = startResult.sessionSetupResult;
-  if (setup.configOptions?.some((option) => option.category === "model") === true) {
-    yield* runtime.setModel(requested);
-    return undefined;
-  }
-  const models = setup.models;
-  if (models == null) return undefined;
+  const models = startResult.sessionSetupResult.models;
+  const hasModelOption = findModelConfigOption(yield* runtime.getConfigOptions) !== undefined;
+  if (requested.length === 0 || hasModelOption || models == null) return null;
   const availableIds = new Set(models.availableModels.map((model) => model.modelId));
   const variant = resolveThinkingVariant(requested, modelSelection.options, availableIds);
-  if (!availableIds.has(variant)) return undefined;
-  yield* runtime.setSessionModel(variant);
+  if (variant === requested) return null;
+  if (models.currentModelId !== variant) yield* runtime.setSessionModel(variant);
   return variant;
 });
 

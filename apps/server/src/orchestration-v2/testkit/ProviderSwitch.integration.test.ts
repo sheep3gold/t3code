@@ -850,12 +850,14 @@ describe("orchestration v2 provider switching", () => {
             yield* wait(targetOrdinal + 3);
           }
           const projection = yield* orchestrator.getThreadProjection(threadId);
-          if (
-            scenario.includes("target-oversized") ||
-            scenario.includes("target-tight") ||
-            scenario.includes("target-background") ||
-            scenario.includes("target-subagent")
-          ) {
+          if (scenario.includes("target-oversized") || scenario.includes("target-tight")) {
+            // Fork: when even a fresh native session cannot hold the handoff, the
+            // turn still runs with a t3_thread_read pointer instead of failing.
+            assert.equal(projection.runs.at(-1)?.status, "completed");
+            assert.equal(yield* Ref.get(generation), 1);
+            return;
+          }
+          if (scenario.includes("target-background") || scenario.includes("target-subagent")) {
             assert.equal(projection.runs.at(-1)?.status, "failed");
             assert.equal(yield* Ref.get(generation), 1);
             assert.equal(projection.messages.at(-1)!.text, current);

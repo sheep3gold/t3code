@@ -281,7 +281,8 @@ export interface AcpAdapterV2Flavor {
     readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
     readonly startResult: AcpSessionRuntime.AcpSessionRuntimeStartResult;
     readonly modelSelection: ModelSelection;
-  }) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
+    /** Fork: `null` hands the selection to the default model protocol. */
+  }) => Effect.Effect<string | undefined | null, EffectAcpErrors.AcpError>;
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   ) => string | undefined;
@@ -6683,14 +6684,18 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ? new AcpModelSelectionError({ model: modelSelection.model, cause: error })
               : error;
           let appliedModel: string | undefined;
-          if (flavor.applyModelSelection !== undefined) {
-            appliedModel = yield* flavor
-              .applyModelSelection({
-                runtime,
-                startResult,
-                modelSelection,
-              })
-              .pipe(Effect.mapError(rejectedModel));
+          const flavorApplied =
+            flavor.applyModelSelection === undefined
+              ? null
+              : yield* flavor
+                  .applyModelSelection({
+                    runtime,
+                    startResult,
+                    modelSelection,
+                  })
+                  .pipe(Effect.mapError(rejectedModel));
+          if (flavorApplied !== null) {
+            appliedModel = flavorApplied;
           } else if (requestedModel.length > 0) {
             // Stored catalog choices can expire; explicitly configured custom IDs
             // are validated by the agent instead.

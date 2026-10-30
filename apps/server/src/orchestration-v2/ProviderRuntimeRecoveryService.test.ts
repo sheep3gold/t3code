@@ -238,7 +238,7 @@ it.effect.each(["startup", "shutdown"] as const)(
     const requestId = RuntimeRequestId.make(`question-request-${trigger}`);
     const providerSessionId = ProviderSessionId.make(`question-session-${trigger}`);
     const projection = {
-      thread: { id: threadId },
+      thread: { id: threadId, lineage: { relationshipToParent: null }, creationSource: "user" },
       runtimeRequests: [
         {
           id: requestId,
