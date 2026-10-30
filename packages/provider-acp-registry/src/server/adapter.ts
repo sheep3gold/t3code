@@ -9,6 +9,7 @@ import {
   extractDevinSubagentUpdate,
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
+import { findModelConfigOption } from "@t3tools/provider-acp/server/runtimeModel";
 import {
   copilotClientCapabilitiesMeta,
   extractCopilotSubagentUpdate,
@@ -177,32 +178,27 @@ function makeAcpRegistryRuntime(
 }
 
 /**
- * Model config options are the portable way to pick a model. Agents that only
- * report the unstable session `models` state (Kimi CLI) are switched through
- * `session/set_model` instead, and only to a model they listed.
+ * Kimi CLI lists `model` and `model,thinking`; T3 shows one model with a Thinking
+ * toggle and opens the matching variant here. Everything else (`null`) uses the
+ * default ACP model selection.
  */
-// @effect-diagnostics-next-line effectFnOpportunity:off -- assigned to a flavor hook type.
 export const applyAcpRegistryModelSelection: NonNullable<
   AcpAdapterV2Flavor["applyModelSelection"]
-> = ({ runtime, startResult, modelSelection }) =>
-  Effect.gen(function* () {
-    const requested = modelSelection.model;
-    if (requested.length === 0 || requested === "auto" || requested === "default") {
-      return undefined;
-    }
-    const setup = startResult.sessionSetupResult;
-    if (setup.configOptions?.some((option) => option.category === "model") === true) {
-      yield* runtime.setModel(requested);
-      return undefined;
-    }
-    const models = setup.models;
-    if (models == null) return undefined;
-    const availableIds = new Set(models.availableModels.map((model) => model.modelId));
-    const variant = resolveThinkingVariant(requested, modelSelection.options, availableIds);
-    if (!availableIds.has(variant)) return undefined;
-    yield* runtime.setSessionModel(variant);
-    return variant;
-  });
+> = Effect.fn("AcpRegistryAdapter.applyModelSelection")(function* ({
+  runtime,
+  startResult,
+  modelSelection,
+}) {
+  const requested = modelSelection.model;
+  const models = startResult.sessionSetupResult.models;
+  const hasModelOption = findModelConfigOption(yield* runtime.getConfigOptions) !== undefined;
+  if (requested.length === 0 || hasModelOption || models == null) return null;
+  const availableIds = new Set(models.availableModels.map((model) => model.modelId));
+  const variant = resolveThinkingVariant(requested, modelSelection.options, availableIds);
+  if (variant === requested) return null;
+  if (models.currentModelId !== variant) yield* runtime.setSessionModel(variant);
+  return variant;
+});
 
 export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(function* (
   options: AcpRegistryAdapterV2Options,
@@ -239,7 +235,13 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const copilotRouting = isCopilot ? makeCopilotSubagentRouting() : undefined;
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,
-    capabilities: AcpProviderCapabilitiesV2,
+    // Cancelling a Copilot prompt also kills the background agents it started.
+    capabilities: isCopilot
+      ? {
+          ...AcpProviderCapabilitiesV2,
+          turns: { ...AcpProviderCapabilitiesV2.turns, supportsSteeringByInterruptRestart: false },
+        }
+      : AcpProviderCapabilitiesV2,
     customModels: readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
     promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
     ...(registryAgentId === "factory-droid"

@@ -2,6 +2,7 @@ import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
+  isProviderNativeSubagentThread,
   type OrchestrationV2DomainEvent,
   type ProviderThreadId,
   type OrchestrationV2RestartCancelledBackgroundWork,
@@ -96,15 +97,19 @@ function isNonterminalTurnItemStatus(status: string): boolean {
   return status === "pending" || status === "running" || status === "waiting";
 }
 
-function isNonterminalNodeStatus(status: string): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
+/**
+ * A delegate_task child. Its own thread is reconciled and continued on its own
+ * (here, or in the linked environment it runs in) and reports back through
+ * the app, so it is not provider background work.
+ */
 function isAppOwnedDelegation(task: {
   readonly origin: OrchestrationV2Subagent["origin"];
   readonly childThreadId: ThreadId | null;
+  readonly remoteChild?: OrchestrationV2Subagent["remoteChild"];
 }): boolean {
-  return task.origin === "app_owned" && task.childThreadId !== null;
+  return (
+    task.origin === "app_owned" && (task.childThreadId !== null || task.remoteChild !== undefined)
+  );
 }
 
 function isAppOwnedDelegationItem(
@@ -224,36 +229,37 @@ export const make = Effect.gen(function* () {
         }
         runs.push(run);
       }
-      // A live provider callback cannot survive process loss. Keep its question
-      // answerable as a new message rather than discarding the user's choices.
-      const recoverableQuestions = projection.runtimeRequests.filter(
+      const pendingRequests = projection.runtimeRequests.filter(
+        (request) => request.status === "pending",
+      );
+      // The lost provider callback cannot resume; persisted questions can be
+      // answered by a new user message in threads that accept messages.
+      const questions = pendingRequests.filter(
         (request) =>
-          request.status === "pending" &&
           request.kind === "user_input" &&
           request.responseCapability.type === "live" &&
           projection.turnItems.some(
             (item) =>
               item.type === "user_input_request" &&
               item.requestId === request.id &&
-              (item.status === "pending" || item.status === "running" || item.status === "waiting"),
-          ),
+              item.nodeId === request.nodeId &&
+              item.questions.length > 0 &&
+              item.questions.every((question) => question.question.trim().length > 0),
+          ) &&
+          !isProviderNativeSubagentThread(projection.thread),
       );
-      const recoverableQuestionIds = new Set(recoverableQuestions.map((request) => request.id));
+      const recoveredRequestIds = new Set(questions.map((request) => request.id));
       const messageRequestNodeIds = new Set(
-        projection.runtimeRequests
+        pendingRequests
           .filter(
             (request) =>
-              request.status === "pending" &&
-              (request.responseCapability.type === "message" ||
-                recoverableQuestionIds.has(request.id)),
+              request.responseCapability.type === "message" || recoveredRequestIds.has(request.id),
           )
           .map((request) => request.nodeId),
       );
-      const requests = projection.runtimeRequests.filter(
+      const requests = pendingRequests.filter(
         (request) =>
-          request.status === "pending" &&
-          request.responseCapability.type !== "message" &&
-          !recoverableQuestionIds.has(request.id),
+          request.responseCapability.type !== "message" && !recoveredRequestIds.has(request.id),
       );
       // Delegated task rows, items and nodes stay open: the child settles them.
       const delegatedTaskNodeIds = new Set<string>([
@@ -339,14 +345,10 @@ export const make = Effect.gen(function* () {
           runs.push(run);
           continue;
         }
-        // A process loss leaves no live provider callback for a turn's pending
-        // approvals, so a stopped thread's queue waits for explicit consent to
-        // drain again. A thread that opts into continuing after a server update
-        // keeps that promise for its queue too: parking it here would strand
-        // every message behind the turn, because nothing in production ever
-        // drains a hold this pass wrote, and the resumed turn's own completion
-        // would then meet a queue that only a person can restart. A user Stop
-        // records its hold on the queued run directly, and survives both passes.
+        // Process loss parks a stopped thread's queue until the user consents.
+        // Threads that continue after a server update keep their queue running:
+        // nothing would ever drain a hold written here. A user Stop records its
+        // hold on the queued run itself and survives this pass.
         if (continueAfterRestart || run.queueHeld === true) continue;
         events.push({
           id: yield* allocateEventId(),
@@ -358,14 +360,14 @@ export const make = Effect.gen(function* () {
           payload: { ...run, queueHeld: true },
         });
       }
-      for (const request of recoverableQuestions) {
+      for (const question of questions) {
         events.push({
           id: yield* allocateEventId(),
           type: "runtime-request.updated",
           threadId: projection.thread.id,
-          nodeId: request.nodeId,
+          nodeId: question.nodeId,
           occurredAt: now,
-          payload: { ...request, responseCapability: { type: "message" } },
+          payload: { ...question, responseCapability: { type: "message" } },
         });
       }
       for (const request of requests) {
@@ -470,6 +472,8 @@ export const make = Effect.gen(function* () {
             candidate.runId === run.id &&
             (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
             !isAppOwnedDelegationItem(candidate) &&
+            // A link card waits on the user, not the run, and answers by message.
+            candidate.type !== "link_request" &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -540,7 +544,7 @@ export const make = Effect.gen(function* () {
         if (item.nodeId !== null && item.nodeId !== undefined) {
           const staleItemNode = projection.nodes.find(
             (candidate) =>
-              candidate.id === item.nodeId && isNonterminalNodeStatus(candidate.status),
+              candidate.id === item.nodeId && isNonterminalTurnItemStatus(candidate.status),
           );
           if (staleItemNode !== undefined && !cancelledStaleNodeIds.has(staleItemNode.id)) {
             cancelledStaleNodeIds.add(staleItemNode.id);

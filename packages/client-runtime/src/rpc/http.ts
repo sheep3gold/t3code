@@ -130,11 +130,6 @@ export const makeForkTranslationHttpApiGroupClient = (httpBaseUrl: string) =>
     }),
   );
 
-export const makeForkTranslationHttpApiUrlBuilder = (httpBaseUrl: string) =>
-  HttpApiClient.urlBuilder(ForkTranslationHttpApi, {
-    baseUrl: remoteApiBaseUrl(httpBaseUrl),
-  });
-
 const failRemoteRequest = (
   requestUrl: string,
   cause: unknown,

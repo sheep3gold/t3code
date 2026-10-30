@@ -20,7 +20,7 @@ import type { AcpRegistrySettings } from "../settings.ts";
  * MiniMax Code leaves `model` empty on its usage rows, so every record is
  * attributed to the coding plan the CLI talks to.
  */
-export const MINIMAX_USAGE_MODEL = "minimax-code";
+const MINIMAX_USAGE_MODEL = "minimax-code";
 
 /** Relative to the data directory, which `MINIMAX_DATA_DIR` moves away from `~/.minimax`. */
 const MINIMAX_RUNTIME_DATABASE = ["v2", "sqlite", "runtime-state.sqlite"] as const;
@@ -42,7 +42,7 @@ export interface MinimaxUsageRow {
   readonly cache_write_tokens: unknown;
 }
 
-export function parseMinimaxRow(row: MinimaxUsageRow, database: string): UsageRecord | null {
+function parseMinimaxRow(row: MinimaxUsageRow, database: string): UsageRecord | null {
   if (typeof row.ts !== "number" || !Number.isFinite(row.ts)) return null;
   const reasoningTokens = tokenCount(row.reasoning_tokens);
   const totals = {
@@ -108,7 +108,9 @@ export const minimaxUsageReader: Extract<
       if (!isMinimaxCodeCommand(instance.config.commandPath)) continue;
       const configured = instance.environment["MINIMAX_DATA_DIR"]?.trim();
       const dataDir = path.resolve(
-        configured ? expandHomePath(configured, homeDirectory) : path.join(homeDirectory, ".minimax"),
+        configured
+          ? expandHomePath(configured, homeDirectory)
+          : path.join(homeDirectory, ".minimax"),
       );
       owners.set(dataDir, [...(owners.get(dataDir) ?? []), instance.instanceId]);
     }
@@ -122,14 +124,12 @@ export const minimaxUsageReader: Extract<
         if (!exists) return { dir, files: null, instanceIds } satisfies ProviderUsageScan;
         return yield* readDatabase(database, sinceMs).pipe(
           Effect.provide(NodeSqliteClient.layer({ filename: database, readonly: true })),
-          Effect.map(
-            (records): ProviderUsageScan => ({
-              dir,
-              files: [{ path: database, records }],
-              status: "ok",
-              instanceIds,
-            }),
-          ),
+          Effect.map((records): ProviderUsageScan => ({
+            dir,
+            files: [{ path: database, records }],
+            status: "ok",
+            instanceIds,
+          })),
           Effect.catchTags({
             SqlError: () =>
               Effect.succeed({

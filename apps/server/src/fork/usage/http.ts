@@ -1,14 +1,7 @@
 // @effect-diagnostics effectSucceedWithVoid:off -- fork code predates these upstream style rules.
 /**
- * `/api/provider-usage-summary` on the upstream base.
- *
- * Upstream's usage page reads `UsageService.readSummary` over a websocket; the
- * fork's own hub pages (the model-usage page and the zxytech mini program) poll
- * this HTTP route instead, and use the fork-only quota probes to show balance
- * windows the upstream service never reads. It is registered as a raw
- * `HttpRouter` route, like upstream's asset and OTLP routes, because it serves
- * an untyped JSON document rather than an `EnvironmentHttpApi` group.
- *
+ * Fork-only `/api/provider-usage-summary` HTTP route polled by zxytech hub
+ * pages, with fork quota probes; a raw `HttpRouter` route (untyped JSON).
  * @module fork/usage/http
  */
 import { AuthOrchestrationReadScope, UsageReadError } from "@t3tools/contracts";
@@ -49,15 +42,13 @@ const PROVIDER_USAGE_SUMMARY_DAYS = 7;
 /** Days bucket into this zone so a turn lands on the day the user experienced. */
 const PROVIDER_USAGE_HISTORY_TIME_ZONE = "Asia/Shanghai";
 
-export const layerProviderUsageSummaryRoute = HttpRouter.add(
+const layerProviderUsageSummaryRoute = HttpRouter.add(
   "GET",
   PROVIDER_USAGE_SUMMARY_PATH,
   Effect.gen(function* () {
-    // The payload is the sanitized summary other zxytech hubs proxy
-    // server-to-server behind an nginx IP allowlist (101 web-hub), so a
-    // request without credentials is allowed through; when credentials are
-    // present they must carry the orchestration read scope. Invalid
-    // credentials still fail rather than silently downgrading to anonymous.
+    // Hubs proxy this sanitized summary behind an nginx IP allowlist, so no
+    // credentials is allowed; present credentials need the orchestration read
+    // scope, and invalid ones still fail instead of downgrading to anonymous.
     const request = yield* HttpServerRequest.HttpServerRequest;
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const session = yield* serverAuth.authenticateHttpRequest(request).pipe(

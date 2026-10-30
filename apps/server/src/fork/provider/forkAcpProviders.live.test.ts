@@ -1,4 +1,5 @@
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as PortScanner from "../../preview/PortScanner.ts";
 import * as CodexManagedTokenBroker from "../../provider/CodexManagedTokenBroker.ts";
 import * as SourceControlProviderRegistry from "../../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -127,6 +128,7 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
       ),
       NodeServices.layer,
       FetchHttpClient.layer,
+      Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined }),
       // The live ACP test never starts a managed Codex turn.
       Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
         endpoint: Effect.succeed("unused-private-pipe"),
@@ -195,6 +197,7 @@ const waitForIdle = Effect.fn("AcpRegistryOrchestratorV2Live.waitForIdle")(funct
   expectedRunCount: number,
 ) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
+  // oxlint-disable-next-line t3code/no-polling-loop-in-tests -- live test drives real ACP agents with no completion signal.
   for (let attempt = 0; attempt < 240; attempt += 1) {
     const projection = yield* orchestrator.getThreadProjection(threadId);
     if (
@@ -205,6 +208,7 @@ const waitForIdle = Effect.fn("AcpRegistryOrchestratorV2Live.waitForIdle")(funct
     ) {
       return projection;
     }
+    // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- real agent turns run on the wall clock.
     yield* Effect.sleep("500 millis");
   }
   const stuck = yield* orchestrator.getThreadProjection(threadId);

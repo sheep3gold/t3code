@@ -1,17 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - the bootstrap file read happens inside a promise-based fetch helper
 /**
- * Factory API key resolution for the fork-on-upstream base.
- *
- * The V1 fork kept the Droid key in etcd so it could be rotated without
- * restarting the server; the probe and the ACP wrapper both read it through
- * this resolver. Upstream has no Factory driver, so the resolver lives with the
- * other fork-only modules.
- *
- * The key itself is never logged; failures report only the reason.
- *
+ * Fork-only Factory (Droid) API key resolver; the key lives in etcd so it
+ * rotates without a restart. The key is never logged, only failure reasons.
  * @module fork/usage/factoryApiKey
  */
-import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -43,7 +35,7 @@ const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,::1";
  * that never mentions a proxy keeps the default egress rather than leaking
  * direct connections out of the licensed region.
  */
-export function withFactoryProxy(
+function withFactoryProxy(
   environment: NodeJS.ProcessEnv,
   proxyUrl: string | undefined,
 ): NodeJS.ProcessEnv {
@@ -55,12 +47,6 @@ export function withFactoryProxy(
   };
   for (const name of PROXY_ENV_NAMES) proxied[name] = url;
   return proxied;
-}
-
-/** Stable, non-reversible identity of a key, for "did it change" checks. */
-export function factoryApiKeyFingerprint(environment: NodeJS.ProcessEnv): string {
-  const key = environment.FACTORY_API_KEY?.trim();
-  return key ? NodeCrypto.createHash("sha256").update(key).digest("hex").slice(0, 16) : "";
 }
 
 function defaultBootstrapPath(): string {

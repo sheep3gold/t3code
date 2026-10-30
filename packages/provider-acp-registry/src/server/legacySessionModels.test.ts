@@ -13,8 +13,9 @@ const kimiModels = {
   ],
 };
 
-const recordingRuntime = (calls: Array<string>) =>
+const recordingRuntime = (calls: Array<string>, configOptions: ReadonlyArray<unknown> = []) =>
   ({
+    getConfigOptions: Effect.succeed(configOptions),
     setModel: (model: string) => Effect.sync(() => void calls.push(`config:${model}`)),
     setSessionModel: (model: string) =>
       Effect.sync(() => {
@@ -36,7 +37,7 @@ describe("agents without a model config option", () => {
     assert.strictEqual(live.currentModelId, "kimi-code/k3,thinking");
   });
 
-  it.effect("switch through session/set_model, only to a listed model", () =>
+  it.effect("leave plain models to the default ACP model selection", () =>
     Effect.gen(function* () {
       const calls: Array<string> = [];
       const startResult = { sessionSetupResult: { models: kimiModels } } as never;
@@ -45,32 +46,21 @@ describe("agents without a model config option", () => {
         startResult,
         modelSelection: selecting("kimi-code/kimi-for-coding-highspeed"),
       });
-      const unknown = yield* applyAcpRegistryModelSelection({
-        runtime: recordingRuntime(calls),
-        startResult,
-        modelSelection: selecting("not-listed"),
-      });
-      assert.strictEqual(applied, "kimi-code/kimi-for-coding-highspeed");
-      assert.isUndefined(unknown);
-      assert.deepStrictEqual(calls, ["session:kimi-code/kimi-for-coding-highspeed"]);
+      assert.isNull(applied);
+      assert.deepStrictEqual(calls, []);
     }),
   );
 
-  it.effect("agents with a model config option keep using it", () =>
+  it.effect("agents with a model config option keep the default protocol", () =>
     Effect.gen(function* () {
       const calls: Array<string> = [];
       const applied = yield* applyAcpRegistryModelSelection({
-        runtime: recordingRuntime(calls),
-        startResult: {
-          sessionSetupResult: {
-            models: kimiModels,
-            configOptions: [{ id: "model", category: "model", type: "select" }],
-          },
-        } as never,
+        runtime: recordingRuntime(calls, [{ id: "model", category: "model", type: "select" }]),
+        startResult: { sessionSetupResult: { models: kimiModels } } as never,
         modelSelection: selecting("kimi-code/kimi-for-coding-highspeed"),
       });
-      assert.isUndefined(applied);
-      assert.deepStrictEqual(calls, ["config:kimi-code/kimi-for-coding-highspeed"]);
+      assert.isNull(applied);
+      assert.deepStrictEqual(calls, []);
     }),
   );
 });
@@ -126,12 +116,11 @@ describe("thinking model variants", () => {
       yield* open("kimi-code/k3.1-pro", off);
       yield* open("kimi-code/k2-thinker", off);
       yield* open("kimi-code/k3,thinking", off);
+      // A plain or already-variant model is left to the default protocol.
       assert.deepStrictEqual(calls, [
         "session:kimi-code/k3,thinking",
-        "session:kimi-code/k3",
         "session:kimi-code/k3.1-pro,thinking",
         "session:kimi-code/k2-thinker,thinking",
-        "session:kimi-code/k3,thinking",
       ]);
     }),
   );
