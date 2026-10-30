@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 /** 5 MiB of base64 is 3.75 MiB of raw bytes; keep a margin below it. */
 export const PROVIDER_IMAGE_MAX_BYTES = Math.floor(((5 * 1024 * 1024) / 4) * 3 * 0.97);
 /** Anthropic rejects images with an edge longer than 8000 px. */
-export const PROVIDER_IMAGE_MAX_EDGE = 8000;
+const PROVIDER_IMAGE_MAX_EDGE = 8000;
 const JPEG_QUALITIES = [90, 82, 74] as const;
 const DOWNSCALE_STEP = 0.85;
 const MIN_DOWNSCALE_EDGE = 1024;

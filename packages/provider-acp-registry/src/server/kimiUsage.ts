@@ -17,7 +17,7 @@ import type { AcpRegistrySettings } from "../settings.ts";
  * never which model served it, so every record is attributed to the Kimi Code
  * plan the CLI talks to.
  */
-export const KIMI_USAGE_MODEL = "kimi-code";
+const KIMI_USAGE_MODEL = "kimi-code";
 
 /**
  * The Kimi CLI writes its session log as `~/.kimi/sessions/<workspace>/<session>/wire.jsonl`.

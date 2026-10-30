@@ -14,15 +14,11 @@ import * as Path from "effect/Path";
 import type { AcpRegistrySettings } from "../settings.ts";
 
 /**
- * Kiro CLI never reports per-request token counts: every `*_token_count` field
- * in its session files stays 0. What it does record per user turn is the
- * context occupancy (`final_context_usage_percentage`) against the model's
- * context window, plus the billed credits (`metering_usage`). Token totals are
- * therefore *estimates*: a turn's tokens are taken as the growth of the
- * context occupancy since the previous turn, or — when compaction shrank the
- * context — the post-turn occupancy itself as a lower bound.
+ * Kiro CLI reports no token counts, only per-turn context occupancy and billed
+ * credits. Token totals are estimates: occupancy growth since the last turn, or
+ * the post-turn occupancy as a lower bound after compaction.
  */
-export const KIRO_USAGE_MODEL_FALLBACK = "kiro";
+const KIRO_USAGE_MODEL_FALLBACK = "kiro";
 
 /** Sessions live at `<KIRO_HOME>/sessions/cli/<session>.json`; KIRO_HOME defaults to `~/.kiro`. */
 const KIRO_SESSIONS_DIR = ["sessions", "cli"] as const;

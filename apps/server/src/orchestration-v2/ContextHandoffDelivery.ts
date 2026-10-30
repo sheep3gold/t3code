@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { ContextHandoffBudgetError } from "@t3tools/provider-core/server/failure";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -18,6 +19,8 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly budget: number | Effect.Effect<number, BudgetError>;
     readonly deferInline?: boolean;
+    /** Fit checks fail on overflow so the caller can recover with a fresh native session. */
+    readonly failOnOverflow?: boolean;
     readonly alreadyDeliveredItemIds: ReadonlySet<string>;
     readonly inject?: (
       history: ProviderAdapter.ProviderAdapterV2HistoricalContext,
@@ -75,6 +78,7 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
     });
     if (historyCost(selected.messages, selected.context) > budget) {
       if (input.deferInline) return { context: "", delivered: Effect.void, unsent: Effect.void };
+      if (input.failOnOverflow) return yield* new ContextHandoffBudgetError();
       // The target window cannot hold even the coverage header. Failing here
       // would block the user's turn on bookkeeping, so hand over a pointer
       // instead: every item stays recoverable through t3_thread_read.

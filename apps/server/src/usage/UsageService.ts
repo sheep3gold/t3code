@@ -1,5 +1,3 @@
-import * as NodeOS from "node:os";
-
 import {
   type ProviderInstanceConfig,
   ProviderInstanceId,
@@ -112,14 +110,10 @@ const RatesCacheFile = Schema.Struct({
   fetchedAtMs: Schema.Number,
   document: Schema.Unknown,
 });
-const decodeRatesCache = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(RatesCacheFile as unknown as Schema.Codec<typeof RatesCacheFile.Type>),
-);
-const encodeRatesCache = Schema.encodeEffect(
-  Schema.fromJsonString(RatesCacheFile as unknown as Schema.Codec<typeof RatesCacheFile.Type>),
-);
+const decodeRatesCache = Schema.decodeUnknownEffect(Schema.fromJsonString(RatesCacheFile));
+const encodeRatesCache = Schema.encodeEffect(Schema.fromJsonString(RatesCacheFile));
 
-const ScanCacheJson = Schema.fromJsonString(Schema.Unknown as unknown as Schema.Codec<unknown>);
+const ScanCacheJson = Schema.fromJsonString(Schema.Unknown);
 const decodeScanCacheFile = Schema.decodeUnknownEffect(ScanCacheJson);
 const encodeUsageRecordKey = Schema.encodeSync(ScanCacheJson);
 const CachedSource = Schema.Struct({ dir: Schema.String, volumeId: Schema.String });
@@ -162,12 +156,9 @@ export class UsageService extends Context.Service<
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
     /**
-     * Scans the trailing `days` of transcripts and attributes usage to the
-     * configured provider instances rather than physical transcript volumes.
-     * Two instances of one driver (e.g. two codex homes serving overlapping
-     * model slugs) must never merge, so attribution goes by instance home
-     * directory. Instances that resolve to the same physical directory are
-     * reported together under each of their ids.
+     * Attributes the trailing `days` of usage to provider instances by home
+     * directory, so two instances of one driver never merge. Instances sharing
+     * a physical directory are reported under each of their ids.
      */
     readonly readInstances: (input: {
       readonly days: number;
@@ -183,6 +174,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcess.Environment;
+  const hostname = yield* HostProcess.Hostname;
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
 
   const fileCache: ScanCache = new Map();
@@ -205,6 +197,37 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
+  const hostIdPath = path.join(config.baseDir, "usage-host-id");
+  const explicitHostId = hostEnvironment["T3CODE_HOST_ID"]?.trim();
+  const hostId =
+    explicitHostId ||
+    (yield* fileSystem.readFileString(hostIdPath).pipe(
+      Effect.catchIf(
+        (error) => error.reason._tag === "NotFound",
+        () =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              yield* fileSystem.makeDirectory(config.baseDir, { recursive: true });
+              const tempDirectory = yield* fileSystem.makeTempDirectoryScoped({
+                directory: config.baseDir,
+                prefix: "usage-host-id.",
+              });
+              const tempFile = path.join(tempDirectory, "identity");
+              yield* fileSystem.writeFileString(tempFile, `${hostname}\n`);
+              // Publish complete contents without replacing another initializer's identity.
+              yield* fileSystem.link(tempFile, hostIdPath).pipe(
+                Effect.catchIf(
+                  (error) => error.reason._tag === "AlreadyExists",
+                  () => Effect.void,
+                ),
+              );
+              return yield* fileSystem.readFileString(hostIdPath);
+            }),
+          ),
+      ),
+      Effect.map((value) => value.trim() || hostname),
+      Effect.orElseSucceed(() => hostname),
+    ));
   let rates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
   let ratesLastFailedAtMs: number | null = null;
@@ -693,11 +716,9 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Attributes the trailing `days` of transcript usage to the configured
-   * provider instances. Uses the same cached per-file records as the summary
-   * scan; dedupe runs in-memory per directory because the keys encode the
-   * aggregation window. Rates price each record directly, so a missing rate
-   * shows up as `unpricedRecords` rather than a zero-cost bucket.
+   * Attributes trailing usage to provider instances from the summary scan's
+   * cached records; dedupe is per directory because keys encode the window.
+   * A missing rate counts as `unpricedRecords`, not a zero-cost bucket.
    */
   const scanInstances = Effect.fn("UsageService.scanInstances")(function* (
     days: number,
@@ -713,11 +734,9 @@ export const make = Effect.gen(function* () {
     const sinceDayStartMs = todayStartMs - (days - 1) * DAY_MS;
     const windowStartMs = sinceDayStartMs - MTIME_SLACK_MS;
     const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    // All-time is the whole retained history, so the scan has to reach back to
-    // the retention cutoff, which is also where the scan cache drops files.
-    // The trailing figures are then picked out of the scanned records by their
-    // own timestamp, so widening the scan never changes them: a transcript's
-    // mtime is never older than its last record.
+    // All-time needs the whole retained history, so scan back to the retention
+    // cutoff. Trailing figures are filtered by record timestamp, so the wider
+    // scan never changes them.
     const historyStartMs = retentionCutoffMs;
 
     const [, scannedDirs, dirOwners] = yield* Effect.all(
@@ -983,7 +1002,6 @@ export const make = Effect.gen(function* () {
     const startedAtMs = yield* Clock.currentTimeMillis;
     yield* ensureScanCacheLoaded;
 
-    const hostId = NodeOS.hostname();
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
       return yield* new UsageReadError({

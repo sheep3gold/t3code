@@ -14,7 +14,9 @@ const TRUTHY = /^(?:1|true|yes|on)$/i;
 export function wantsCustomModelsOnly(environment: ProviderInstanceEnvironment): boolean {
   return environment.some(
     (variable) =>
-      CUSTOM_MODELS_ONLY_FLAGS.includes(variable.name) && TRUTHY.test(variable.value.trim()),
+      CUSTOM_MODELS_ONLY_FLAGS.includes(variable.name) &&
+      typeof variable.value === "string" &&
+      TRUTHY.test(variable.value.trim()),
   );
 }
 

@@ -1,11 +1,9 @@
 import type { ServerProvider, ServerProviderSkill } from "@t3tools/contracts";
 
 /**
- * Skills the user turned off in Settings → Skills. Matching is by name,
- * case-insensitive, and global across provider instances: a disabled skill is
- * dropped from every provider snapshot the server publishes, so the `$` menu
- * stops offering it, and the Claude adapter leaves a hand-typed `$name` as
- * literal text instead of dispatching it.
+ * Skills turned off in Settings → Skills, matched by name case-insensitively
+ * across all provider instances. They leave every provider snapshot, and the
+ * Claude adapter keeps a typed `$name` as literal text.
  */
 export function disabledSkillNameSet(disabledSkills: ReadonlyArray<string>): ReadonlySet<string> {
   return new Set(disabledSkills.map((name) => name.trim().toLowerCase()).filter(Boolean));
@@ -23,7 +21,7 @@ function filterSkills(
 }
 
 /** Drops disabled skills from the machine-level list and every cached workspace list. */
-export function filterProviderDisabledSkills(
+function filterProviderDisabledSkills(
   provider: ServerProvider,
   disabled: ReadonlySet<string>,
 ): ServerProvider {
