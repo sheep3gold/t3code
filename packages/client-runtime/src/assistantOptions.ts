@@ -102,6 +102,37 @@ export interface AssistantOptionSource {
   readonly options: ReadonlyArray<string>;
 }
 
+/** 定位候选来源只需要 turn item 的这几项；不含正文，web 端的结构视图会剥掉流式文本。 */
+export interface OptionCandidateTurnItem {
+  readonly item: {
+    readonly type: string;
+    readonly id: string;
+    readonly messageId?: string;
+    readonly streaming?: boolean;
+  };
+}
+
+/**
+ * 在不含正文的 turn item 列表里找可能带候选的那条 assistant 回复。
+ *
+ * web 端 ChatView 只拿得到剥掉 assistant 文本的结构视图（assistant 行连同 messageId
+ * 都不在 timelineMessages 里），所以先按结构定位，再单独订阅这一条的正文。规则与
+ * `resolveActiveOptionSource` 相同：用户已回话、或回复还在流式输出，都返回 null。
+ */
+export function resolveOptionCandidateItem(
+  rows: ReadonlyArray<OptionCandidateTurnItem>,
+): { readonly itemId: string; readonly messageId: string } | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]?.item;
+    if (item === undefined) continue;
+    if (item.type === "user_message") return null;
+    if (item.type !== "assistant_message") continue;
+    if (item.streaming === true || item.messageId === undefined) return null;
+    return { itemId: item.id, messageId: item.messageId };
+  }
+  return null;
+}
+
 /**
  * 找出当前仍然有效的候选。
  *
