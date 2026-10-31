@@ -12,7 +12,7 @@ import { McpAppFrame } from "./McpAppFrame";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
-import { useProject, useThreadShell } from "../../state/entities";
+import { useAssistantMessageText, useProject, useThreadShell } from "../../state/entities";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantCitationSource } from "./AssistantCitationSource";
 import { resolveAssistantMessageCopyState } from "./MessagesTimeline.logic";
@@ -28,10 +28,15 @@ import { MessageTranslateButton, MessageTranslationBlock } from "./MessageTransl
 
 export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const rawText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  // The timeline holds a streaming message's row while only its text grows.
+  const liveText = useAssistantMessageText(
+    row.message.streaming ? ctx.threadRef : null,
+    row.projectedItem?.item.id,
+  );
+  const text = liveText ?? row.message.text;
+  const rawText = text || (row.message.streaming ? "" : "(empty response)");
   // The marker line is stripped from the body; the chips render above the
-  // composer in ChatView since candidates are "what to send next". Not parsed
-  // while streaming: a half-emitted marker would render broken chips that jump.
+  // composer. Not parsed while streaming: a half-emitted marker would jump.
   const parsedOptions = row.message.streaming ? null : parseAssistantOptions(rawText);
   const messageText = parsedOptions?.body ?? rawText;
 
