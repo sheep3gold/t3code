@@ -6770,7 +6770,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ) {
           const model = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
           if (
-            flavor.applyModelSelection !== undefined ||
             model.length === 0 ||
             model === "default" ||
             model === "auto" ||
@@ -6782,7 +6781,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const available =
             option?.type === "select"
               ? flattenSelectChoices(option.options).some((choice) => choice.value === model)
-              : models?.availableModels.some((choice) => choice.modelId === model);
+              : models?.availableModels.some(
+                  // Fork: Kimi lists `model,thinking` variants under one collapsed model id.
+                  (choice) => choice.modelId === model || choice.modelId === `${model},thinking`,
+                );
           if (available === false) {
             return yield* new AcpModelSelectionError({
               model: modelSelection.model,
