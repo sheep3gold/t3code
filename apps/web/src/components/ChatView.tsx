@@ -207,7 +207,9 @@ import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations"
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useThreadTranslation } from "../hooks/useThreadTranslation";
 import {
+  parseAssistantOptions,
   resolveActiveOptionSource,
+  resolveOptionCandidateItem,
   toggleOptionInPrompt,
 } from "@t3tools/client-runtime/assistantOptions";
 import { AssistantOptionChips } from "./chat/AssistantOptionChips";
@@ -259,6 +261,7 @@ import {
   useThreadUpdatedAt,
   useThreadLastVisitedAt,
   useQuietThreadVisibleTurnItems,
+  useAssistantMessageText,
   useThreadStatus,
   useThreadHistory,
   useQuietThreadShell,
@@ -1576,7 +1579,24 @@ export default function ChatView(props: ChatViewProps) {
    * assistant turn that offered them: once the user replies, that turn is over
    * and its candidates are a stale action the user should not be able to click.
    */
-  const activeOptionSource = resolveActiveOptionSource(timelineMessages);
+  // timelineMessages has no assistant rows (they are streamed and stripped from
+  // the structure), so locate the candidate reply structurally and read only its text.
+  const optionCandidateItem = isServerThread
+    ? resolveOptionCandidateItem(serverVisibleTurnItems)
+    : null;
+  const optionCandidateText = useAssistantMessageText(
+    routeThreadDetailRef,
+    optionCandidateItem?.itemId,
+  );
+  const optionCandidateOptions =
+    optionCandidateItem === null || optionCandidateText === null
+      ? []
+      : (parseAssistantOptions(optionCandidateText)?.options ?? []);
+  const activeOptionSource = !isServerThread
+    ? resolveActiveOptionSource(timelineMessages)
+    : optionCandidateItem !== null && optionCandidateOptions.length > 0
+      ? { messageId: optionCandidateItem.messageId, options: optionCandidateOptions }
+      : null;
   /**
    * The arrow consumes the candidate set. The send it starts makes every chip
    * of that turn meaningless, so they go on the tap instead of waiting for the

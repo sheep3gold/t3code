@@ -4,6 +4,7 @@ import {
   isOptionSelected,
   parseAssistantOptions,
   resolveActiveOptionSource,
+  resolveOptionCandidateItem,
   toggleOptionInPrompt,
   type AssistantOptionMessage,
 } from "./assistantOptions.ts";
@@ -80,5 +81,35 @@ describe("resolveActiveOptionSource", () => {
   it("has nothing to offer when the last reply carries no marker", () => {
     const source = resolveActiveOptionSource([assistant("a1", "做完了")]);
     expect(source).toBeNull();
+  });
+});
+
+describe("resolveOptionCandidateItem", () => {
+  const row = (item: { type: string; id: string; messageId?: string; streaming?: boolean }) => ({
+    item,
+  });
+
+  it("finds the last finished reply through trailing work rows", () => {
+    const candidate = resolveOptionCandidateItem([
+      row({ type: "user_message", id: "u1", messageId: "mu1" }),
+      row({ type: "assistant_message", id: "a1", messageId: "ma1", streaming: false }),
+      row({ type: "checkpoint", id: "c1" }),
+    ]);
+    expect(candidate).toEqual({ itemId: "a1", messageId: "ma1" });
+  });
+
+  it("drops the candidate once the user has replied", () => {
+    const candidate = resolveOptionCandidateItem([
+      row({ type: "assistant_message", id: "a1", messageId: "ma1", streaming: false }),
+      row({ type: "user_message", id: "u2", messageId: "mu2" }),
+    ]);
+    expect(candidate).toBeNull();
+  });
+
+  it("waits while the reply is still streaming", () => {
+    const candidate = resolveOptionCandidateItem([
+      row({ type: "assistant_message", id: "a1", messageId: "ma1", streaming: true }),
+    ]);
+    expect(candidate).toBeNull();
   });
 });
