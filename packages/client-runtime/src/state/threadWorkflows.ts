@@ -92,12 +92,26 @@ function resolveThreadProviderSession(projection: Projection): ProviderSession |
   );
 }
 
+/**
+ * A side chat starts from a digest handoff instead of a native provider session, so it holds no
+ * provider state that a switch would lose. It can move to any provider while it is idle.
+ */
+function sideChatAllowsProviderSwitch(projection: Projection): boolean {
+  return (
+    projection.thread.lineage?.sideChat === true && resolveActiveThreadRun(projection) === null
+  );
+}
+
 export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
   if (projection == null) return false;
   const session = resolveThreadProviderSession(projection);
   if (session !== null) {
-    return session.capabilities.sessions.supportsProviderSwitchingViaHandoff;
+    return (
+      session.capabilities.sessions.supportsProviderSwitchingViaHandoff ||
+      sideChatAllowsProviderSwitch(projection)
+    );
   }
+  if (sideChatAllowsProviderSwitch(projection)) return true;
   if (resolveActiveThreadRun(projection) !== null) return false;
   if (projection.thread.historyOrigin === "v1_import" || projection.runs.length === 0) return true;
 
