@@ -388,9 +388,11 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
 
+  // Read through the detail ref, never the route id: a draft's id would load as not found
+  // before creation and stay cached as a deleted thread ("Thread unavailable").
   const threadProjection = useThreadProjection({
-    environmentId: props.environmentId,
-    threadId: props.selectedThread.id,
+    environmentId: props.selectedThreadDetailRef?.environmentId ?? null,
+    threadId: props.selectedThreadDetailRef?.threadId ?? null,
   });
   const servedProjection = threadProjection?.projection ?? null;
   const servedModel =
