@@ -298,6 +298,9 @@ A side chat works in the same folder as the thread. Its first reply asks before 
 edits files or runs commands. After that, it uses the permission mode you choose
 in its composer.
 
+A side chat starts on the thread's provider, and you can move it to any other
+provider from its composer or its thread settings.
+
 To use what you learned, choose **Bring back**. The thread gets the side chat with
 your next message there. Bring back is available while the thread is idle.
 

@@ -65,6 +65,53 @@ describe("thread workflows", () => {
     ).toBe(false);
   });
 
+  it("lets an idle side chat move to any provider", () => {
+    const projection = {
+      thread: {
+        id: "thread",
+        activeProviderThreadId: "provider-thread",
+        modelSelection: { instanceId: "kiro", model: "claude-opus-5.5" },
+        lineage: {
+          parentThreadId: "parent",
+          relationshipToParent: "fork",
+          rootThreadId: "parent",
+          sideChat: true,
+        },
+      },
+      runs: [{ id: "run", status: "interrupted", providerThreadId: "provider-thread" }],
+      providerSessions: [],
+      providerThreads: [
+        {
+          id: "provider-thread",
+          appThreadId: "thread",
+          providerInstanceId: "kiro",
+          providerSessionId: "provider-session",
+          nativeThreadRef: null,
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+
+    expect(threadSupportsProviderHandoff(projection)).toBe(true);
+    expect(
+      threadSupportsProviderHandoff({
+        ...projection,
+        providerSessions: [
+          {
+            id: "provider-session",
+            status: "running",
+            capabilities: { sessions: { supportsProviderSwitchingViaHandoff: false } },
+          },
+        ] as unknown as OrchestrationV2ThreadProjection["providerSessions"],
+      }),
+    ).toBe(true);
+    expect(
+      threadSupportsProviderHandoff({
+        ...projection,
+        runs: [{ ...projection.runs[0]!, status: "running" }],
+      }),
+    ).toBe(false);
+  });
+
   it("sorts queued messages and gates promotion from capabilities", () => {
     const state = deriveThreadQueueWorkflowState({
       thread: { id: "thread", activeProviderThreadId: "provider-thread" },
