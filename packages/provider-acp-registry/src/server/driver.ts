@@ -280,16 +280,46 @@ export function applyAcpRegistryLiveConfiguration(
   customModels: ReadonlyArray<string>,
 ): ServerProvider {
   const { message: _staleProbeMessage, ...snapshot } = provider;
-  // Legacy session/load responses (Kimi CLI) can omit model state even when
-  // the discovery session reported it. An empty update must not erase that inventory.
-  const models =
-    configuration.models.length === 0 && provider.models.length > 0
-      ? provider.models
-      : modelsFromDiscovery(configuration, customModels);
+  // session/load may omit models (Kimi returns `{}`); keep the probed list
+  // and apply any live option descriptors to it.
+  const probedModels = provider.models.filter((model) => !model.isCustom);
+  const discovery =
+    configuration.models.length > 0
+      ? configuration
+      : {
+          ...configuration,
+          models: probedModels.flatMap((model) => {
+            const baseEntry = {
+              id: model.slug,
+              name: model.name,
+              description: null,
+            };
+            // If the collapsed model had the synthetic Thinking toggle,
+            // infer the raw `,thinking` variant was present in the original probe.
+            const hasThinkingCapability =
+              model.capabilities?.optionDescriptors?.some(
+                (opt) => opt.id === ACP_THINKING_OPTION_ID,
+              ) ?? false;
+            return hasThinkingCapability
+              ? [
+                  baseEntry,
+                  {
+                    ...baseEntry,
+                    id: `${model.slug},thinking`,
+                    name: `${model.name} (thinking)`,
+                  },
+                ]
+              : [baseEntry];
+          }),
+          currentModelId: probedModels.find((model) => model.isDefault)?.slug ?? null,
+        };
   return {
     ...snapshot,
     status: provider.enabled ? "ready" : provider.status,
-    models,
+    models:
+      configuration.models.length === 0 && configuration.configOptions.length === 0
+        ? provider.models
+        : modelsFromDiscovery(discovery, customModels),
   };
 }
 

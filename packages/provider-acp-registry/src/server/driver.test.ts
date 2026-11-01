@@ -126,66 +126,103 @@ describe("acpRegistrySnapshotReadiness", () => {
     ).toBe("unknown");
   });
 
-  it("overlays live configuration without dropping probe-owned capabilities or models", () => {
-    const provider = buildCheckedAcpRegistrySnapshot({
-      ...identity,
-      settings: decodeSettings({ agentId: "test-agent" }),
-      checkedAt: "2026-08-13T10:00:00.000Z",
-      inspection: {
-        status: "ready",
-        agentId: "test-agent",
-        version: "1.0.0",
-        distribution: "npx",
-      },
-      probe: {
+  it.each([
+    { modelId: "probe-model", thinking: false },
+    { modelId: "kimi-code/k3", thinking: true },
+  ])(
+    "overlays live configuration without dropping $modelId capabilities or models",
+    ({ modelId, thinking }) => {
+      const provider = buildCheckedAcpRegistrySnapshot({
+        ...identity,
+        settings: decodeSettings({ agentId: "test-agent" }),
+        checkedAt: "2026-08-13T10:00:00.000Z",
+        inspection: {
+          status: "ready",
+          agentId: "test-agent",
+          version: "1.0.0",
+          distribution: "npx",
+        },
         probe: {
-          instanceId: identity.instanceId,
-          ready: true,
-          icon: null,
-          authMethods: [],
-          models: [{ id: "probe-model", name: "Probe model", description: null }],
-          currentModelId: "probe-model",
-          configOptions: [],
-          sessionManagement: {
-            canList: true,
-            canLoad: true,
-            canResume: true,
-            canLogout: true,
-            canDelete: true,
-            canConfigureProviders: true,
+          probe: {
+            instanceId: identity.instanceId,
+            ready: true,
+            icon: null,
+            authMethods: [],
+            models: [
+              { id: modelId, name: "Probe model", description: null },
+              ...(thinking
+                ? [{ id: `${modelId},thinking`, name: "Probe model (thinking)", description: null }]
+                : []),
+            ],
+            currentModelId: modelId,
+            configOptions: [],
+            sessionManagement: {
+              canList: true,
+              canLoad: true,
+              canResume: true,
+              canLogout: true,
+              canDelete: true,
+              canConfigureProviders: true,
+            },
+          },
+          slashCommands: [],
+          skills: [],
+        },
+      });
+
+      expect(
+        applyAcpRegistryLiveConfiguration(
+          provider,
+          {
+            models: [{ id: "live-model", name: "Live model", description: null }],
+            currentModelId: "live-model",
+            configOptions: [],
+          },
+          [],
+        ),
+      ).toMatchObject({
+        auth: { status: "unknown", canLogout: true },
+        nativeSessions: { canList: true, canLoad: true, canResume: true },
+        models: [{ slug: "live-model", isDefault: true }],
+      });
+
+      expect(
+        applyAcpRegistryLiveConfiguration(
+          provider,
+          { models: [], currentModelId: null, configOptions: [] },
+          [],
+        ).models,
+      ).toEqual(provider.models);
+
+      const liveOptions = [
+        {
+          id: "effort",
+          label: "Effort",
+          type: "select" as const,
+          options: [{ id: "high", label: "High" }],
+          currentValue: "high",
+        },
+      ];
+      expect(
+        applyAcpRegistryLiveConfiguration(
+          provider,
+          { models: [], currentModelId: null, configOptions: liveOptions },
+          [],
+        ).models,
+      ).toMatchObject([
+        {
+          slug: modelId,
+          isDefault: true,
+          capabilities: {
+            optionDescriptors: [
+              { id: "effort", currentValue: "high" },
+              ...(thinking ? [{ id: "_t3/thinking", currentValue: true }] : []),
+            ],
           },
         },
-        slashCommands: [],
-        skills: [],
-      },
-    });
-
-    expect(
-      applyAcpRegistryLiveConfiguration(
-        provider,
-        {
-          models: [{ id: "live-model", name: "Live model", description: null }],
-          currentModelId: "live-model",
-          configOptions: [],
-        },
-        [],
-      ),
-    ).toMatchObject({
-      auth: { status: "unknown", canLogout: true },
-      nativeSessions: { canList: true, canLoad: true, canResume: true },
-      models: [{ slug: "live-model", isDefault: true }],
-    });
-
-    expect(
-      applyAcpRegistryLiveConfiguration(
-        provider,
-        { models: [], currentModelId: null, configOptions: [] },
-        [],
-      ),
-    ).toMatchObject({
-      models: [{ slug: "probe-model", isDefault: true }],
-    });
-  });
+      ]);
+    },
+  );
 
   it("projects discovery without claiming authentication when no login methods are advertised", () => {
     const snapshot = buildCheckedAcpRegistrySnapshot({
