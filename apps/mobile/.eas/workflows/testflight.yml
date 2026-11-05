@@ -1,0 +1,16 @@
+name: Fork iOS TestFlight
+on:
+  push:
+    branches: [main]
+jobs:
+  build_ios:
+    type: build
+    params:
+      platform: ios
+      profile: fork-testflight
+  submit_ios:
+    needs: [build_ios]
+    type: submit
+    params:
+      build_id: ${{ needs.build_ios.outputs.build_id }}
+      profile: fork-testflight

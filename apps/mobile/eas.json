@@ -102,6 +102,7 @@
     },
     "fork-testflight": {
       "ios": {
+        "ascAppId": "6831013532",
         "appleTeamId": "Q6768H569J",
         "bundleIdentifier": "com.yangxin.t3code.fork"
       }
