@@ -307,6 +307,38 @@ and `VERCEL_ORG_ID` secrets. It also respects the optional `VERCEL_TEAM_SLUG`
 variable. The Vercel project's root directory must be `apps/marketing`.
 Git deployments remain disabled in `apps/marketing/vercel.ts`.
 
+## Fork iOS cloud releases
+
+For `sheep3gold/t3code`, `Fork iOS TestFlight` runs on GitHub-hosted Ubuntu and
+builds on EAS macOS workers. It does not connect to mac-work. Push mobile changes
+through the normal feature-branch/release-hub flow; the resulting main push
+triggers `.github/workflows/mobile-fork-testflight.yml`. A manual dispatch retries
+the current main revision. The upstream workflow remains upstream-only.
+
+The `fork-testflight` profile uses `com.yangxin.t3code.fork`, team `Q6768H569J`,
+and the existing Expo project owned by `yxyxyyxxhhh`. Build numbers increment on
+EAS. Updates are delivered as native TestFlight builds; this profile disables
+Expo Updates until a separate OTA rollout is verified.
+
+One-time account setup:
+
+- Keep the existing `EXPO_TOKEN` GitHub Actions secret.
+- Register the fork bundle ID in the paid team, create its App Store Connect app,
+  and set repository variable `T3CODE_ASC_APP_ID` to that app's numeric Apple ID.
+  Do not use upstream's `6787819824` or Y4's `6830609063`.
+- In `apps/mobile`, log in to the Expo owner account, then run
+  `eas credentials -p ios` and select `fork-testflight`. Configure App Store
+  distribution signing for the main target and all extensions, and an App Store
+  Connect API key for submission. This setup CLI can run on Linux; it is not a
+  local iOS build. The cloud credentials must exist before unattended builds.
+- Enable automatic distribution for the internal TestFlight group, accept its
+  invitation on the phone, and enable TestFlight automatic updates.
+
+The workflow waits for the cloud build and submits that exact build ID. An upload
+success still requires Apple processing; TestFlight tester access is separate.
+Every TestFlight build expires after 90 days. This workflow does not submit an
+App Store public release for review.
+
 ## Mobile TestFlight and store releases
 
 Merges to main publish compatible OTAs and build iOS prereleases with the `testflight`

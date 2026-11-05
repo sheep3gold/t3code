@@ -75,6 +75,17 @@
       "ios": {
         "image": "macos-tahoe-26.6-xcode-27.1"
       }
+    },
+    "fork-testflight": {
+      "extends": "production",
+      "distribution": "store",
+      "channel": "fork-testflight",
+      "env": {
+        "T3CODE_IOS_PERSONAL_TEAM": "0",
+        "T3CODE_IOS_BUNDLE_ID": "com.yangxin.t3code.fork",
+        "T3CODE_APPLE_TEAM_ID": "Q6768H569J",
+        "T3CODE_MOBILE_UPDATES_ENABLED": "0"
+      }
     }
   },
   "submit": {
@@ -87,6 +98,12 @@
       },
       "android": {
         "track": "internal"
+      }
+    },
+    "fork-testflight": {
+      "ios": {
+        "appleTeamId": "Q6768H569J",
+        "bundleIdentifier": "com.yangxin.t3code.fork"
       }
     }
   }

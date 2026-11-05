@@ -1,0 +1,88 @@
+name: Fork iOS TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - apps/mobile/**
+      - packages/**
+      - assets/**
+      - scripts/**
+      - patches/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/mobile-fork-testflight.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'sheep3gold/t3code'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      T3CODE_ASC_APP_ID: ${{ vars.T3CODE_ASC_APP_ID }}
+      APP_VARIANT: production
+      T3CODE_IOS_PERSONAL_TEAM: '0'
+      T3CODE_IOS_BUNDLE_ID: com.yangxin.t3code.fork
+      T3CODE_APPLE_TEAM_ID: Q6768H569J
+      T3CODE_MOBILE_UPDATES_ENABLED: '0'
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - name: Check account configuration
+        shell: bash
+        run: |
+          test -n "$EXPO_TOKEN" || { echo '::error::Set the EXPO_TOKEN repository secret.'; exit 1; }
+          if ! [[ "$T3CODE_ASC_APP_ID" =~ ^[0-9]+$ ]] || [[ "$T3CODE_ASC_APP_ID" = 6787819824 || "$T3CODE_ASC_APP_ID" = 6830609063 ]]; then
+            echo '::error::Set T3CODE_ASC_APP_ID to the Apple ID of com.yangxin.t3code.fork in team Q6768H569J, not the upstream app.'
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install mobile dependencies
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+      - name: Expose pnpm
+        shell: bash
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          echo "$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin" >> "$GITHUB_PATH"
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: 27.4.1
+          token: ${{ secrets.EXPO_TOKEN }}
+          packager: npm
+      - name: Configure the fork submission
+        working-directory: apps/mobile
+        run: |
+          eas env:pull production --non-interactive
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const config = JSON.parse(fs.readFileSync('eas.json', 'utf8'));
+          config.submit['fork-testflight'].ios.ascAppId = process.env.T3CODE_ASC_APP_ID;
+          fs.writeFileSync('eas.json', JSON.stringify(config, null, 2) + '\n');
+          JS
+      - name: Build on EAS macOS workers
+        working-directory: apps/mobile
+        run: eas build --platform ios --profile fork-testflight --non-interactive --wait --json > "$RUNNER_TEMP/ios-build.json"
+      - name: Upload this build to TestFlight
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          build_id="$(jq -er '.[0] | select(.status == "FINISHED") | .id' "$RUNNER_TEMP/ios-build.json")"
+          eas submit --platform ios --profile fork-testflight --id "$build_id" --non-interactive --wait
+          printf 'Uploaded EAS build `%s` to App Store Connect. Apple processing and tester access are separate.\n' "$build_id" >> "$GITHUB_STEP_SUMMARY"
