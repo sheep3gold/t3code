@@ -96,12 +96,12 @@ cp "$SRC"/deploy/spdx-cache/v3.28.0/*.json "$GENERATED"/
 # CI=true：无 TTY 时 pnpm 需要它才肯清掉 modules 目录（node 版本变化触发）。
 bash "$SRC/deploy/host/install-dependencies.sh"
 # 类型检查不过就不发布：此时还没碰线上文件，release-hub 会停在失败，main 不前进。
-# 单线程：多线程的 tsgo 峰值约 5.3G，这台机器内存吃紧；单线程约 3.3G。
-# Upstream moved TypeScript to the workspace root. /opt/t3code keeps node_modules
+# 单线程：多线程的 tsrs 峰值约 5.3G，这台机器内存吃紧；单线程约 3.3G。
+# Upstream replaced typescript with @effect/tsgo. /opt/t3code keeps node_modules
 # across deploys and pnpm does not prune per-package .bin links, so a stale
-# apps/server/node_modules/.bin/tsc (old typescript@7) would shadow the root one
-# and fail on module resolution. Always use the root compiler explicitly.
-(cd apps/server && "$SRC/node_modules/.bin/tsc" --noEmit --singleThreaded)
+# apps/server/node_modules/.bin/tsrs would shadow the root one. Always use the
+# root compiler explicitly.
+(cd apps/server && "$SRC/node_modules/.bin/effect-tsgo" tsrs --noEmit --singleThreaded)
 pnpm --dir apps/web run build
 pnpm --dir apps/server run build:bundle
 
