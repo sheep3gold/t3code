@@ -1,16 +1,13 @@
 // @effect-diagnostics optionMatchToFromOption:off -- fork code predates these upstream style rules.
 /**
- * `artifact_*` MCP tools on the upstream base.
- *
- * Same tools and tool names the V1 fork shipped, so threads and agents that
- * call them keep working. The project lookup moves to the V2 projection
- * store; everything else is unchanged.
+ * `artifact_*` MCP tools on the upstream base: same tool names the V1 fork
+ * shipped, so existing threads keep working.
  *
  * @module fork/artifacts/ArtifactToolkit
  */
 import { OrchestratorMcpFailure, ThreadId, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -123,7 +120,7 @@ const dependencies = [
   ArtifactPersistence.ArtifactRepository,
   ProjectionStore.ProjectionStoreV2,
   ThreadManagementService.ThreadManagementService,
-  Crypto.Crypto,
+  SecureRandom.SecureRandom,
   Clock.Clock,
 ];
 
@@ -303,8 +300,8 @@ export const ArtifactToolkitHandlersLive = McpToolAccess.toLayer(ArtifactToolkit
           detail: `name is required, content is limited to ${MAX_CONTENT_CHARS} characters, and tags to ${MAX_TAGS}.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
-      const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const random = yield* SecureRandom.SecureRandom;
+      const id = yield* random.uuidV4();
       const now = DateTime.formatIso(yield* DateTime.now);
       const repository = yield* ArtifactPersistence.ArtifactRepository;
       return yield* repository

@@ -1,4 +1,4 @@
-// @effect-diagnostics effectFnOpportunity:off effectSucceedWithVoid:off -- fork code predates these upstream style rules.
+// @effect-diagnostics effectFnOpportunity:off effectSucceedWithVoid:off effectSucceedWithUndefined:off processEnvInEffect:off -- fork code predates these upstream style rules.
 import {
   EnvironmentTranslateUnavailableError,
   EnvironmentTranslateUpstreamError,
@@ -15,31 +15,22 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 const DEFAULT_BASE_URL = "https://llm.zxytech.cn/v1";
 // The owner's model-gateway routes by tier. The translate appKey is restricted
-// to `key.models=['auto']`, so the gateway rejects any explicit x-mg-tier
-// header (403 "key 不允许显式走 <TIER> 档"); the gateway auto-selects the tier
-// from the model and request instead. Its flash models think by default, which
-// dominated latency (2.7k chars: ~4.8k reasoning tokens, 19s vs 3.7s without),
-// so requests disable thinking; max_tokens keeps headroom for a model that
-// ignores the switch, since a small budget leaves an all-reasoning empty reply.
+// to `key.models=['auto']`, so an explicit x-mg-tier header is rejected (403
+// "key 不允许显式走 <TIER> 档"). Its flash models think by default (2.7k chars:
+// 19s vs 3.7s without), so requests disable thinking.
 const DEFAULT_MODEL = "auto";
 const MAX_TEXTS_PER_REQUEST = 24;
 const MAX_TEXT_LENGTH = 16_000;
 // With thinking on, ~6000-char batches needed ~10k completion tokens (≈9k
-// reasoning) and ~144s. max_tokens caps reasoning + translation together, so a
-// small budget truncates the reply into a malformed JSON array, and a short
-// timeout aborts a slow-but-valid batch. Both keep that headroom in case an
-// upstream model does not honor the thinking switch.
+// reasoning) and ~144s. max_tokens caps reasoning and translation together, so
+// a small budget truncates the reply into a malformed JSON array; both keep
+// headroom in case an upstream model ignores the thinking switch.
 const UPSTREAM_TIMEOUT_SECONDS = 300;
 const UPSTREAM_MAX_TOKENS = 32768;
 // The gateway's auto-router picks the upstream provider per request, and the
-// pick is not reliable: it can land on a provider that is out of credit (a 402
-// or 400 "Insufficient balance"), on one that rejects the request, or on one
-// that never answers. Every new request re-rolls that pick, so a failed
-// attempt is worth another try.
-// One attempt is cut short so a stuck provider cannot eat the whole budget:
-// the router's own fallback chain already burns 20-80s before it finds a
-// working provider, and a batch that needs longer is worth another attempt
-// rather than a longer wait.
+// pick is unreliable: it can land on a provider out of credit (402), one that
+// rejects the request, or one that never answers. Every request re-rolls the
+// pick, so a failed attempt is worth another try, cut short to save budget.
 const UPSTREAM_ATTEMPTS = 3;
 const UPSTREAM_ATTEMPT_TIMEOUT_SECONDS = 100;
 const UPSTREAM_RETRY_DELAY = Duration.seconds(1);
@@ -96,11 +87,9 @@ export const parseTranslateEnvFile = (contents: string): string | undefined => {
 
 /**
  * The desktop app spawns its own backend, and a Finder-launched app inherits no
- * shell environment, so `T3CODE_TRANSLATE_API_KEY` is simply absent there and
- * the route answers 503 — which hides the translate buttons for the whole
- * session. Reading the key from `~/.t3/t3code-translate.env` lets each machine
- * supply it without baking a secret into the distributable or editing a launchd
- * plist. Resolved per request so dropping the file in needs no restart.
+ * shell environment, so `T3CODE_TRANSLATE_API_KEY` is absent there and the
+ * route answers 503. Reading the key from `~/.t3/t3code-translate.env` lets
+ * each machine supply it without baking a secret into the distributable.
  */
 const resolveApiKey = (
   fileSystem: FileSystem.FileSystem | undefined,
@@ -276,9 +265,8 @@ const make = Effect.gen(function* () {
 
     // max_tokens caps the TOTAL completion output of one upstream call, so a
     // long text cannot go through as one big JSON array — the reply is
-    // truncated mid-array and used to surface as a 502 after the 60s timeout.
-    // Send the chunks in batches whose combined source length fits the output
-    // budget; every batch gets its own full budget.
+    // truncated mid-array. Batches keep the combined source length inside the
+    // output budget, and every batch gets its own full budget.
     const chunkBatches: Array<Array<string>> = [];
     let currentBatch: Array<string> = [];
     let currentBatchLength = 0;
@@ -296,142 +284,141 @@ const make = Effect.gen(function* () {
     const upstreamError = (message: string) => new EnvironmentTranslateUpstreamError({ message });
     const translateBatch = (batch: ReadonlyArray<string>, batchIndex: number) => {
       let upstreamCalls = 0;
-      const requestBatchTranslations = (input: ReadonlyArray<string>) =>
-        Effect.gen(function* () {
-          if (++upstreamCalls > 20) {
-            return yield* upstreamError("Translation response malformed.");
-          }
-          const textsJson = yield* encodeTextsJson(input).pipe(
-            Effect.mapError(() => upstreamError("Could not encode texts.")),
-          );
-          const upstreamJson = yield* Effect.gen(function* () {
-            for (let attempt = 1; attempt <= UPSTREAM_ATTEMPTS; attempt++) {
-              const result = yield* httpClient
-                .execute(
-                  HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
-                    HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
-                    HttpClientRequest.bodyJsonUnsafe({
-                      model,
-                      temperature: 0,
-                      max_tokens: UPSTREAM_MAX_TOKENS,
-                      thinking: { type: "disabled" },
-                      messages: [
-                        { role: "system", content: SYSTEM_PROMPT },
-                        { role: "user", content: textsJson },
-                      ],
-                    }),
-                  ),
-                )
-                .pipe(
-                  Effect.flatMap(HttpClientResponse.filterStatusOk),
-                  Effect.flatMap((response) => response.json),
-                  Effect.timeout(`${UPSTREAM_ATTEMPT_TIMEOUT_SECONDS} seconds`),
-                  Effect.result,
-                );
-              if (Result.isSuccess(result)) return result.success;
-              if (attempt >= UPSTREAM_ATTEMPTS) {
-                yield* Effect.logWarning("Translation upstream request failed", {
-                  batchIndex,
-                  attempt,
-                });
-                return yield* upstreamError("Translation upstream failed.");
-              }
-              yield* Effect.logWarning("Translation upstream request failed; retrying", {
+      const requestBatchTranslations = Effect.fn("Translation.requestBatchTranslations")(function* (
+        input: ReadonlyArray<string>,
+      ) {
+        if (++upstreamCalls > 20) {
+          return yield* upstreamError("Translation response malformed.");
+        }
+        const textsJson = yield* encodeTextsJson(input).pipe(
+          Effect.mapError(() => upstreamError("Could not encode texts.")),
+        );
+        const upstreamJson = yield* Effect.gen(function* () {
+          for (let attempt = 1; attempt <= UPSTREAM_ATTEMPTS; attempt++) {
+            const result = yield* httpClient
+              .execute(
+                HttpClientRequest.post(`${baseUrl}/chat/completions`).pipe(
+                  HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`),
+                  HttpClientRequest.bodyJsonUnsafe({
+                    model,
+                    temperature: 0,
+                    max_tokens: UPSTREAM_MAX_TOKENS,
+                    thinking: { type: "disabled" },
+                    messages: [
+                      { role: "system", content: SYSTEM_PROMPT },
+                      { role: "user", content: textsJson },
+                    ],
+                  }),
+                ),
+              )
+              .pipe(
+                Effect.flatMap(HttpClientResponse.filterStatusOk),
+                Effect.flatMap((response) => response.json),
+                Effect.timeout(`${UPSTREAM_ATTEMPT_TIMEOUT_SECONDS} seconds`),
+                Effect.result,
+              );
+            if (Result.isSuccess(result)) return result.success;
+            if (attempt >= UPSTREAM_ATTEMPTS) {
+              yield* Effect.logWarning("Translation upstream request failed", {
                 batchIndex,
                 attempt,
               });
-              yield* Effect.sleep(UPSTREAM_RETRY_DELAY);
+              return yield* upstreamError("Translation upstream failed.");
             }
-            return yield* upstreamError("Translation upstream failed.");
-          }).pipe(
-            // Hard bound for the whole batch: the client gives up after 360s, so
-            // the route has to answer before that.
-            Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
-            Effect.mapError(() => upstreamError("Translation upstream failed.")),
-          );
-          const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
-            Effect.mapError(() => upstreamError("Unexpected upstream response.")),
-          );
-          const content = completion.choices[0]?.message.content ?? "";
-          if (content.length === 0) {
-            yield* Effect.logWarning("Translation upstream returned empty content", {
+            yield* Effect.logWarning("Translation upstream request failed; retrying", {
               batchIndex,
+              attempt,
             });
-            return yield* upstreamError("Translation upstream returned empty content.");
+            yield* Effect.sleep(UPSTREAM_RETRY_DELAY);
           }
-          const translations = yield* parseTranslationsJson(content);
-          if (
-            translations === null ||
-            translations.length !== input.length ||
-            translations.some(
-              (translation, index) => !preservesTranslationStructure(input[index]!, translation),
-            )
-          ) {
-            return yield* upstreamError("Translation response malformed.");
-          }
-          return [...translations];
-        });
+          return yield* upstreamError("Translation upstream failed.");
+        }).pipe(
+          // Hard bound for the whole batch: the client gives up after 360s, so
+          // the route has to answer before that.
+          Effect.timeout(`${UPSTREAM_TIMEOUT_SECONDS} seconds`),
+          Effect.mapError(() => upstreamError("Translation upstream failed.")),
+        );
+        const completion = yield* decodeChatCompletionResponse(upstreamJson).pipe(
+          Effect.mapError(() => upstreamError("Unexpected upstream response.")),
+        );
+        const content = completion.choices[0]?.message.content ?? "";
+        if (content.length === 0) {
+          yield* Effect.logWarning("Translation upstream returned empty content", {
+            batchIndex,
+          });
+          return yield* upstreamError("Translation upstream returned empty content.");
+        }
+        const translations = yield* parseTranslationsJson(content);
+        if (
+          translations === null ||
+          translations.length !== input.length ||
+          translations.some(
+            (translation, index) => !preservesTranslationStructure(input[index]!, translation),
+          )
+        ) {
+          return yield* upstreamError("Translation response malformed.");
+        }
+        return [...translations];
+      });
 
       const isMalformedUpstream = (error: EnvironmentTranslateUpstreamError) =>
         error.message === "Translation response malformed.";
-      const translateWithRecovery = (
+      const translateWithRecovery: (
         input: ReadonlyArray<string>,
         depth: number,
-      ): Effect.Effect<Array<string>, EnvironmentTranslateUpstreamError> =>
-        Effect.gen(function* () {
-          if (input.every((text) => !text.trim())) return [...input];
-          const translations = yield* requestBatchTranslations(input).pipe(
-            Effect.catchIf(isMalformedUpstream, () =>
-              Effect.gen(function* () {
-                yield* Effect.logWarning("Translation response malformed; retrying", {
-                  batchIndex,
-                  depth,
-                  expected: input.length,
-                });
-                return yield* requestBatchTranslations(input).pipe(
-                  Effect.catchIf(isMalformedUpstream, () => Effect.succeed(null)),
-                );
-              }),
-            ),
-          );
-          if (translations !== null) return translations;
-          if (depth >= MAX_MALFORMED_RECOVERY_DEPTH || upstreamCalls >= 20) {
-            yield* Effect.logWarning("Translation response malformed", { batchIndex, depth });
-            return yield* upstreamError("Translation response malformed.");
-          }
+      ) => Effect.Effect<Array<string>, EnvironmentTranslateUpstreamError> = Effect.fn(
+        "Translation.translateWithRecovery",
+      )(function* (input, depth) {
+        if (input.every((text) => !text.trim())) return [...input];
+        const translations = yield* requestBatchTranslations(input).pipe(
+          Effect.catchIf(isMalformedUpstream, () =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning("Translation response malformed; retrying", {
+                batchIndex,
+                depth,
+                expected: input.length,
+              });
+              return yield* requestBatchTranslations(input).pipe(
+                Effect.catchIf(isMalformedUpstream, () => Effect.succeed(null)),
+              );
+            }),
+          ),
+        );
+        if (translations !== null) return translations;
+        if (depth >= MAX_MALFORMED_RECOVERY_DEPTH || upstreamCalls >= 20) {
+          yield* Effect.logWarning("Translation response malformed", { batchIndex, depth });
+          return yield* upstreamError("Translation response malformed.");
+        }
 
-          // Only translate the *original* inputs again. The model sometimes
-          // turns one multi-paragraph array item into several shortened items;
-          // joining those outputs would silently lose text.
-          if (input.length > 1) {
-            const recovered = yield* Effect.forEach(
-              input,
-              (text) => translateWithRecovery([text], depth + 1),
-              { concurrency: 1 },
-            );
-            return recovered.flat();
-          }
-          const source = input[0]!;
-          const { chunks: parts, separators } = chunkText(
-            source,
-            Math.max(100, source.length >> 1),
-          );
-          if (parts.length < 2) {
-            yield* Effect.logWarning("Translation response malformed", { batchIndex, depth });
-            return yield* upstreamError("Translation response malformed.");
-          }
+        // Only translate the *original* inputs again. The model sometimes
+        // turns one multi-paragraph array item into several shortened items;
+        // joining those outputs would silently lose text.
+        if (input.length > 1) {
           const recovered = yield* Effect.forEach(
-            parts,
-            (part) => translateWithRecovery([part], depth + 1),
+            input,
+            (text) => translateWithRecovery([text], depth + 1),
             { concurrency: 1 },
           );
-          return [
-            joinChunks(
-              recovered.map(([text]) => text!),
-              separators,
-            ),
-          ];
-        });
+          return recovered.flat();
+        }
+        const source = input[0]!;
+        const { chunks: parts, separators } = chunkText(source, Math.max(100, source.length >> 1));
+        if (parts.length < 2) {
+          yield* Effect.logWarning("Translation response malformed", { batchIndex, depth });
+          return yield* upstreamError("Translation response malformed.");
+        }
+        const recovered = yield* Effect.forEach(
+          parts,
+          (part) => translateWithRecovery([part], depth + 1),
+          { concurrency: 1 },
+        );
+        return [
+          joinChunks(
+            recovered.map(([text]) => text!),
+            separators,
+          ),
+        ];
+      });
 
       return translateWithRecovery(batch, 0);
     };

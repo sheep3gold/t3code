@@ -4,7 +4,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -76,7 +76,7 @@ const dependencies = [
   AgentMemories.AgentMemoryRepository,
   ProjectionStore.ProjectionStoreV2,
   ThreadManagementService.ThreadManagementService,
-  Crypto.Crypto,
+  SecureRandom.SecureRandom,
 ];
 
 const AddMemoryTool = Tool.make("memory_add", {
@@ -195,7 +195,7 @@ export function formatAgentLessonContext(
 ): string {
   if (lessons.length === 0) return "";
   const lines = [
-    "[Saved lessons — reusable behavior for this environment/project]",
+    "[Saved lessons - reusable behavior for this environment/project]",
     ...lessons.map((lesson) =>
       [`- ${lesson.content}`, ...(lesson.negative ? [`  Avoid: ${lesson.negative}`] : [])].join(
         "\n",
@@ -231,7 +231,7 @@ export const AgentMemoryHandlersLive = McpToolAccess.toLayer(AgentMemoryToolkit,
     Effect.gen(function* () {
       const context = yield* callerContext;
       const repository = yield* AgentMemories.AgentMemoryRepository;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const content = clip(input.content, MAX_CONTENT_CHARS);
       const negative =
         input.negative === null || input.negative === undefined
@@ -252,7 +252,7 @@ export const AgentMemoryHandlersLive = McpToolAccess.toLayer(AgentMemoryToolkit,
       });
       return yield* repository
         .upsert({
-          id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+          id: yield* random.uuidV4(),
           fingerprint,
           kind: input.kind,
           scope: input.scope,

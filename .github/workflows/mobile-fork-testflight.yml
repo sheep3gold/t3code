@@ -31,10 +31,10 @@ jobs:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       T3CODE_ASC_APP_ID: ${{ vars.T3CODE_ASC_APP_ID }}
       APP_VARIANT: production
-      T3CODE_IOS_PERSONAL_TEAM: '0'
+      T3CODE_IOS_PERSONAL_TEAM: "0"
       T3CODE_IOS_BUNDLE_ID: com.yangxin.t3code.fork
       T3CODE_APPLE_TEAM_ID: Q6768H569J
-      T3CODE_MOBILE_UPDATES_ENABLED: '0'
+      T3CODE_MOBILE_UPDATES_ENABLED: "0"
       NODE_OPTIONS: --max-old-space-size=6144
     steps:
       - name: Check account configuration

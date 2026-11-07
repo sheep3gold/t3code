@@ -3,7 +3,7 @@ import * as NodeCrypto from "node:crypto";
 
 import { OrchestratorMcpFailure, ThreadId, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -73,7 +73,7 @@ const SendNotificationTool = Tool.make("send_notification", {
     ProjectionStore.ProjectionStoreV2,
     ProjectStore.ProjectStoreV2,
     ThreadManagementService.ThreadManagementService,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
     Clock.Clock,
   ],
 })
@@ -165,7 +165,7 @@ export const AgentNotificationToolkitHandlersLive = McpToolAccess.toLayer(
         const threadId = ThreadId.make(caller.thread.threadId);
         const projections = yield* ProjectionStore.ProjectionStoreV2;
         const projects = yield* ProjectStore.ProjectStoreV2;
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const thread = yield* projections
           .getThreadShell(threadId)
           .pipe(Effect.mapError((cause) => new AgentNotificationPublishError({ cause })));
@@ -178,7 +178,7 @@ export const AgentNotificationToolkitHandlersLive = McpToolAccess.toLayer(
             .pipe(Effect.mapError((cause) => new AgentNotificationPublishError({ cause }))),
         );
         const createdAt = DateTime.formatIso(yield* DateTime.now);
-        const dedupeKey = input.dedupeKey ?? (yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+        const dedupeKey = input.dedupeKey ?? (yield* random.uuidV4());
         return yield* Effect.tryPromise({
           try: () =>
             publishAgentNotification({

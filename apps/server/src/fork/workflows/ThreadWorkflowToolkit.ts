@@ -7,7 +7,7 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -122,7 +122,7 @@ const dependencies = [
   WorkflowPersistence.ThreadWorkflowRepository,
   ProjectionStore.ProjectionStoreV2,
   ThreadManagementService.ThreadManagementService,
-  Crypto.Crypto,
+  SecureRandom.SecureRandom,
   Clock.Clock,
 ];
 
@@ -332,7 +332,7 @@ export const ThreadWorkflowToolkitHandlersLive = McpToolAccess.toLayer(ThreadWor
     Effect.gen(function* () {
       const context = yield* callerContext;
       const repository = yield* WorkflowPersistence.ThreadWorkflowRepository;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       if (input.steps.length < 1 || input.steps.length > MAX_STEPS) {
         return yield* new WorkflowInputInvalidError({
           detail: `steps must contain 1-${MAX_STEPS} entries.`,
@@ -360,7 +360,7 @@ export const ThreadWorkflowToolkitHandlersLive = McpToolAccess.toLayer(ThreadWor
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       return yield* repository
         .create({
-          id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+          id: yield* random.uuidV4(),
           threadId: context.threadId,
           name,
           steps,
@@ -465,7 +465,7 @@ const runner = Effect.gen(function* () {
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const sweep = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
@@ -513,7 +513,7 @@ const runner = Effect.gen(function* () {
             });
             continue;
           }
-          childThreadId = ThreadId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+          childThreadId = ThreadId.make(yield* random.uuidV4());
           worktreePath = worktreeResult.success.worktree.path;
           branch = worktreeResult.success.worktree.refName;
           const created = yield* threadLaunch
@@ -567,7 +567,7 @@ const runner = Effect.gen(function* () {
             threadId: childThreadId,
             messageId: MessageId.make(`workflow:${dispatchKey}`),
             text: [
-              `[Workflow ${workflow.name} — DAG node ${step.index + 1}/${workflow.steps.length}, attempt ${step.attempt}/${MAX_ATTEMPTS}]`,
+              `[Workflow ${workflow.name}: DAG node ${step.index + 1}/${workflow.steps.length}, attempt ${step.attempt}/${MAX_ATTEMPTS}]`,
               `Step: ${step.title}`,
               dependencyBranches.length > 0
                 ? `Dependency branches: ${dependencyBranches.join(", ")}. Merge the dependency branches into this worktree before implementing this node.`

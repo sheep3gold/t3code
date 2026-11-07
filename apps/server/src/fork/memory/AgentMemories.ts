@@ -1,6 +1,6 @@
 // @effect-diagnostics catchToOrElseSucceed:off effectFnOpportunity:off -- fork code predates these upstream style rules.
 // @effect-diagnostics nodeBuiltinImport:off -- fingerprints must stay byte-identical to stored rows.
-// @effect-diagnostics preferSchemaOverJson:off -- *_json columns hold plain string arrays/records written inside SQL templates.
+// @effect-diagnostics globalJsonInEffect:off -- *_json columns hold plain string arrays/records written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 
@@ -140,8 +140,8 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   return AgentMemoryRepository.of({
-    upsert: (input) =>
-      Effect.gen(function* () {
+    upsert: Effect.fn("AgentMemoryRepository.upsert")(
+      function* (input: UpsertAgentMemoryInput) {
         const rows = yield* sql<AgentMemoryRow>`
           INSERT INTO agent_memories (
             id, fingerprint, kind, scope, project_id, content, negative,
@@ -169,11 +169,12 @@ const make = Effect.gen(function* () {
             created_at AS "createdAt",
             updated_at AS "updatedAt"
         `;
-        return fromRow(rows[0]!);
-      }).pipe(
-        Effect.mapError(sqlError("upsertAgentMemory")),
-        Effect.tap((memory) => MemsearchMirror.mirrorPut(memory, input.authority ?? "observed")),
-      ),
+        const memory = fromRow(rows[0]!);
+        yield* MemsearchMirror.mirrorPut(memory, input.authority ?? "observed");
+        return memory;
+      },
+      Effect.mapError(sqlError("upsertAgentMemory")),
+    ),
 
     candidates: (projectId, kind) =>
       (kind === undefined
@@ -283,8 +284,8 @@ const make = Effect.gen(function* () {
         Effect.mapError(sqlError("listAllAgentMemories")),
       ),
 
-    applyRemote: (records) =>
-      Effect.gen(function* () {
+    applyRemote: Effect.fn("AgentMemoryRepository.applyRemote")(
+      function* (records: ReadonlyArray<MemsearchMirror.RemoteRecord>) {
         let upserted = 0;
         let removed = 0;
         let skipped = 0;
@@ -340,7 +341,9 @@ const make = Effect.gen(function* () {
           else skipped += 1;
         }
         return { upserted, removed, skipped };
-      }).pipe(Effect.mapError(sqlError("applyRemoteAgentMemories"))),
+      },
+      Effect.mapError(sqlError("applyRemoteAgentMemories")),
+    ),
   });
 });
 

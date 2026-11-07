@@ -1,5 +1,5 @@
 // @effect-diagnostics effectFnOpportunity:off preferSucceedSomeOrNone:off -- fork code predates these upstream style rules.
-// @effect-diagnostics preferSchemaOverJson:off -- depends_on_json holds a plain number array written inside SQL templates.
+// @effect-diagnostics globalJsonInEffect:off -- depends_on_json holds a plain number array written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -181,8 +181,8 @@ export class ThreadWorkflowRepository extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const get = (id: string, threadId: ThreadId) =>
-    Effect.gen(function* () {
+  const get = Effect.fn("ThreadWorkflowRepository.get")(
+    function* (id: string, threadId: ThreadId) {
       const workflows = yield* sql<WorkflowRow>`
         SELECT id, thread_id AS "threadId", name, status,
                current_step AS "currentStep", created_at AS "createdAt", updated_at AS "updatedAt"
@@ -206,10 +206,12 @@ const make = Effect.gen(function* () {
           childThreadId: childThreadId === null ? null : ThreadId.make(childThreadId),
         })),
       });
-    }).pipe(Effect.mapError(sqlError("getThreadWorkflow")));
+    },
+    Effect.mapError(sqlError("getThreadWorkflow")),
+  );
 
-  const getForProject = (id: string, projectId: ProjectId) =>
-    Effect.gen(function* () {
+  const getForProject = Effect.fn("ThreadWorkflowRepository.getForProject")(
+    function* (id: string, projectId: ProjectId) {
       const rows = yield* sql<{ readonly threadId: string; readonly threadTitle: string }>`
         SELECT w.thread_id AS "threadId", t.title AS "threadTitle"
         FROM thread_workflows w
@@ -222,10 +224,12 @@ const make = Effect.gen(function* () {
       if (!row) return Option.none<ProjectThreadWorkflow>();
       const workflow = yield* get(id, ThreadId.make(row.threadId));
       return Option.map(workflow, (value) => ({ ...value, threadTitle: row.threadTitle }));
-    }).pipe(Effect.mapError(sqlError("getThreadWorkflowForProject")));
+    },
+    Effect.mapError(sqlError("getThreadWorkflowForProject")),
+  );
 
-  const listProject = (projectId: ProjectId) =>
-    Effect.gen(function* () {
+  const listProject = Effect.fn("ThreadWorkflowRepository.listProject")(
+    function* (projectId: ProjectId) {
       const rows = yield* sql<{ readonly id: string }>`
         SELECT w.id
         FROM thread_workflows w
@@ -237,7 +241,9 @@ const make = Effect.gen(function* () {
       return yield* Effect.forEach(rows, (row) => getForProject(row.id, projectId)).pipe(
         Effect.map((items) => items.flatMap(Option.toArray)),
       );
-    }).pipe(Effect.mapError(sqlError("listProjectThreadWorkflows")));
+    },
+    Effect.mapError(sqlError("listProjectThreadWorkflows")),
+  );
 
   const updateCurrent = (
     id: string,
@@ -413,8 +419,8 @@ const make = Effect.gen(function* () {
         ),
     get,
     getForProject,
-    list: (threadId) =>
-      Effect.gen(function* () {
+    list: Effect.fn("ThreadWorkflowRepository.list")(
+      function* (threadId: ThreadId) {
         const rows = yield* sql<{ readonly id: string }>`
           SELECT id FROM thread_workflows WHERE thread_id = ${threadId}
           ORDER BY created_at DESC LIMIT 50
@@ -422,10 +428,12 @@ const make = Effect.gen(function* () {
         return yield* Effect.forEach(rows, (row) => get(row.id, threadId)).pipe(
           Effect.map((items) => items.flatMap(Option.toArray)),
         );
-      }).pipe(Effect.mapError(sqlError("listThreadWorkflows"))),
+      },
+      Effect.mapError(sqlError("listThreadWorkflows")),
+    ),
     listProject,
-    listRunnable: () =>
-      Effect.gen(function* () {
+    listRunnable: Effect.fn("ThreadWorkflowRepository.listRunnable")(
+      function* () {
         const rows = yield* sql<{ readonly id: string; readonly threadId: string }>`
           SELECT id, thread_id AS "threadId" FROM thread_workflows
           WHERE status = 'running' ORDER BY updated_at ASC LIMIT 50
@@ -433,7 +441,9 @@ const make = Effect.gen(function* () {
         return yield* Effect.forEach(rows, (row) => get(row.id, ThreadId.make(row.threadId))).pipe(
           Effect.map((items) => items.flatMap(Option.toArray)),
         );
-      }).pipe(Effect.mapError(sqlError("listRunnableThreadWorkflows"))),
+      },
+      Effect.mapError(sqlError("listRunnableThreadWorkflows")),
+    ),
     markRunning: (workflow, now) =>
       sql`
         UPDATE thread_workflow_steps
