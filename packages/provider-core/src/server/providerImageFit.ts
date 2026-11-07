@@ -4,6 +4,12 @@
  * and only shrink if that still does not fit.
  */
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+
+class ProviderImageFitError extends Schema.TaggedError<ProviderImageFitError>()(
+  "ProviderImageFitError",
+  { cause: Schema.Unknown },
+) {}
 
 /** 5 MiB of base64 is 3.75 MiB of raw bytes; keep a margin below it. */
 export const PROVIDER_IMAGE_MAX_BYTES = Math.floor(((5 * 1024 * 1024) / 4) * 3 * 0.97);
@@ -111,7 +117,10 @@ export const fitProviderImageEffect = (
   image: ProviderImage,
   options?: Parameters<typeof fitProviderImage>[1],
 ): Effect.Effect<ProviderImageFitResult> =>
-  Effect.tryPromise(() => fitProviderImage(image, options)).pipe(
+  Effect.tryPromise({
+    try: () => fitProviderImage(image, options),
+    catch: (cause) => new ProviderImageFitError({ cause }),
+  }).pipe(
     Effect.tap((result) =>
       result.changed
         ? Effect.logInfo("provider image re-encoded to fit provider limit", {

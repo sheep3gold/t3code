@@ -41,7 +41,7 @@ it.effect("prepends saved lessons for the thread's project", () =>
     assert.strictEqual(
       context,
       [
-        "[Saved lessons — reusable behavior for this environment/project]",
+        "[Saved lessons - reusable behavior for this environment/project]",
         "- Branch before editing.",
         "  Avoid: Pushing to main.",
         "[End saved lessons]",

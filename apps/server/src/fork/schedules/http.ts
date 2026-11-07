@@ -5,7 +5,7 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -46,7 +46,7 @@ export const layer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const repository = yield* ThreadSchedules.ThreadScheduleRepository;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const readScope = (endpoint: string) =>
       annotateEnvironmentRequest(endpoint).pipe(
         Effect.andThen(requireEnvironmentScope(AuthOrchestrationReadScope)),
@@ -110,7 +110,7 @@ export const layer = HttpApiBuilder.group(
           const createdAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
           const schedule = yield* repository
             .create({
-              id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+              id: yield* random.uuidV4(),
               threadId: args.payload.threadId,
               prompt: args.payload.prompt,
               ...resolved,

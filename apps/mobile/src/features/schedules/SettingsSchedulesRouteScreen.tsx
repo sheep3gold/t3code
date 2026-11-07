@@ -15,7 +15,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { useThreadShells } from "../../state/entities";
 import { scheduleEnvironment, useSchedules } from "../../state/schedules";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { SettingsEnvironmentFilterHeader } from "../settings/components/SettingsEnvironmentFilterHeader";
+import { useSettingsEnvironmentMenu } from "../settings/components/SettingsEnvironmentFilterHeader";
 import { SettingsRow } from "../settings/components/SettingsRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
@@ -44,6 +44,7 @@ function mutationMessage(result: unknown): string {
 }
 
 export function SettingsSchedulesRouteScreen() {
+  const environmentMenu = useSettingsEnvironmentMenu();
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const projectGroup = projectGroups.find((group) => group.key === selectedProjectKey);
   const project = projectGroup?.members
@@ -69,8 +70,7 @@ export function SettingsSchedulesRouteScreen() {
 
   if (!project) {
     return (
-      <SettingsScreen title="Schedules">
-        <SettingsEnvironmentFilterHeader />
+      <SettingsScreen title="Schedules" menus={[environmentMenu]}>
         <View className="flex-1 items-center justify-center px-8">
           <Text className="text-center text-base text-foreground-muted">
             Select a project to manage its scheduled agent tasks.
@@ -90,6 +90,7 @@ function ProjectSchedules({
   readonly project: EnvironmentProject;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
 }) {
+  const environmentMenu = useSettingsEnvironmentMenu();
   const { schedules, error, isPending, refresh } = useSchedules(project.environmentId, project.id);
   const pause = useAtomCommand(scheduleEnvironment.pause, { reportFailure: false });
   const resume = useAtomCommand(scheduleEnvironment.resume, { reportFailure: false });
@@ -119,8 +120,7 @@ function ProjectSchedules({
   };
 
   return (
-    <SettingsScreen title="Schedules">
-      <SettingsEnvironmentFilterHeader />
+    <SettingsScreen title="Schedules" menus={[environmentMenu]}>
       <ScrollView
         className="flex-1 bg-sheet"
         contentInsetAdjustmentBehavior="automatic"

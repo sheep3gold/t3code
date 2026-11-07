@@ -1,4 +1,4 @@
-// @effect-diagnostics effectSucceedWithVoid:off -- fork code predates these upstream style rules.
+// @effect-diagnostics effectSucceedWithVoid:off effectSucceedWithUndefined:off -- fork code predates these upstream style rules.
 /**
  * Fork-only `/api/provider-usage-summary` HTTP route polled by zxytech hub
  * pages, with fork quota probes; a raw `HttpRouter` route (untyped JSON).

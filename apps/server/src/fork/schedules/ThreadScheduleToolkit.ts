@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Cron from "effect/Cron";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
@@ -127,7 +127,7 @@ const dependencies = [
   ThreadSchedules.ThreadScheduleRepository,
   ProjectionStore.ProjectionStoreV2,
   ThreadManagementService.ThreadManagementService,
-  Crypto.Crypto,
+  SecureRandom.SecureRandom,
   Clock.Clock,
 ];
 
@@ -388,7 +388,7 @@ export const ThreadScheduleToolkitHandlersLive = McpToolAccess.toLayer(ThreadSch
     Effect.gen(function* () {
       const context = yield* callerContext;
       const repository = yield* ThreadSchedules.ThreadScheduleRepository;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       if (Array.from(input.prompt).length > MAX_PROMPT_CHARS) {
         return yield* new ThreadScheduleInputInvalidError({
           detail: `prompt must be at most ${MAX_PROMPT_CHARS} characters.`,
@@ -402,7 +402,7 @@ export const ThreadScheduleToolkitHandlersLive = McpToolAccess.toLayer(ThreadSch
       const createdAt = new Date(nowMs).toISOString();
       const schedule = yield* repository
         .create({
-          id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+          id: yield* random.uuidV4(),
           threadId: context.threadId,
           prompt: input.prompt,
           ...resolved,

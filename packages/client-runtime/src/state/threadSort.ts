@@ -32,6 +32,15 @@ export type SettledThreadTimestampInput = Pick<
     old threads with the same recent time. settledAt only covers threads
     with no recorded activity. */
 export function resolveSettledThreadTimestamp(thread: SettledThreadTimestampInput): string | null {
+  return resolveThreadActivityTimestamp(thread);
+}
+
+export function resolveThreadActivityTimestamp(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"
+  >,
+): string | null {
   let latest: string | null = null;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const candidate of [

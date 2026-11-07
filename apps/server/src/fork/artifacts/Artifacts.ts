@@ -1,14 +1,12 @@
 // @effect-diagnostics effectFnOpportunity:off preferSucceedSomeOrNone:off -- fork code predates these upstream style rules.
 /**
- * Versioned project artifacts on the upstream base.
- *
- * Same tables and shapes the V1 fork shipped; the migrations come from the
- * fork's own migration set (`005_Artifacts`). Upstream has no artifact
- * library, so this repository is the only writer.
+ * Versioned project artifacts on the upstream base: the same tables and shapes
+ * the V1 fork shipped, with the fork's own migration set (`005_Artifacts`).
+ * Upstream has no artifact library, so this repository is the only writer.
  *
  * @module fork/artifacts/Artifacts
  */
-// @effect-diagnostics preferSchemaOverJson:off -- *_json columns hold plain string records written inside SQL templates.
+// @effect-diagnostics globalJsonInEffect:off -- *_json columns hold plain string records written inside SQL templates.
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";

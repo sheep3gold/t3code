@@ -8,36 +8,187 @@
     "quality_profile": "showcase"
   },
   "components": [
-    { "id": "browser", "type": "frontend", "label": "浏览器 web app", "sublabel": "走 SSO cookie", "pos": [40, 190], "size": [140, 60] },
-    { "id": "app", "type": "frontend", "label": "桌面端 / 手机 app", "sublabel": "pairing bearer", "pos": [40, 300], "size": [140, 60] },
-    { "id": "desktop", "type": "external", "label": "桌面端远程环境", "sublabel": "SSH 起 t3 serve", "pos": [40, 470], "size": [140, 60] },
-    { "id": "etcd", "type": "cloud", "label": "etcd t3code/ 前缀", "sublabel": "msghub · memsearch 等配置", "pos": [560, 40], "size": [200, 60] },
-    { "id": "nginx", "type": "security", "label": "nginx", "sublabel": "code.zxytech.cn :443", "pos": [280, 200], "size": [150, 64], "tag": "auth_request" },
-    { "id": "sso", "type": "security", "label": "t3-sso 网关", "sublabel": "127.0.0.1:5098", "pos": [280, 340], "size": [150, 60], "tag": "SSO_PASS_BEARER=1" },
-    { "id": "launcher", "type": "backend", "label": "t3 拦截层", "sublabel": "t3-launcher.sh", "pos": [280, 470], "size": [150, 60], "tag": "非 3773 → TCP 转发" },
-    { "id": "server", "type": "backend", "label": "T3 Code server", "sublabel": "dist/bin.mjs serve 127.0.0.1:3773", "pos": [560, 200], "size": [220, 200], "tag": "systemd --user t3code.service" },
-    { "id": "state", "type": "database", "label": "~/.t3/userdata", "sublabel": "state.sqlite · settings.json", "pos": [585, 480], "size": [170, 60] },
-    { "id": "claude", "type": "backend", "label": "Claude Code", "sublabel": "claude_xjp · sing-box :2080", "pos": [900, 230], "size": [190, 60] },
-    { "id": "acp", "type": "backend", "label": "acpRegistry 驱动", "sublabel": "Kiro · t3-factory-droid-acp", "pos": [900, 330], "size": [190, 60] }
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "浏览器 web app",
+      "sublabel": "走 SSO cookie",
+      "pos": [40, 190],
+      "size": [140, 60]
+    },
+    {
+      "id": "app",
+      "type": "frontend",
+      "label": "桌面端 / 手机 app",
+      "sublabel": "pairing bearer",
+      "pos": [40, 300],
+      "size": [140, 60]
+    },
+    {
+      "id": "desktop",
+      "type": "external",
+      "label": "桌面端远程环境",
+      "sublabel": "SSH 起 t3 serve",
+      "pos": [40, 470],
+      "size": [140, 60]
+    },
+    {
+      "id": "etcd",
+      "type": "cloud",
+      "label": "etcd t3code/ 前缀",
+      "sublabel": "msghub · memsearch 等配置",
+      "pos": [560, 40],
+      "size": [200, 60]
+    },
+    {
+      "id": "nginx",
+      "type": "security",
+      "label": "nginx",
+      "sublabel": "code.zxytech.cn :443",
+      "pos": [280, 200],
+      "size": [150, 64],
+      "tag": "auth_request"
+    },
+    {
+      "id": "sso",
+      "type": "security",
+      "label": "t3-sso 网关",
+      "sublabel": "127.0.0.1:5098",
+      "pos": [280, 340],
+      "size": [150, 60],
+      "tag": "SSO_PASS_BEARER=1"
+    },
+    {
+      "id": "launcher",
+      "type": "backend",
+      "label": "t3 拦截层",
+      "sublabel": "t3-launcher.sh",
+      "pos": [280, 470],
+      "size": [150, 60],
+      "tag": "非 3773 → TCP 转发"
+    },
+    {
+      "id": "server",
+      "type": "backend",
+      "label": "T3 Code server",
+      "sublabel": "dist/bin.mjs serve 127.0.0.1:3773",
+      "pos": [560, 200],
+      "size": [220, 200],
+      "tag": "systemd --user t3code.service"
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "~/.t3/userdata",
+      "sublabel": "state.sqlite · settings.json",
+      "pos": [585, 480],
+      "size": [170, 60]
+    },
+    {
+      "id": "claude",
+      "type": "backend",
+      "label": "Claude Code",
+      "sublabel": "claude_xjp · sing-box :2080",
+      "pos": [900, 230],
+      "size": [190, 60]
+    },
+    {
+      "id": "acp",
+      "type": "backend",
+      "label": "acpRegistry 驱动",
+      "sublabel": "Kiro · t3-factory-droid-acp",
+      "pos": [900, 330],
+      "size": [190, 60]
+    }
   ],
   "boundaries": [
-    { "kind": "region", "label": "124 本机 · ubuntu 用户", "wraps": ["nginx", "sso", "launcher", "server", "state", "claude", "acp"] }
+    {
+      "kind": "region",
+      "label": "124 本机 · ubuntu 用户",
+      "wraps": ["nginx", "sso", "launcher", "server", "state", "claude", "acp"]
+    }
   ],
   "connections": [
-    { "id": "browser-nginx", "from": "browser", "to": "nginx", "label": "SSO cookie", "variant": "emphasis" },
+    {
+      "id": "browser-nginx",
+      "from": "browser",
+      "to": "nginx",
+      "label": "SSO cookie",
+      "variant": "emphasis"
+    },
     { "id": "app-nginx", "from": "app", "to": "nginx", "label": "HTTP/WS", "variant": "emphasis" },
-    { "id": "nginx-sso", "from": "nginx", "to": "sso", "label": "/_sso/verify", "variant": "security", "fromSide": "bottom", "toSide": "top" },
-    { "id": "nginx-server", "from": "nginx", "to": "server", "label": "127.0.0.1:3773", "variant": "emphasis" },
+    {
+      "id": "nginx-sso",
+      "from": "nginx",
+      "to": "sso",
+      "label": "/_sso/verify",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "nginx-server",
+      "from": "nginx",
+      "to": "server",
+      "label": "127.0.0.1:3773",
+      "variant": "emphasis"
+    },
     { "id": "desktop-launcher", "from": "desktop", "to": "launcher", "label": "t3 serve" },
-    { "id": "launcher-server", "from": "launcher", "to": "server", "label": "复用 / 转发到 3773", "fromSide": "right", "toSide": "bottom" },
-    { "id": "server-state", "from": "server", "to": "state", "label": "会话状态", "fromSide": "bottom", "toSide": "top" },
-    { "id": "etcd-server", "from": "etcd", "to": "server", "label": "启动前渲染 env", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    {
+      "id": "launcher-server",
+      "from": "launcher",
+      "to": "server",
+      "label": "复用 / 转发到 3773",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "server-state",
+      "from": "server",
+      "to": "state",
+      "label": "会话状态",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "etcd-server",
+      "from": "etcd",
+      "to": "server",
+      "label": "启动前渲染 env",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
     { "id": "server-claude", "from": "server", "to": "claude", "label": "spawn" },
     { "id": "server-acp", "from": "server", "to": "acp", "label": "ACP stdio" }
   ],
   "cards": [
-    { "dot": "rose", "title": "入口与鉴权", "items": ["server 只绑 127.0.0.1:3773；公网入口是 443 的 nginx 与 8443 的 tailscale serve", "nginx 全量 auth_request 到 t3-sso：带 Authorization 的放行交给 T3 自己校验，否则走 SSO 登录", "/.well-known/t3/environment 与 /api/provider-usage-summary 免 SSO"] },
-    { "dot": "amber", "title": "单一 server 约束", "items": ["两个 serve 进程共用 state.sqlite 却各自维护内存投影，桌面与手机会互相看不到新消息", "t3 拦截层把桌面端的 serve 变成 TCP 转发；t3code-portwatch 每 10 秒兜底并重装拦截层", "server 还对 agent 提供 MCP（McpHttpServer、ACP stdio bridge）"] },
-    { "dot": "cyan", "title": "发布流程", "items": ["release-hub rsync 到 /opt/t3code，t3code-deploy.sh 做 tsc、web 与 server 构建", "dist 同步到 ~/.t3/selfbuilt/t3code，先备份，失败自动回滚", "重启 t3code.service 后等 3773 返回 200，健康窗口 20 分钟"] }
+    {
+      "dot": "rose",
+      "title": "入口与鉴权",
+      "items": [
+        "server 只绑 127.0.0.1:3773；公网入口是 443 的 nginx 与 8443 的 tailscale serve",
+        "nginx 全量 auth_request 到 t3-sso：带 Authorization 的放行交给 T3 自己校验，否则走 SSO 登录",
+        "/.well-known/t3/environment 与 /api/provider-usage-summary 免 SSO"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "单一 server 约束",
+      "items": [
+        "两个 serve 进程共用 state.sqlite 却各自维护内存投影，桌面与手机会互相看不到新消息",
+        "t3 拦截层把桌面端的 serve 变成 TCP 转发；t3code-portwatch 每 10 秒兜底并重装拦截层",
+        "server 还对 agent 提供 MCP（McpHttpServer、ACP stdio bridge）"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "发布流程",
+      "items": [
+        "release-hub rsync 到 /opt/t3code，t3code-deploy.sh 做 tsc、web 与 server 构建",
+        "dist 同步到 ~/.t3/selfbuilt/t3code，先备份，失败自动回滚",
+        "重启 t3code.service 后等 3773 返回 200，健康窗口 20 分钟"
+      ]
+    }
   ]
 }

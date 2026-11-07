@@ -1,45 +1,8 @@
-// @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
+// @effect-diagnostics effectFnOpportunity:off preferSchemaTaggedError:off processEnvInEffect:off -- fork code predates these upstream style rules.
 /**
- * usageQuotaProbe — per-request, short-cached quota reads for the provider
- * usage summary endpoint.
- *
- * Seven probe kinds, each reading state the provider CLIs and hubs already
- * hold locally; nothing here invents a credential:
- *
- * - `glm`: Zhipu's `GET /api/monitor/usage/quota/limit`, authenticated with
- *   the `ANTHROPIC_AUTH_TOKEN` from the instance's Claude home settings.json.
- *   Reports the 5-hour concurrent lane and the weekly token quota.
- * - `claudeOAuth`: Anthropic's OAuth `GET /api/oauth/usage`, the same data
- *   `claude /usage` renders. The xjp account is geo-restricted to its
- *   Singapore exit, so the request always rides the local CONNECT proxy
- *   (127.0.0.1:2080) — never direct egress, never a VPN. The access token
- *   never leaves this process.
- * - `workbuddy`: the wb_proxy account files' cached credits
- *   (`~/.workbuddy2api-hub/accounts/*.json`). The panel API itself needs a
- *   password only ever stored hashed, so the probe reads the same files the
- *   proxy refreshes on its own schedule and reports the remaining points
- *   pool across accounts, flagging when the cache is more than a day old.
- * - `kimi`: Moonshot's `GET /v1/users/me/balance` (prepaid balance in CNY),
- *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
- *   When the instance's `ANTHROPIC_BASE_URL` points at the Kimi Code plan
- *   (`api.kimi.com/coding`), it reads `GET /coding/v1/usages` instead — the
- *   endpoint kimi-cli's `/usage` renders: `used_ratio` per bucket for the
- *   5-hour window and the monthly quotas. Kimi CLI uses its native OAuth
- *   token first, falling back to the stable key in `~/.claude-kimi` when expired.
- * - `deepseek`: `GET api.deepseek.com/user/balance` (prepaid balance, CNY),
- *   authenticated with the key the instance's `apiKeyHelper` serves from etcd.
- * - `factory`: `GET api.factory.ai/api/organization/subscription/usage`, the
- *   data behind app.factory.ai/settings/usage, authenticated with the same
- *   etcd-held key the Droid provider spawns with and riding the same xjp
- *   proxy so every Factory egress leaves through the chosen node.
- * - `minimax`: `GET www.minimaxi.com/v1/api/openplatform/coding_plan/remains`,
- *   the endpoint `mcode` itself polls, authenticated with the API key the
- *   instance's `config.yaml` (`minimax_api.apiKey`) already holds. Reports
- *   the 5-hour window and the weekly window (`status 3` = unlimited).
- *
- * Results are cached briefly so the model-usage page's 30s polling does not
- * turn into upstream traffic on every refresh. Probe failures degrade to a
- * `probeFailed` row, never to a failed endpoint.
+ * usageQuotaProbe: per-request, short-cached quota reads for the provider
+ * usage summary endpoint, each probe reading state the provider CLIs and
+ * hubs already hold locally. Failures degrade to a `probeFailed` row.
  *
  * @module fork/usage/usageQuotaProbe
  */
@@ -61,7 +24,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 import { makeFactoryApiKeyResolver } from "./factoryApiKey.ts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-import { ensureKiroOauthToken, type KiroOauthToken } from "./kiroCredentials.ts";
+import { ensureKiroOauthToken } from "./kiroCredentials.ts";
 
 /** Instances refresh at most this often; the page polls every 30s, and
  * Anthropic's OAuth usage endpoint answers bursts with 429s. */
@@ -109,9 +72,7 @@ const decodeJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Unknown as unknown as Schema.Codec<unknown>),
 );
 
-/* ------------------------------------------------------------------ */
 /* Small helpers                                                        */
-/* ------------------------------------------------------------------ */
 
 const getJson = (
   client: HttpClient.HttpClient,
@@ -255,9 +216,7 @@ const windowUnavailable = (checkedAt: string, message: string): ServerProviderUs
 const isoFromEpochMs = (epochMs: number): string =>
   DateTime.formatIso(DateTime.makeUnsafe(epochMs));
 
-/* ------------------------------------------------------------------ */
 /* GLM (Zhipu BigModel anthropic-compatible subscription)              */
-/* ------------------------------------------------------------------ */
 
 interface GlmLimit {
   readonly type?: string;
@@ -267,97 +226,94 @@ interface GlmLimit {
   readonly nextResetTime?: number;
 }
 
-const glmProbe = (
+const glmProbe = Effect.fn("UsageQuotaProbe.glmProbe")(function* (
   client: HttpClient.HttpClient,
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const settingsText = yield* fileSystem
-      .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
-      .pipe(Effect.mapError(probeError("glm")));
-    const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError("glm")));
-    const record =
-      typeof settings === "object" && settings !== null
-        ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
-        : {};
-    // `apiKeyHelper` is `<script> <etcd-key-path>`; the path is the argument.
-    const helperArg =
-      typeof record.apiKeyHelper === "string"
-        ? record.apiKeyHelper
-            .trim()
-            .split(/\s+/)
-            .findLast((part) => part.startsWith("/"))
-        : undefined;
-    const staticKey =
-      typeof record.env?.ANTHROPIC_AUTH_TOKEN === "string"
-        ? record.env.ANTHROPIC_AUTH_TOKEN
-        : undefined;
-    const token = yield* resolveEtcdKey(
-      helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
-      staticKey,
-    );
-    if (token.length === 0) {
-      return windowUnavailable(checkedAt, "glm 缺少可用的 API key");
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const settingsText = yield* fileSystem
+    .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
+    .pipe(Effect.mapError(probeError("glm")));
+  const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError("glm")));
+  const record =
+    typeof settings === "object" && settings !== null
+      ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
+      : {};
+  // `apiKeyHelper` is `<script> <etcd-key-path>`; the path is the argument.
+  const helperArg =
+    typeof record.apiKeyHelper === "string"
+      ? record.apiKeyHelper
+          .trim()
+          .split(/\s+/)
+          .findLast((part) => part.startsWith("/"))
+      : undefined;
+  const staticKey =
+    typeof record.env?.ANTHROPIC_AUTH_TOKEN === "string"
+      ? record.env.ANTHROPIC_AUTH_TOKEN
+      : undefined;
+  const token = yield* resolveEtcdKey(
+    helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
+    staticKey,
+  );
+  if (token.length === 0) {
+    return windowUnavailable(checkedAt, "glm 缺少可用的 API key");
+  }
+
+  const document = yield* getJson(
+    client,
+    "glm",
+    HttpClientRequest.get(GLM_QUOTA_URL).pipe(
+      HttpClientRequest.setHeader("Authorization", token),
+      HttpClientRequest.acceptJson,
+    ),
+  );
+  const limits =
+    typeof document === "object" && document !== null
+      ? ((document as { data?: { limits?: GlmLimit[] } }).data?.limits ?? [])
+      : [];
+
+  const windows: ServerProviderUsageWindow[] = [];
+  for (const limit of limits) {
+    if (typeof limit.percentage !== "number") continue;
+    const base = {
+      usedPercent: Math.max(0, Math.min(100, limit.percentage)),
+      ...(typeof limit.nextResetTime === "number"
+        ? { resetsAt: isoFromEpochMs(limit.nextResetTime) }
+        : {}),
+    } as const;
+    // unit 3 = 5-hour MCP concurrent lane; unit 6 = weekly token quota.
+    if (limit.unit === 3) {
+      windows.push({
+        id: "five_hour",
+        kind: "session",
+        label: `5 小时并发（${limit.number ?? "?"} 路）`,
+        windowDurationMins: 300,
+        ...base,
+      });
+    } else if (limit.unit === 6) {
+      windows.push({
+        id: "weekly_tokens",
+        kind: "weekly",
+        label: "周 token 配额",
+        windowDurationMins: 7 * 24 * 60,
+        ...base,
+      });
+    } else {
+      windows.push({
+        id: `unit_${limit.unit ?? "other"}`,
+        kind: "other",
+        label: `配额窗口（unit ${limit.unit ?? "?"}）`,
+        ...base,
+      });
     }
+  }
+  if (windows.length === 0) return windowUnavailable(checkedAt, "GLM 配额接口未返回窗口");
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
 
-    const document = yield* getJson(
-      client,
-      "glm",
-      HttpClientRequest.get(GLM_QUOTA_URL).pipe(
-        HttpClientRequest.setHeader("Authorization", token),
-        HttpClientRequest.acceptJson,
-      ),
-    );
-    const limits =
-      typeof document === "object" && document !== null
-        ? ((document as { data?: { limits?: GlmLimit[] } }).data?.limits ?? [])
-        : [];
-
-    const windows: ServerProviderUsageWindow[] = [];
-    for (const limit of limits) {
-      if (typeof limit.percentage !== "number") continue;
-      const base = {
-        usedPercent: Math.max(0, Math.min(100, limit.percentage)),
-        ...(typeof limit.nextResetTime === "number"
-          ? { resetsAt: isoFromEpochMs(limit.nextResetTime) }
-          : {}),
-      } as const;
-      // unit 3 = 5-hour MCP concurrent lane; unit 6 = weekly token quota.
-      if (limit.unit === 3) {
-        windows.push({
-          id: "five_hour",
-          kind: "session",
-          label: `5 小时并发（${limit.number ?? "?"} 路）`,
-          windowDurationMins: 300,
-          ...base,
-        });
-      } else if (limit.unit === 6) {
-        windows.push({
-          id: "weekly_tokens",
-          kind: "weekly",
-          label: "周 token 配额",
-          windowDurationMins: 7 * 24 * 60,
-          ...base,
-        });
-      } else {
-        windows.push({
-          id: `unit_${limit.unit ?? "other"}`,
-          kind: "other",
-          label: `配额窗口（unit ${limit.unit ?? "?"}）`,
-          ...base,
-        });
-      }
-    }
-    if (windows.length === 0) return windowUnavailable(checkedAt, "GLM 配额接口未返回窗口");
-    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
-  });
-
-/* ------------------------------------------------------------------ */
 /* Claude OAuth (Pro/Max subscription, `claude /usage`)                 */
-/* ------------------------------------------------------------------ */
 
 interface ClaudeOauthUsageWindow {
   readonly utilization?: number | null;
@@ -378,15 +334,9 @@ const CLAUDE_WINDOW_LABELS: ReadonlyArray<{
 
 /**
  * Reads `/api/oauth/usage` through the local CONNECT proxy the xjp CLI rides.
- * The account is geo-restricted: a direct request from this host's egress is
- * both against the account's usage rules and indistinguishable from a leak,
- * so there is deliberately no direct-egress fallback here — when the proxy is
- * down the probe fails and the page shows 探测失败.
- *
- * The handshake is done by hand because the shared `HttpClient` has no proxy
- * support: CONNECT to 127.0.0.1:2080, upgrade the tunnel to TLS with the real
- * SNI, then a plain HTTP/1.1 GET. Body reads assume a single response with a
- * Content-Length, which holds for this small JSON document.
+ * The account is geo-restricted, so there is deliberately no direct-egress
+ * fallback: when the proxy is down the probe fails and the page shows 探测失败.
+ * The handshake is by hand because the shared `HttpClient` has no proxy support.
  */
 const readAnthropicUsageViaXjp = (
   accessToken: string,
@@ -477,112 +427,105 @@ const readAnthropicUsageViaXjp = (
     catch: probeError("claudeOAuth"),
   });
 
-const claudeOauthProbe = (
+const claudeOauthProbe = Effect.fn("UsageQuotaProbe.claudeOauthProbe")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const credentialsText = yield* fileSystem
-      .readFileString(path.join(home, CLAUDE_CREDENTIALS_FILE))
-      .pipe(Effect.mapError(probeError("claudeOAuth")));
-    const credentials = yield* decodeJson(credentialsText).pipe(
-      Effect.mapError(probeError("claudeOAuth")),
-    );
-    const accessToken =
-      typeof credentials === "object" && credentials !== null
-        ? ((credentials as { claudeAiOauth?: { accessToken?: unknown } }).claudeAiOauth
-            ?.accessToken ?? null)
-        : null;
-    if (typeof accessToken !== "string" || accessToken.length === 0) {
-      return windowUnavailable(checkedAt, "OAuth 凭证为空，需要重新 claude auth login");
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const credentialsText = yield* fileSystem
+    .readFileString(path.join(home, CLAUDE_CREDENTIALS_FILE))
+    .pipe(Effect.mapError(probeError("claudeOAuth")));
+  const credentials = yield* decodeJson(credentialsText).pipe(
+    Effect.mapError(probeError("claudeOAuth")),
+  );
+  const accessToken =
+    typeof credentials === "object" && credentials !== null
+      ? ((credentials as { claudeAiOauth?: { accessToken?: unknown } }).claudeAiOauth
+          ?.accessToken ?? null)
+      : null;
+  if (typeof accessToken !== "string" || accessToken.length === 0) {
+    return windowUnavailable(checkedAt, "OAuth 凭证为空，需要重新 claude auth login");
+  }
+
+  const document = yield* readAnthropicUsageViaXjp(accessToken);
+
+  const windows: ServerProviderUsageWindow[] = [];
+  if (typeof document === "object" && document !== null) {
+    const usage = document as Record<string, ClaudeOauthUsageWindow | null | undefined>;
+    for (const spec of CLAUDE_WINDOW_LABELS) {
+      const window = usage[spec.key];
+      if (window == null || typeof window.utilization !== "number") continue;
+      windows.push({
+        id: spec.id,
+        kind: spec.kind,
+        label: spec.label,
+        usedPercent: Math.max(0, Math.min(100, window.utilization)),
+        ...(typeof window.resets_at === "string" ? { resetsAt: window.resets_at } : {}),
+      });
     }
+  }
+  if (windows.length === 0) return windowUnavailable(checkedAt, "Anthropic 未返回用量窗口");
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
 
-    const document = yield* readAnthropicUsageViaXjp(accessToken);
-
-    const windows: ServerProviderUsageWindow[] = [];
-    if (typeof document === "object" && document !== null) {
-      const usage = document as Record<string, ClaudeOauthUsageWindow | null | undefined>;
-      for (const spec of CLAUDE_WINDOW_LABELS) {
-        const window = usage[spec.key];
-        if (window == null || typeof window.utilization !== "number") continue;
-        windows.push({
-          id: spec.id,
-          kind: spec.kind,
-          label: spec.label,
-          usedPercent: Math.max(0, Math.min(100, window.utilization)),
-          ...(typeof window.resets_at === "string" ? { resetsAt: window.resets_at } : {}),
-        });
-      }
-    }
-    if (windows.length === 0) return windowUnavailable(checkedAt, "Anthropic 未返回用量窗口");
-    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
-  });
-
-/* ------------------------------------------------------------------ */
 /* WorkBuddy hub (wb_proxy points pool)                                 */
-/* ------------------------------------------------------------------ */
 
-const workbuddyProbe = (
+const workbuddyProbe = Effect.fn("UsageQuotaProbe.workbuddyProbe")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const entries = yield* fileSystem
-      .readDirectory(WORKBUDDY_ACCOUNTS_DIR)
-      .pipe(Effect.mapError(probeError("workbuddy")));
-    const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const entries = yield* fileSystem
+    .readDirectory(WORKBUDDY_ACCOUNTS_DIR)
+    .pipe(Effect.mapError(probeError("workbuddy")));
+  const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
 
-    let remaining = 0;
-    let reported = 0;
-    let stale = 0;
-    for (const entry of entries) {
-      if (!entry.endsWith(".json") || entry === "settings.json" || entry === "active_realm.json")
-        continue;
-      const text = yield* fileSystem
-        .readFileString(path.join(WORKBUDDY_ACCOUNTS_DIR, entry))
-        .pipe(Effect.orElseSucceed(() => ""));
-      if (text.length === 0) continue;
-      const document = yield* decodeJson(text).pipe(Effect.orElseSucceed(() => null));
-      if (typeof document !== "object" || document === null) continue;
-      const credits = (document as { credits?: { remain?: unknown; updated_at?: unknown } })
-        .credits;
-      const remain = credits?.remain;
-      if (typeof remain !== "number") continue;
-      remaining += remain;
-      reported += 1;
-      if (
-        typeof credits?.updated_at !== "number" ||
-        nowMs - credits.updated_at * 1000 > WORKBUDDY_CREDITS_STALE_MS
-      ) {
-        stale += 1;
-      }
+  let remaining = 0;
+  let reported = 0;
+  let stale = 0;
+  for (const entry of entries) {
+    if (!entry.endsWith(".json") || entry === "settings.json" || entry === "active_realm.json")
+      continue;
+    const text = yield* fileSystem
+      .readFileString(path.join(WORKBUDDY_ACCOUNTS_DIR, entry))
+      .pipe(Effect.orElseSucceed(() => ""));
+    if (text.length === 0) continue;
+    const document = yield* decodeJson(text).pipe(Effect.orElseSucceed(() => null));
+    if (typeof document !== "object" || document === null) continue;
+    const credits = (document as { credits?: { remain?: unknown; updated_at?: unknown } }).credits;
+    const remain = credits?.remain;
+    if (typeof remain !== "number") continue;
+    remaining += remain;
+    reported += 1;
+    if (
+      typeof credits?.updated_at !== "number" ||
+      nowMs - credits.updated_at * 1000 > WORKBUDDY_CREDITS_STALE_MS
+    ) {
+      stale += 1;
     }
-    if (reported === 0) return windowUnavailable(checkedAt, "wb_proxy 账号目录没有积分缓存");
+  }
+  if (reported === 0) return windowUnavailable(checkedAt, "wb_proxy 账号目录没有积分缓存");
 
-    return {
-      checkedAt,
-      windows: [
-        {
-          id: "points_pool",
-          kind: "monthly",
-          label:
-            stale > 0
-              ? `剩余积分（${reported} 账号，${stale} 个缓存超 24h）`
-              : `剩余积分（${reported} 账号）`,
-          usedPercent: 0,
-          remaining: Math.round(remaining),
-          remainingUnit: "积分",
-        },
-      ],
-    } satisfies ServerProviderUsageLimits;
-  });
+  return {
+    checkedAt,
+    windows: [
+      {
+        id: "points_pool",
+        kind: "monthly",
+        label:
+          stale > 0
+            ? `剩余积分（${reported} 账号，${stale} 个缓存超 24h）`
+            : `剩余积分（${reported} 账号）`,
+        usedPercent: 0,
+        remaining: Math.round(remaining),
+        remainingUnit: "积分",
+      },
+    ],
+  } satisfies ServerProviderUsageLimits;
+});
 
-/* ------------------------------------------------------------------ */
 /* Etcd-held keys (Kimi, Factory)                                       */
-/* ------------------------------------------------------------------ */
 
 /** Current value of an etcd-held key, falling back to `fallback` when etcd
  * is unreachable or holds nothing. Reuses the Droid provider's resolver so
@@ -593,76 +536,65 @@ const resolveEtcdKey = (etcdKey: string | undefined, fallback: string | undefine
     baseEnvironment: fallback ? { FACTORY_API_KEY: fallback } : {},
   }).environment.pipe(Effect.map((environment) => environment.FACTORY_API_KEY?.trim() ?? ""));
 
-const formatCompactCount = (value: number): string =>
-  value >= 1e8
-    ? `${(value / 1e8).toFixed(1)} 亿`
-    : value >= 1e4
-      ? `${(value / 1e4).toFixed(0)} 万`
-      : String(Math.round(value));
-
 /** Key for a Claude-home provider (Kimi, DeepSeek): the etcd path named by
  * `apiKeyHelper` (`<script> <etcd-key-path>`), else a static env token. */
-const readClaudeHomeApiKey = (
+const readClaudeHomeApiKey = Effect.fn("UsageQuotaProbe.readClaudeHomeApiKey")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
   probe: string,
-) =>
-  Effect.gen(function* () {
-    const settingsText = yield* fileSystem
-      .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
-      .pipe(Effect.mapError(probeError(probe)));
-    const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError(probe)));
-    const record =
-      typeof settings === "object" && settings !== null
-        ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
-        : {};
-    const helperArg =
-      typeof record.apiKeyHelper === "string"
-        ? record.apiKeyHelper
-            .trim()
-            .split(/\s+/)
-            .findLast((part) => part.startsWith("/"))
+) {
+  const settingsText = yield* fileSystem
+    .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
+    .pipe(Effect.mapError(probeError(probe)));
+  const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError(probe)));
+  const record =
+    typeof settings === "object" && settings !== null
+      ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
+      : {};
+  const helperArg =
+    typeof record.apiKeyHelper === "string"
+      ? record.apiKeyHelper
+          .trim()
+          .split(/\s+/)
+          .findLast((part) => part.startsWith("/"))
+      : undefined;
+  const staticKey =
+    typeof record.env?.ANTHROPIC_AUTH_TOKEN === "string"
+      ? record.env.ANTHROPIC_AUTH_TOKEN
+      : typeof record.env?.ANTHROPIC_API_KEY === "string"
+        ? record.env.ANTHROPIC_API_KEY
         : undefined;
-    const staticKey =
-      typeof record.env?.ANTHROPIC_AUTH_TOKEN === "string"
-        ? record.env.ANTHROPIC_AUTH_TOKEN
-        : typeof record.env?.ANTHROPIC_API_KEY === "string"
-          ? record.env.ANTHROPIC_API_KEY
-          : undefined;
-    return yield* resolveEtcdKey(
-      helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
-      staticKey,
-    );
-  });
+  return yield* resolveEtcdKey(
+    helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
+    staticKey,
+  );
+});
 
 /** The native token expires after 900 seconds; the Claude-home key survives idle periods. */
-const readKimiCliOAuthToken = (
+const readKimiCliOAuthToken = Effect.fn("UsageQuotaProbe.readKimiCliOAuthToken")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   homeDirectory: string,
-): Effect.Effect<string> =>
-  Effect.gen(function* () {
-    const credentialsPath = path.join(homeDirectory, ".kimi", KIMI_CLI_CREDENTIALS_FILE);
-    const credentialsText = yield* fileSystem
-      .readFileString(credentialsPath)
-      .pipe(Effect.orElseSucceed(() => ""));
-    if (credentialsText.length === 0) return "";
-    const credentials = yield* decodeJson(credentialsText).pipe(Effect.orElseSucceed(() => null));
-    if (typeof credentials !== "object" || credentials === null) return "";
-    const record = credentials as Record<string, unknown>;
-    const accessToken = record.access_token;
-    const expiresAt = record.expires_at;
-    if (typeof accessToken !== "string" || accessToken.length === 0) return "";
-    if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return "";
-    const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
-    if (expiresAt * 1000 <= nowMs + 30_000) return "";
-    return accessToken;
-  });
+) {
+  const credentialsPath = path.join(homeDirectory, ".kimi", KIMI_CLI_CREDENTIALS_FILE);
+  const credentialsText = yield* fileSystem
+    .readFileString(credentialsPath)
+    .pipe(Effect.orElseSucceed(() => ""));
+  if (credentialsText.length === 0) return "";
+  const credentials = yield* decodeJson(credentialsText).pipe(Effect.orElseSucceed(() => null));
+  if (typeof credentials !== "object" || credentials === null) return "";
+  const record = credentials as Record<string, unknown>;
+  const accessToken = record.access_token;
+  const expiresAt = record.expires_at;
+  if (typeof accessToken !== "string" || accessToken.length === 0) return "";
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return "";
+  const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
+  if (expiresAt * 1000 <= nowMs + 30_000) return "";
+  return accessToken;
+});
 
-/* ------------------------------------------------------------------ */
 /* Kimi (Moonshot prepaid balance, or the Kimi Code plan windows)       */
-/* ------------------------------------------------------------------ */
 
 /** True when the Claude home routes to the Kimi Code plan rather than the
  * pay-as-you-go Moonshot platform; the two keys are not interchangeable. */
@@ -698,140 +630,134 @@ const KIMI_CODE_BUCKETS: Record<
   limit_month_code: { label: "本月 Code 额度", kind: "monthly" },
 };
 
-const kimiCodeProbe = (
+const kimiCodeProbe = Effect.fn("UsageQuotaProbe.kimiCodeProbe")(function* (
   client: HttpClient.HttpClient,
   key: string,
   checkedAt: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const document = yield* getJson(
-      client,
-      "kimi",
-      HttpClientRequest.get(KIMI_CODE_USAGES_URL).pipe(
-        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
-        HttpClientRequest.acceptJson,
-      ),
-    );
-    const usages =
-      typeof document === "object" && document !== null
-        ? (document as { usages?: unknown }).usages
-        : undefined;
-    const windows: ServerProviderUsageWindow[] = [];
-    if (typeof usages === "object" && usages !== null) {
-      for (const [id, bucket] of Object.entries(usages)) {
-        if (typeof bucket !== "object" || bucket === null) continue;
-        const { used_ratio: ratio, reset_time: resetsAt } = bucket as {
-          used_ratio?: unknown;
-          reset_time?: unknown;
-        };
-        if (typeof ratio !== "number" || !Number.isFinite(ratio)) continue;
-        const known = KIMI_CODE_BUCKETS[id];
-        windows.push({
-          id,
-          kind: known?.kind ?? "other",
-          label: known?.label ?? id,
-          usedPercent: Math.round(Math.max(0, Math.min(100, ratio * 100)) * 10) / 10,
-          ...(typeof resetsAt === "string" && resetsAt.length > 0 ? { resetsAt } : {}),
-        });
-      }
+) {
+  const document = yield* getJson(
+    client,
+    "kimi",
+    HttpClientRequest.get(KIMI_CODE_USAGES_URL).pipe(
+      HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+      HttpClientRequest.acceptJson,
+    ),
+  );
+  const usages =
+    typeof document === "object" && document !== null
+      ? (document as { usages?: unknown }).usages
+      : undefined;
+  const windows: ServerProviderUsageWindow[] = [];
+  if (typeof usages === "object" && usages !== null) {
+    for (const [id, bucket] of Object.entries(usages)) {
+      if (typeof bucket !== "object" || bucket === null) continue;
+      const { used_ratio: ratio, reset_time: resetsAt } = bucket as {
+        used_ratio?: unknown;
+        reset_time?: unknown;
+      };
+      if (typeof ratio !== "number" || !Number.isFinite(ratio)) continue;
+      const known = KIMI_CODE_BUCKETS[id];
+      windows.push({
+        id,
+        kind: known?.kind ?? "other",
+        label: known?.label ?? id,
+        usedPercent: Math.round(Math.max(0, Math.min(100, ratio * 100)) * 10) / 10,
+        ...(typeof resetsAt === "string" && resetsAt.length > 0 ? { resetsAt } : {}),
+      });
     }
-    if (windows.length === 0) return windowUnavailable(checkedAt, "Kimi Code 未返回额度窗口");
-    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
-  });
+  }
+  if (windows.length === 0) return windowUnavailable(checkedAt, "Kimi Code 未返回额度窗口");
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
 
-const kimiProbe = (
+const kimiProbe = Effect.fn("UsageQuotaProbe.kimiProbe")(function* (
   client: HttpClient.HttpClient,
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
-    if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
-    if (yield* usesKimiCodePlan(fileSystem, path, home)) {
-      return yield* kimiCodeProbe(client, key, checkedAt);
-    }
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "kimi");
+  if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
+  if (yield* usesKimiCodePlan(fileSystem, path, home)) {
+    return yield* kimiCodeProbe(client, key, checkedAt);
+  }
 
-    const document = yield* getJson(
-      client,
-      "kimi",
-      HttpClientRequest.get(KIMI_BALANCE_URL).pipe(
-        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
-        HttpClientRequest.acceptJson,
-      ),
-    );
-    const data =
-      typeof document === "object" && document !== null
-        ? (
-            document as {
-              data?: {
-                available_balance?: unknown;
-                cash_balance?: unknown;
-                voucher_balance?: unknown;
-              };
-            }
-          ).data
-        : undefined;
-    const available = data?.available_balance;
-    if (typeof available !== "number")
-      return windowUnavailable(checkedAt, "Kimi 余额接口未返回余额");
+  const document = yield* getJson(
+    client,
+    "kimi",
+    HttpClientRequest.get(KIMI_BALANCE_URL).pipe(
+      HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+      HttpClientRequest.acceptJson,
+    ),
+  );
+  const data =
+    typeof document === "object" && document !== null
+      ? (
+          document as {
+            data?: {
+              available_balance?: unknown;
+              cash_balance?: unknown;
+              voucher_balance?: unknown;
+            };
+          }
+        ).data
+      : undefined;
+  const available = data?.available_balance;
+  if (typeof available !== "number") return windowUnavailable(checkedAt, "Kimi 余额接口未返回余额");
 
-    const parts: string[] = [];
-    if (typeof data?.cash_balance === "number") parts.push(`现金 ${data.cash_balance.toFixed(2)}`);
-    if (typeof data?.voucher_balance === "number") {
-      parts.push(`代金券 ${data.voucher_balance.toFixed(2)}`);
-    }
-    return {
-      checkedAt,
-      windows: [
-        {
-          id: "balance",
-          kind: "other",
-          label: parts.length > 0 ? `账户余额（${parts.join(" + ")}）` : "账户余额",
-          usedPercent: 0,
-          remaining: Math.max(0, Math.round(available * 100) / 100),
-          remainingUnit: "元",
-        },
-      ],
-    } satisfies ServerProviderUsageLimits;
-  });
+  const parts: string[] = [];
+  if (typeof data?.cash_balance === "number") parts.push(`现金 ${data.cash_balance.toFixed(2)}`);
+  if (typeof data?.voucher_balance === "number") {
+    parts.push(`代金券 ${data.voucher_balance.toFixed(2)}`);
+  }
+  return {
+    checkedAt,
+    windows: [
+      {
+        id: "balance",
+        kind: "other",
+        label: parts.length > 0 ? `账户余额（${parts.join(" + ")}）` : "账户余额",
+        usedPercent: 0,
+        remaining: Math.max(0, Math.round(available * 100) / 100),
+        remainingUnit: "元",
+      },
+    ],
+  } satisfies ServerProviderUsageLimits;
+});
 
-const kimiCliProbe = (
+const kimiCliProbe = Effect.fn("UsageQuotaProbe.kimiCliProbe")(function* (
   client: HttpClient.HttpClient,
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   homeDirectory: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const nativeToken = yield* readKimiCliOAuthToken(fileSystem, path, homeDirectory);
-    const fallbackHome = path.join(homeDirectory, ".claude-kimi");
-    const fallbackKey = () =>
-      readClaudeHomeApiKey(fileSystem, path, fallbackHome, "kimi").pipe(
-        Effect.orElseSucceed(() => ""),
-      );
-    const key = nativeToken.length > 0 ? nativeToken : yield* fallbackKey();
-    if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
-    const result = yield* kimiCodeProbe(client, key, checkedAt).pipe(
-      Effect.catch((error) =>
-        nativeToken.length === 0
-          ? Effect.fail(error)
-          : fallbackKey().pipe(
-              Effect.flatMap((stableKey) =>
-                stableKey.length > 0
-                  ? kimiCodeProbe(client, stableKey, checkedAt)
-                  : Effect.fail(error),
-              ),
-            ),
-      ),
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const nativeToken = yield* readKimiCliOAuthToken(fileSystem, path, homeDirectory);
+  const fallbackHome = path.join(homeDirectory, ".claude-kimi");
+  const fallbackKey = () =>
+    readClaudeHomeApiKey(fileSystem, path, fallbackHome, "kimi").pipe(
+      Effect.orElseSucceed(() => ""),
     );
-    return result;
-  });
+  const key = nativeToken.length > 0 ? nativeToken : yield* fallbackKey();
+  if (key.length === 0) return windowUnavailable(checkedAt, "kimi 缺少可用的 API key");
+  const result = yield* kimiCodeProbe(client, key, checkedAt).pipe(
+    Effect.catch((error) =>
+      nativeToken.length === 0
+        ? Effect.fail(error)
+        : fallbackKey().pipe(
+            Effect.flatMap((stableKey) =>
+              stableKey.length > 0
+                ? kimiCodeProbe(client, stableKey, checkedAt)
+                : Effect.fail(error),
+            ),
+          ),
+    ),
+  );
+  return result;
+});
 
-/* ------------------------------------------------------------------ */
 /* DeepSeek (prepaid balance)                                           */
-/* ------------------------------------------------------------------ */
 
 interface DeepseekBalanceInfo {
   readonly currency?: string;
@@ -840,61 +766,58 @@ interface DeepseekBalanceInfo {
   readonly topped_up_balance?: string;
 }
 
-const deepseekProbe = (
+const deepseekProbe = Effect.fn("UsageQuotaProbe.deepseekProbe")(function* (
   client: HttpClient.HttpClient,
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   home: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "deepseek");
-    if (key.length === 0) return windowUnavailable(checkedAt, "deepseek 缺少可用的 API key");
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const key = yield* readClaudeHomeApiKey(fileSystem, path, home, "deepseek");
+  if (key.length === 0) return windowUnavailable(checkedAt, "deepseek 缺少可用的 API key");
 
-    const document = yield* getJson(
-      client,
-      "deepseek",
-      HttpClientRequest.get(DEEPSEEK_BALANCE_URL).pipe(
-        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
-        HttpClientRequest.acceptJson,
-      ),
-    );
-    const body =
-      typeof document === "object" && document !== null
-        ? (document as { is_available?: unknown; balance_infos?: DeepseekBalanceInfo[] })
-        : {};
-    const infos = body.balance_infos ?? [];
-    const info = infos.find((entry) => entry.currency === "CNY") ?? infos[0];
-    const total = Number(info?.total_balance);
-    if (info === undefined || !Number.isFinite(total)) {
-      return windowUnavailable(checkedAt, "DeepSeek 余额接口未返回余额");
-    }
+  const document = yield* getJson(
+    client,
+    "deepseek",
+    HttpClientRequest.get(DEEPSEEK_BALANCE_URL).pipe(
+      HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+      HttpClientRequest.acceptJson,
+    ),
+  );
+  const body =
+    typeof document === "object" && document !== null
+      ? (document as { is_available?: unknown; balance_infos?: DeepseekBalanceInfo[] })
+      : {};
+  const infos = body.balance_infos ?? [];
+  const info = infos.find((entry) => entry.currency === "CNY") ?? infos[0];
+  const total = Number(info?.total_balance);
+  if (info === undefined || !Number.isFinite(total)) {
+    return windowUnavailable(checkedAt, "DeepSeek 余额接口未返回余额");
+  }
 
-    const parts: string[] = [];
-    const toppedUp = Number(info.topped_up_balance);
-    const granted = Number(info.granted_balance);
-    if (Number.isFinite(toppedUp)) parts.push(`充值 ${toppedUp.toFixed(2)}`);
-    if (Number.isFinite(granted) && granted > 0) parts.push(`赠送 ${granted.toFixed(2)}`);
-    const unit = info.currency === "USD" ? "美元" : "元";
-    const detail = parts.length > 0 ? `（${parts.join(" + ")}）` : "";
-    return {
-      checkedAt,
-      windows: [
-        {
-          id: "balance",
-          kind: "other",
-          label: `账户余额${detail}${body.is_available === false ? "，余额不足" : ""}`,
-          usedPercent: 0,
-          remaining: Math.max(0, Math.round(total * 100) / 100),
-          remainingUnit: unit,
-        },
-      ],
-    } satisfies ServerProviderUsageLimits;
-  });
+  const parts: string[] = [];
+  const toppedUp = Number(info.topped_up_balance);
+  const granted = Number(info.granted_balance);
+  if (Number.isFinite(toppedUp)) parts.push(`充值 ${toppedUp.toFixed(2)}`);
+  if (Number.isFinite(granted) && granted > 0) parts.push(`赠送 ${granted.toFixed(2)}`);
+  const unit = info.currency === "USD" ? "美元" : "元";
+  const detail = parts.length > 0 ? `（${parts.join(" + ")}）` : "";
+  return {
+    checkedAt,
+    windows: [
+      {
+        id: "balance",
+        kind: "other",
+        label: `账户余额${detail}${body.is_available === false ? "，余额不足" : ""}`,
+        usedPercent: 0,
+        remaining: Math.max(0, Math.round(total * 100) / 100),
+        remainingUnit: unit,
+      },
+    ],
+  } satisfies ServerProviderUsageLimits;
+});
 
-/* ------------------------------------------------------------------ */
 /* Factory (Droid subscription token allowance)                         */
-/* ------------------------------------------------------------------ */
 
 interface FactoryBillingWindow {
   readonly usedPercent?: number;
@@ -908,59 +831,56 @@ interface FactoryBillingTier {
   readonly monthly?: FactoryBillingWindow;
 }
 
-const factoryProbe = (
+const factoryProbe = Effect.fn("UsageQuotaProbe.factoryProbe")(function* (
   etcdKey: string | undefined,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const key = yield* resolveEtcdKey(etcdKey, process.env.FACTORY_API_KEY);
-    if (key.length === 0) return windowUnavailable(checkedAt, "factory 缺少可用的 API key");
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const key = yield* resolveEtcdKey(etcdKey, process.env.FACTORY_API_KEY);
+  if (key.length === 0) return windowUnavailable(checkedAt, "factory 缺少可用的 API key");
 
-    const document = yield* getJsonViaXjp("factory", "api.factory.ai", "/api/billing/limits", key, {
-      "User-Agent": "droid/0.233.0",
-    });
-    const limits =
-      typeof document === "object" && document !== null
-        ? (
-            document as {
-              limits?: { standard?: FactoryBillingTier; core?: FactoryBillingTier };
-            }
-          ).limits
-        : undefined;
-
-    const windows: ServerProviderUsageWindow[] = [];
-    const tiers = [
-      ["standard", "标准", limits?.standard],
-      ["core", "Droid Core", limits?.core],
-    ] as const;
-    const windowDefs = [
-      ["fiveHour", "5 小时", "session", 300] as const,
-      ["weekly", "周", "weekly", 7 * 24 * 60] as const,
-      ["monthly", "月", "monthly", 30 * 24 * 60] as const,
-    ] as const;
-    for (const [tierId, tierName, tier] of tiers) {
-      if (tier === undefined) continue;
-      for (const [winKey, winLabel, kind, durationMins] of windowDefs) {
-        const win = tier[winKey];
-        if (win === undefined || typeof win.usedPercent !== "number") continue;
-        if (win.usedPercent === 0 && win.windowEnd == null) continue;
-        windows.push({
-          id: `${tierId}_${winKey}`,
-          kind,
-          label: `${tierName} ${winLabel}用量`,
-          windowDurationMins: durationMins,
-          usedPercent: Math.max(0, Math.min(100, win.usedPercent)),
-          ...(typeof win.windowEnd === "string" ? { resetsAt: win.windowEnd } : {}),
-        });
-      }
-    }
-    if (windows.length === 0) return windowUnavailable(checkedAt, "Factory 用量接口未返回额度");
-    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+  const document = yield* getJsonViaXjp("factory", "api.factory.ai", "/api/billing/limits", key, {
+    "User-Agent": "droid/0.233.0",
   });
+  const limits =
+    typeof document === "object" && document !== null
+      ? (
+          document as {
+            limits?: { standard?: FactoryBillingTier; core?: FactoryBillingTier };
+          }
+        ).limits
+      : undefined;
 
-/* ------------------------------------------------------------------ */
+  const windows: ServerProviderUsageWindow[] = [];
+  const tiers = [
+    ["standard", "标准", limits?.standard],
+    ["core", "Droid Core", limits?.core],
+  ] as const;
+  const windowDefs = [
+    ["fiveHour", "5 小时", "session", 300] as const,
+    ["weekly", "周", "weekly", 7 * 24 * 60] as const,
+    ["monthly", "月", "monthly", 30 * 24 * 60] as const,
+  ] as const;
+  for (const [tierId, tierName, tier] of tiers) {
+    if (tier === undefined) continue;
+    for (const [winKey, winLabel, kind, durationMins] of windowDefs) {
+      const win = tier[winKey];
+      if (win === undefined || typeof win.usedPercent !== "number") continue;
+      if (win.usedPercent === 0 && win.windowEnd == null) continue;
+      windows.push({
+        id: `${tierId}_${winKey}`,
+        kind,
+        label: `${tierName} ${winLabel}用量`,
+        windowDurationMins: durationMins,
+        usedPercent: Math.max(0, Math.min(100, win.usedPercent)),
+        ...(typeof win.windowEnd === "string" ? { resetsAt: win.windowEnd } : {}),
+      });
+    }
+  }
+  if (windows.length === 0) return windowUnavailable(checkedAt, "Factory 用量接口未返回额度");
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
+
 /* MiniMax (Token Plan windows, same endpoint `mcode` polls)            */
-/* ------------------------------------------------------------------ */
 
 interface MinimaxModelRemain {
   readonly model_name?: string;
@@ -976,93 +896,87 @@ interface MinimaxModelRemain {
 const minimaxApiKey = (configText: string): string =>
   /^minimax_api:[ \t]*\r?\n[ \t]+apiKey:[ \t]*["']?([^\s"']+)/m.exec(configText)?.[1] ?? "";
 
-const minimaxProbe = (
+const minimaxProbe = Effect.fn("UsageQuotaProbe.minimaxProbe")(function* (
   client: HttpClient.HttpClient,
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   dataDir: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const configText = yield* fileSystem
-      .readFileString(path.join(dataDir, MINIMAX_CONFIG_FILE))
-      .pipe(Effect.mapError(probeError("minimax")));
-    const key = minimaxApiKey(configText);
-    if (key.length === 0) return windowUnavailable(checkedAt, "minimax 缺少可用的 API key");
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const configText = yield* fileSystem
+    .readFileString(path.join(dataDir, MINIMAX_CONFIG_FILE))
+    .pipe(Effect.mapError(probeError("minimax")));
+  const key = minimaxApiKey(configText);
+  if (key.length === 0) return windowUnavailable(checkedAt, "minimax 缺少可用的 API key");
 
-    const document = yield* getJson(
-      client,
-      "minimax",
-      HttpClientRequest.get(MINIMAX_REMAINS_URL).pipe(
-        HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
-        HttpClientRequest.acceptJson,
-      ),
-    );
-    const body =
-      typeof document === "object" && document !== null
-        ? (document as {
-            base_resp?: { status_code?: number; status_msg?: string };
-            model_remains?: MinimaxModelRemain[];
-          })
-        : {};
-    if (typeof body.base_resp?.status_code === "number" && body.base_resp.status_code !== 0) {
-      return windowUnavailable(
-        checkedAt,
-        `MiniMax 额度接口：${body.base_resp.status_msg ?? "失败"}`,
-      );
-    }
-    // The first entry is the text-model pool; video has its own count quota.
-    const general = body.model_remains?.[0];
-    if (general === undefined) return windowUnavailable(checkedAt, "MiniMax 额度接口未返回窗口");
+  const document = yield* getJson(
+    client,
+    "minimax",
+    HttpClientRequest.get(MINIMAX_REMAINS_URL).pipe(
+      HttpClientRequest.setHeader("Authorization", `Bearer ${key}`),
+      HttpClientRequest.acceptJson,
+    ),
+  );
+  const body =
+    typeof document === "object" && document !== null
+      ? (document as {
+          base_resp?: { status_code?: number; status_msg?: string };
+          model_remains?: MinimaxModelRemain[];
+        })
+      : {};
+  if (typeof body.base_resp?.status_code === "number" && body.base_resp.status_code !== 0) {
+    return windowUnavailable(checkedAt, `MiniMax 额度接口：${body.base_resp.status_msg ?? "失败"}`);
+  }
+  // The first entry is the text-model pool; video has its own count quota.
+  const general = body.model_remains?.[0];
+  if (general === undefined) return windowUnavailable(checkedAt, "MiniMax 额度接口未返回窗口");
 
-    const windows: ServerProviderUsageWindow[] = [];
-    const push = (
-      id: string,
-      kind: "session" | "weekly",
-      name: string,
-      durationMins: number,
-      status: number | undefined,
-      remainingPercent: number | undefined,
-      endMs: number | undefined,
-    ) => {
-      const unlimited = status === 3;
-      if (!unlimited && remainingPercent === undefined) return;
-      windows.push({
-        id,
-        kind,
-        label: unlimited ? `${name}（无限制）` : name,
-        windowDurationMins: durationMins,
-        usedPercent: unlimited ? 0 : Math.max(0, Math.min(100, 100 - (remainingPercent ?? 100))),
-        ...(!unlimited && typeof endMs === "number" && endMs > 0
-          ? { resetsAt: isoFromEpochMs(endMs) }
-          : {}),
-      });
-    };
-    push(
-      "five_hour",
-      "session",
-      "5 小时额度",
-      300,
-      general.current_interval_status,
-      general.current_interval_remaining_percent,
-      general.end_time,
-    );
-    push(
-      "weekly",
-      "weekly",
-      "周额度",
-      7 * 24 * 60,
-      general.current_weekly_status,
-      general.current_weekly_remaining_percent,
-      general.weekly_end_time,
-    );
-    if (windows.length === 0) return windowUnavailable(checkedAt, "MiniMax 额度接口未返回窗口");
-    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
-  });
+  const windows: ServerProviderUsageWindow[] = [];
+  const push = (
+    id: string,
+    kind: "session" | "weekly",
+    name: string,
+    durationMins: number,
+    status: number | undefined,
+    remainingPercent: number | undefined,
+    endMs: number | undefined,
+  ) => {
+    const unlimited = status === 3;
+    if (!unlimited && remainingPercent === undefined) return;
+    windows.push({
+      id,
+      kind,
+      label: unlimited ? `${name}（无限制）` : name,
+      windowDurationMins: durationMins,
+      usedPercent: unlimited ? 0 : Math.max(0, Math.min(100, 100 - (remainingPercent ?? 100))),
+      ...(!unlimited && typeof endMs === "number" && endMs > 0
+        ? { resetsAt: isoFromEpochMs(endMs) }
+        : {}),
+    });
+  };
+  push(
+    "five_hour",
+    "session",
+    "5 小时额度",
+    300,
+    general.current_interval_status,
+    general.current_interval_remaining_percent,
+    general.end_time,
+  );
+  push(
+    "weekly",
+    "weekly",
+    "周额度",
+    7 * 24 * 60,
+    general.current_weekly_status,
+    general.current_weekly_remaining_percent,
+    general.weekly_end_time,
+  );
+  if (windows.length === 0) return windowUnavailable(checkedAt, "MiniMax 额度接口未返回窗口");
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
 
-/* ------------------------------------------------------------------ */
 /* Antigravity (Google Code Assist quota summary, agy `/usage`)         */
-/* ------------------------------------------------------------------ */
 
 interface AntigravityQuotaBucket {
   readonly bucketId?: string;
@@ -1080,9 +994,7 @@ const ANTIGRAVITY_TOKEN_FILE = "antigravity-acp/acp_token.json";
 /** Code Assist rejects quota reads without a client user agent (403 SUBSCRIPTION_REQUIRED). */
 const ANTIGRAVITY_USER_AGENT = "antigravity/1.1.1 linux/amd64";
 
-/* ------------------------------------------------------------------ */
 /* Kiro (CodeWhisperer GetUsageLimits)                                 */
-/* ------------------------------------------------------------------ */
 
 const CODEWHISPERER_USAGE_TARGET = "AmazonCodeWhispererService.GetUsageLimits";
 
@@ -1101,66 +1013,63 @@ interface CodeWhispererUsageLimits {
   readonly usageBreakdownList?: CodeWhispererUsageBreakdown[];
 }
 
-const kiroProbe = (
+const kiroProbe = Effect.fn("UsageQuotaProbe.kiroProbe")(function* (
   client: HttpClient.HttpClient,
   homeDirectory: string,
   commandPath: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const token = yield* ensureKiroOauthToken(homeDirectory, commandPath);
-    if (token === null) {
-      return windowUnavailable(checkedAt, "kiro-cli 未登录或没有凭证");
-    }
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const token = yield* ensureKiroOauthToken(homeDirectory, commandPath);
+  if (token === null) {
+    return windowUnavailable(checkedAt, "kiro-cli 未登录或没有凭证");
+  }
 
-    const url = `https://codewhisperer.${token.region}.amazonaws.com/`;
-    const document = yield* client
-      .execute(
-        HttpClientRequest.post(url).pipe(
-          HttpClientRequest.setHeader("x-amz-target", CODEWHISPERER_USAGE_TARGET),
-          HttpClientRequest.setHeader("Content-Type", "application/x-amz-json-1.0"),
-          HttpClientRequest.setHeader("Authorization", `Bearer ${token.accessToken}`),
-          HttpClientRequest.bodyText("{}", "application/x-amz-json-1.0"),
-        ),
-      )
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap((response) => response.text),
-        Effect.flatMap(decodeJson),
-        Effect.timeout(PROBE_TIMEOUT),
-        Effect.mapError(probeError("kiro")),
-      );
+  const url = `https://codewhisperer.${token.region}.amazonaws.com/`;
+  const document = yield* client
+    .execute(
+      HttpClientRequest.post(url).pipe(
+        HttpClientRequest.setHeader("x-amz-target", CODEWHISPERER_USAGE_TARGET),
+        HttpClientRequest.setHeader("Content-Type", "application/x-amz-json-1.0"),
+        HttpClientRequest.setHeader("Authorization", `Bearer ${token.accessToken}`),
+        HttpClientRequest.bodyText("{}", "application/x-amz-json-1.0"),
+      ),
+    )
+    .pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.text),
+      Effect.flatMap(decodeJson),
+      Effect.timeout(PROBE_TIMEOUT),
+      Effect.mapError(probeError("kiro")),
+    );
 
-    const limits =
-      typeof document === "object" && document !== null
-        ? (document as CodeWhispererUsageLimits)
-        : {};
-    const breakdown = limits.usageBreakdownList?.[0];
-    if (breakdown === undefined || typeof breakdown.usageLimitWithPrecision !== "number") {
-      return windowUnavailable(checkedAt, "CodeWhisperer 未返回额度窗口");
-    }
+  const limits =
+    typeof document === "object" && document !== null ? (document as CodeWhispererUsageLimits) : {};
+  const breakdown = limits.usageBreakdownList?.[0];
+  if (breakdown === undefined || typeof breakdown.usageLimitWithPrecision !== "number") {
+    return windowUnavailable(checkedAt, "CodeWhisperer 未返回额度窗口");
+  }
 
-    const limit = breakdown.usageLimitWithPrecision;
-    const used = breakdown.currentUsageWithPrecision ?? 0;
-    const remaining = Math.max(0, limit - used);
-    const usedPercent = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  const limit = breakdown.usageLimitWithPrecision;
+  const used = breakdown.currentUsageWithPrecision ?? 0;
+  const remaining = Math.max(0, limit - used);
+  const usedPercent = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
 
-    const windows: ServerProviderUsageWindow[] = [
-      {
-        id: "kiro_credits",
-        kind: "monthly",
-        label: limits.subscriptionInfo?.subscriptionTitle ?? "KIRO Credits",
-        usedPercent: Math.round(usedPercent * 10) / 10,
-        remaining: Math.round(remaining * 100) / 100,
-        remainingUnit: "credits",
-        ...(typeof limits.nextDateReset === "number" && limits.nextDateReset > 0
-          ? { resetsAt: isoFromEpochMs(limits.nextDateReset * 1000) }
-          : {}),
-      },
-    ];
+  const windows: ServerProviderUsageWindow[] = [
+    {
+      id: "kiro_credits",
+      kind: "monthly",
+      label: limits.subscriptionInfo?.subscriptionTitle ?? "KIRO Credits",
+      usedPercent: Math.round(usedPercent * 10) / 10,
+      remaining: Math.round(remaining * 100) / 100,
+      remainingUnit: "credits",
+      ...(typeof limits.nextDateReset === "number" && limits.nextDateReset > 0
+        ? { resetsAt: isoFromEpochMs(limits.nextDateReset * 1000) }
+        : {}),
+    },
+  ];
 
-    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
-  });
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
 
 const antigravityGroupName = (displayName: string | undefined): string =>
   displayName === undefined
@@ -1177,95 +1086,92 @@ const antigravityGroupName = (displayName: string | undefined): string =>
  * minted from the profile's stored refresh token and never persisted; both
  * calls ride the xjp exit the instance itself is configured to use.
  */
-const antigravityProbe = (
+const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   profileDirectory: string,
-): Effect.Effect<ServerProviderUsageLimits, UsageQuotaProbeError> =>
-  Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const tokenText = yield* fileSystem
-      .readFileString(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))
-      .pipe(Effect.mapError(probeError("antigravity")));
-    const stored = yield* decodeJson(tokenText).pipe(Effect.mapError(probeError("antigravity")));
-    const credentials =
-      typeof stored === "object" && stored !== null
-        ? (stored as Record<string, unknown>)
-        : ({} as Record<string, unknown>);
-    const field = (name: string) =>
-      typeof credentials[name] === "string" ? (credentials[name] as string) : "";
-    if (field("refresh_token").length === 0 || field("client_id").length === 0) {
-      return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const tokenText = yield* fileSystem
+    .readFileString(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))
+    .pipe(Effect.mapError(probeError("antigravity")));
+  const stored = yield* decodeJson(tokenText).pipe(Effect.mapError(probeError("antigravity")));
+  const credentials =
+    typeof stored === "object" && stored !== null
+      ? (stored as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  const field = (name: string) =>
+    typeof credentials[name] === "string" ? (credentials[name] as string) : "";
+  if (field("refresh_token").length === 0 || field("client_id").length === 0) {
+    return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
+  }
+
+  const refreshed = yield* getJsonViaXjp(
+    "antigravity",
+    "oauth2.googleapis.com",
+    "/token",
+    "",
+    {},
+    {
+      contentType: "application/x-www-form-urlencoded",
+      body: new URLSearchParams({
+        client_id: field("client_id"),
+        client_secret: field("client_secret"),
+        refresh_token: field("refresh_token"),
+        grant_type: "refresh_token",
+      }).toString(),
+    },
+  );
+  const accessToken =
+    typeof refreshed === "object" && refreshed !== null
+      ? (refreshed as { access_token?: unknown }).access_token
+      : undefined;
+  if (typeof accessToken !== "string" || accessToken.length === 0) {
+    return windowUnavailable(checkedAt, "Antigravity 刷新 Google 凭证失败");
+  }
+
+  const projectBody = yield* encodeJsonBody(
+    field("project_id").length > 0 ? { project: field("project_id") } : {},
+  ).pipe(Effect.mapError(probeError("antigravity")));
+  const document = yield* getJsonViaXjp(
+    "antigravity",
+    "cloudcode-pa.googleapis.com",
+    "/v1internal:retrieveUserQuotaSummary",
+    accessToken,
+    { "User-Agent": ANTIGRAVITY_USER_AGENT },
+    { contentType: "application/json", body: projectBody },
+  );
+  const groups =
+    typeof document === "object" && document !== null
+      ? ((document as { groups?: AntigravityQuotaGroup[] }).groups ?? [])
+      : [];
+
+  const windows: ServerProviderUsageWindow[] = [];
+  for (const group of groups) {
+    const name = antigravityGroupName(group.displayName);
+    for (const bucket of group.buckets ?? []) {
+      if (typeof bucket.remainingFraction !== "number") continue;
+      const weekly = bucket.window === "weekly";
+      windows.push({
+        id: bucket.bucketId ?? `${name}_${bucket.window ?? "window"}`,
+        kind: weekly ? "weekly" : "session",
+        label: `${name} ${weekly ? "周" : bucket.window === "5h" ? "5 小时" : (bucket.window ?? "")}额度`,
+        ...(weekly
+          ? { windowDurationMins: 7 * 24 * 60 }
+          : bucket.window === "5h"
+            ? { windowDurationMins: 300 }
+            : {}),
+        usedPercent:
+          Math.round(Math.max(0, Math.min(100, (1 - bucket.remainingFraction) * 100)) * 10) / 10,
+        ...(typeof bucket.resetTime === "string" ? { resetsAt: bucket.resetTime } : {}),
+      });
     }
+  }
+  if (windows.length === 0) return windowUnavailable(checkedAt, "Antigravity 未返回额度窗口");
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
 
-    const refreshed = yield* getJsonViaXjp(
-      "antigravity",
-      "oauth2.googleapis.com",
-      "/token",
-      "",
-      {},
-      {
-        contentType: "application/x-www-form-urlencoded",
-        body: new URLSearchParams({
-          client_id: field("client_id"),
-          client_secret: field("client_secret"),
-          refresh_token: field("refresh_token"),
-          grant_type: "refresh_token",
-        }).toString(),
-      },
-    );
-    const accessToken =
-      typeof refreshed === "object" && refreshed !== null
-        ? (refreshed as { access_token?: unknown }).access_token
-        : undefined;
-    if (typeof accessToken !== "string" || accessToken.length === 0) {
-      return windowUnavailable(checkedAt, "Antigravity 刷新 Google 凭证失败");
-    }
-
-    const projectBody = yield* encodeJsonBody(
-      field("project_id").length > 0 ? { project: field("project_id") } : {},
-    ).pipe(Effect.mapError(probeError("antigravity")));
-    const document = yield* getJsonViaXjp(
-      "antigravity",
-      "cloudcode-pa.googleapis.com",
-      "/v1internal:retrieveUserQuotaSummary",
-      accessToken,
-      { "User-Agent": ANTIGRAVITY_USER_AGENT },
-      { contentType: "application/json", body: projectBody },
-    );
-    const groups =
-      typeof document === "object" && document !== null
-        ? ((document as { groups?: AntigravityQuotaGroup[] }).groups ?? [])
-        : [];
-
-    const windows: ServerProviderUsageWindow[] = [];
-    for (const group of groups) {
-      const name = antigravityGroupName(group.displayName);
-      for (const bucket of group.buckets ?? []) {
-        if (typeof bucket.remainingFraction !== "number") continue;
-        const weekly = bucket.window === "weekly";
-        windows.push({
-          id: bucket.bucketId ?? `${name}_${bucket.window ?? "window"}`,
-          kind: weekly ? "weekly" : "session",
-          label: `${name} ${weekly ? "周" : bucket.window === "5h" ? "5 小时" : (bucket.window ?? "")}额度`,
-          ...(weekly
-            ? { windowDurationMins: 7 * 24 * 60 }
-            : bucket.window === "5h"
-              ? { windowDurationMins: 300 }
-              : {}),
-          usedPercent:
-            Math.round(Math.max(0, Math.min(100, (1 - bucket.remainingFraction) * 100)) * 10) / 10,
-          ...(typeof bucket.resetTime === "string" ? { resetsAt: bucket.resetTime } : {}),
-        });
-      }
-    }
-    if (windows.length === 0) return windowUnavailable(checkedAt, "Antigravity 未返回额度窗口");
-    return { checkedAt, windows } satisfies ServerProviderUsageLimits;
-  });
-
-/* ------------------------------------------------------------------ */
 /* Instance wiring + cache                                              */
-/* ------------------------------------------------------------------ */
 
 type ProbeKind =
   | "glm"

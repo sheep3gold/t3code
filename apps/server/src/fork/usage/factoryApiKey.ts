@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - the bootstrap file read happens inside a promise-based fetch helper
+// @effect-diagnostics nodeBuiltinImport:off effectTryWithoutCatch:off - the bootstrap file read happens inside a promise-based fetch helper
 /**
  * Fork-only Factory (Droid) API key resolver; the key lives in etcd so it
  * rotates without a restart. The key is never logged, only failure reasons.

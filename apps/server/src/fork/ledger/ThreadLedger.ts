@@ -1,15 +1,12 @@
 // @effect-diagnostics effectFnOpportunity:off -- fork code predates these upstream style rules.
 /**
- * Thread work ledger on the upstream base.
- *
- * A thread-scoped goal/phase/next artifact map plus a short event log. The
- * agent writes it through the `thread_ledger_*` MCP tools; the fork's web
- * memory page reads it over HTTP. Upstream has no equivalent, so the tables
- * come from the fork's own migration and this repository is the only writer.
+ * Thread work ledger on the upstream base: a thread-scoped goal/phase/next
+ * artifact map plus a short event log, written through the `thread_ledger_*`
+ * MCP tools. Upstream has no equivalent, so this repository is the only writer.
  *
  * @module fork/ledger/ThreadLedger
  */
-// @effect-diagnostics preferSchemaOverJson:off -- *_json columns hold plain string records written inside SQL templates.
+// @effect-diagnostics globalJsonInEffect:off -- *_json columns hold plain string records written inside SQL templates.
 import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -97,11 +94,8 @@ export class ThreadLedgerRepository extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const read = (
-    threadId: ThreadId,
-    eventLimit = 20,
-  ): Effect.Effect<ThreadLedgerSnapshot, PersistenceSqlError> =>
-    Effect.gen(function* () {
+  const read = Effect.fn("ThreadLedger.read")(
+    function* (threadId: ThreadId, eventLimit = 20) {
       const states = yield* sql<StateRow>`
         SELECT
           goal,
@@ -133,7 +127,9 @@ const make = Effect.gen(function* () {
           : null,
         events: events.toReversed(),
       };
-    }).pipe(Effect.mapError(sqlError("readThreadLedger")));
+    },
+    Effect.mapError(sqlError("readThreadLedger")),
+  );
 
   return ThreadLedgerRepository.of({
     read,

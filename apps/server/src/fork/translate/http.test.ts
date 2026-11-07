@@ -1,3 +1,4 @@
+// @effect-diagnostics effectTryWithoutCatch:off -- fork code predates these upstream style rules.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthSessionId } from "@t3tools/contracts";
 import { it } from "@effect/vitest";

@@ -2,6 +2,7 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import * as CodexManagedTokenBroker from "../../provider/CodexManagedTokenBroker.ts";
 import * as SourceControlProviderRegistry from "../../sourceControl/SourceControlProviderRegistry.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -52,7 +53,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as McpSessionRegistryTestkit from "../../mcp/McpSessionRegistry.testkit.ts";
 
 const layerPlatformTest = Layer.merge(
-  NodeServices.layer,
+  Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),

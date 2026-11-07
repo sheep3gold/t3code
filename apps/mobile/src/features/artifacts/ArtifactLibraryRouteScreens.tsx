@@ -6,7 +6,7 @@ import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useArtifact, useArtifacts } from "../../state/artifacts";
-import { SettingsEnvironmentFilterHeader } from "../settings/components/SettingsEnvironmentFilterHeader";
+import { useSettingsEnvironmentMenu } from "../settings/components/SettingsEnvironmentFilterHeader";
 import { SettingsRow } from "../settings/components/SettingsRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
@@ -27,6 +27,7 @@ function formatDate(value: string): string {
 
 export function SettingsArtifactsRouteScreen() {
   const navigation = useNavigation();
+  const environmentMenu = useSettingsEnvironmentMenu();
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const projectGroup = projectGroups.find((group) => group.key === selectedProjectKey);
   const project = projectGroup?.members
@@ -37,8 +38,7 @@ export function SettingsArtifactsRouteScreen() {
 
   if (!project) {
     return (
-      <SettingsScreen title="Artifacts">
-        <SettingsEnvironmentFilterHeader />
+      <SettingsScreen title="Artifacts" menus={[environmentMenu]}>
         <View className="flex-1 items-center justify-center px-8">
           <Text className="text-center text-base text-foreground-muted">
             Select a project to browse its saved artifacts.
@@ -73,10 +73,10 @@ function ArtifactList({
   };
   readonly onOpen: (slug: string) => void;
 }) {
+  const environmentMenu = useSettingsEnvironmentMenu();
   const { artifacts, error, isPending, refresh } = useArtifacts(project.environmentId, project.id);
   return (
-    <SettingsScreen title="Artifacts">
-      <SettingsEnvironmentFilterHeader />
+    <SettingsScreen title="Artifacts" menus={[environmentMenu]}>
       <ScrollView
         className="flex-1 bg-sheet"
         contentInsetAdjustmentBehavior="automatic"
