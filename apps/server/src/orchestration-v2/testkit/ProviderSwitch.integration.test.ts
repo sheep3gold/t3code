@@ -4245,18 +4245,13 @@ describe("orchestration v2 provider switching", () => {
             CLAUDE_MODEL_SELECTION,
           );
           yield* waitForIdle(threadId);
-          const codexSession = (yield* orchestrator.getThreadProjection(
-            threadId,
-          )).providerSessions.find(
-            (session) => session.providerInstanceId === CODEX_MODEL_SELECTION.instanceId,
-          )!;
-          yield* orchestrator.dispatch({
-            type: "provider-session.detach",
-            commandId: CommandId.make("command:provider-switch:stop-codex"),
-            threadId,
-            providerSessionId: codexSession.id,
-          });
-          yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+          // Switching to Claude already released Codex's session.
+          assert.equal(
+            (yield* orchestrator.getThreadProjection(threadId)).providerSessions.find(
+              (session) => session.providerInstanceId === CODEX_MODEL_SELECTION.instanceId,
+            ),
+            undefined,
+          );
           yield* orchestrator.dispatch(commands[3]!);
           assert.deepEqual(
             (yield* orchestrator.getThreadProjection(threadId)).thread.modelSelection,
@@ -4451,18 +4446,13 @@ describe("orchestration v2 provider switching", () => {
             CLAUDE_MODEL_SELECTION,
           );
           yield* waitForIdle(threadId);
-          const codexSession = (yield* orchestrator.getThreadProjection(
-            threadId,
-          )).providerSessions.find(
-            (session) => session.providerInstanceId === CODEX_MODEL_SELECTION.instanceId,
-          )!;
-          yield* orchestrator.dispatch({
-            type: "provider-session.detach",
-            commandId: CommandId.make("command:provider-switch:stop-codex"),
-            threadId,
-            providerSessionId: codexSession.id,
-          });
-          yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+          // Switching to Claude already released Codex's session.
+          assert.equal(
+            (yield* orchestrator.getThreadProjection(threadId)).providerSessions.find(
+              (session) => session.providerInstanceId === CODEX_MODEL_SELECTION.instanceId,
+            ),
+            undefined,
+          );
           yield* orchestrator.dispatch(commands[3]!);
           assert.deepEqual(
             (yield* orchestrator.getThreadProjection(threadId)).thread.modelSelection,
