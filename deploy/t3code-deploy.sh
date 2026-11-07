@@ -110,6 +110,9 @@ test -s "$SRC/apps/server/dist/bin.mjs"
 test -d "$LIVE/apps/web/dist"
 test -d "$LIVE/apps/server/dist"
 
+# 新 external 依赖要先装进 live install 的 node_modules：dist 之外 deploy 只同步
+# dist，缺包会让新 dist 起来就 "Cannot find module"。同步完再校验。
+node "$SRC/deploy/host/sync-runtime-externals.mjs" "$SRC" "$LIVE"
 node "$SRC/deploy/host/check-runtime-externals.mjs" "$SRC" "$LIVE"
 
 # Keep user-scope skill links in sync before touching the running installation.

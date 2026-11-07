@@ -434,6 +434,18 @@ describe("usageQuotaProbe", () => {
 
   it.live("kiro probe is selected for acpRegistry instance with commandPath", () =>
     Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const previousHome = process.env.HOME;
+      process.env.HOME = yield* fileSystem.makeTempDirectoryScoped();
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousHome === undefined) {
+            delete process.env.HOME;
+          } else {
+            process.env.HOME = previousHome;
+          }
+        }),
+      );
       clearUsageQuotaProbeCache();
       const settings = {
         providerInstances: {
