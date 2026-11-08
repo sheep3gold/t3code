@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // Runs Factory Droid as an ACP agent for T3's acpRegistry driver.
 // Reads the Droid API key from etcd on every spawn, so a key rotated in etcd
-// is picked up by the next session, and sends Droid's egress through the xjp
+// is picked up by the next session, and sends Droid's egress through the mihomo
 // proxy. The key is never printed.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const DEFAULT_PROXY = "http://127.0.0.1:2080";
+const DEFAULT_PROXY = "http://127.0.0.1:7890";
 const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,::1";
 
 function readBootstrap(path) {
