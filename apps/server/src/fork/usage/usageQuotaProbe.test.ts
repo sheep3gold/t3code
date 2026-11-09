@@ -390,6 +390,13 @@ describe("usageQuotaProbe", () => {
 
   it.live("factory probe is selected for the migrated acpRegistry instance", () =>
     Effect.gen(function* () {
+      const previousKey = process.env.FACTORY_API_KEY;
+      delete process.env.FACTORY_API_KEY;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousKey !== undefined) process.env.FACTORY_API_KEY = previousKey;
+        }),
+      );
       clearUsageQuotaProbeCache();
       const settings = {
         providerInstances: { factory: { driver: "acpRegistry" } },
