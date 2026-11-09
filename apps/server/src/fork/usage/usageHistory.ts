@@ -1,12 +1,7 @@
 // @effect-diagnostics globalDate:off
 /**
- * Day-window arithmetic and the per-day fold behind the provider usage
- * history payload.
- *
- * Pure, so the window math and fold are testable without the filesystem, the
- * network, or the clock.
- *
- * @module fork/usage/usageHistory
+ * Day-window arithmetic and the per-day fold behind the provider usage history
+ * payload. Pure, so it is testable without the filesystem, network, or clock.
  */
 import type { UsageBucket, UsageDay } from "@t3tools/contracts";
 

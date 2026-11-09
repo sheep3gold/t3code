@@ -3,7 +3,7 @@
 
 每次运行都从 ~/.t3/userdata/settings.json 读 providerInstances.claude_xjp：
 binaryPath、homePath（导出为 CLAUDE_CONFIG_DIR，与 T3 的 Claude 驱动一致）、
-environment（经本机 sing-box-xjp 的 127.0.0.1:2080 出口等）和 launchArgs。
+environment（经本机 mihomo 的 127.0.0.1:7890 出口等）和 launchArgs。
 在 T3 设置里改了这个 provider，终端里的 claude-xjp 随之生效，不必同步两处。
 
 用法与 claude 相同：claude-xjp [claude 的参数...]

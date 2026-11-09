@@ -88,7 +88,7 @@
       "id": "claude",
       "type": "backend",
       "label": "Claude Code",
-      "sublabel": "claude_xjp · sing-box :2080",
+      "sublabel": "claude_xjp · mihomo :7890",
       "pos": [900, 230],
       "size": [190, 60]
     },

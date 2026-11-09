@@ -13,9 +13,9 @@ const DEFAULT_TTL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 3_000;
 /**
  * Factory only serves the regions its account is licensed for, so droid egress
- * rides the local xjp node unless a provider instance overrides it.
+ * rides the local mihomo exit unless a provider instance overrides it.
  */
-const DEFAULT_FACTORY_PROXY = "http://127.0.0.1:2080";
+const DEFAULT_FACTORY_PROXY = "http://127.0.0.1:7890";
 
 export interface FactoryApiKeyResolver {
   /**
@@ -31,7 +31,7 @@ const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,::1";
 
 /**
  * `environment` with every Droid-bound request sent through `proxyUrl`
- * (loopback stays direct). Falls back to the xjp node, so a provider instance
+ * (loopback stays direct). Falls back to the mihomo exit, so a provider instance
  * that never mentions a proxy keeps the default egress rather than leaking
  * direct connections out of the licensed region.
  */
@@ -100,7 +100,7 @@ async function fetchEtcdValue(
  */
 export function makeFactoryApiKeyResolver(input: {
   readonly etcdKey: string | undefined;
-  /** Outbound proxy for everything Droid sends to Factory, e.g. the xjp node. */
+  /** Outbound proxy for everything Droid sends to Factory, e.g. the mihomo exit. */
   readonly proxyUrl?: string;
   readonly baseEnvironment: NodeJS.ProcessEnv;
   readonly fetchImpl?: typeof fetch;

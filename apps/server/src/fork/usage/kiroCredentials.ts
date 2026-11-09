@@ -1,16 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - shells out to kiro-cli and opens its SQLite token store read-only at the Node boundary
 /**
- * Kiro CLI credentials for the usage probe.
- *
- * kiro-cli keeps its OIDC token in a SQLite database under its data
- * directory (`auth_kv` / `kirocli:odic:token`). That row is short-lived —
- * the access token lives about a quarter of an hour — so a probe that reads
- * a stale row fails even while the account is signed in. Renewing the token
- * is kiro-cli's own job: `kiro-cli whoami` refreshes it and writes it back.
- * This module shells out to the CLI rather than replaying the OIDC refresh
- * handshake with the client secret it would otherwise have to read.
- *
- * @module fork/usage/kiroCredentials
+ * Kiro CLI credentials for the usage probe. The stored OIDC token lives about
+ * 15 minutes, so stale rows are renewed through `kiro-cli whoami` rather than
+ * replaying the OIDC refresh with the CLI's client secret.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
@@ -106,15 +98,14 @@ const refreshStoredToken = (homeDirectory: string, commandPath: string): Effect.
  * The signed-in account's access token, renewed when it is about to expire.
  * `null` means kiro-cli holds no token for this user — not signed in.
  */
-export const ensureKiroOauthToken = (
+export const ensureKiroOauthToken = Effect.fn("KiroCredentials.ensureKiroOauthToken")(function* (
   homeDirectory: string,
   commandPath: string,
-): Effect.Effect<KiroOauthToken | null> =>
-  Effect.gen(function* () {
-    const stored = readStoredToken(homeDirectory);
-    if (stored === null) return null;
-    const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
-    if (stored.expiresAtMs - nowMs > EXPIRY_MARGIN_MS) return stored;
-    yield* refreshStoredToken(homeDirectory, commandPath);
-    return readStoredToken(homeDirectory);
-  });
+) {
+  const stored = readStoredToken(homeDirectory);
+  if (stored === null) return null;
+  const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
+  if (stored.expiresAtMs - nowMs > EXPIRY_MARGIN_MS) return stored;
+  yield* refreshStoredToken(homeDirectory, commandPath);
+  return readStoredToken(homeDirectory);
+});

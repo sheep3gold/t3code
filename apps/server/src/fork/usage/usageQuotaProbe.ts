@@ -48,9 +48,9 @@ const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 const MINIMAX_REMAINS_URL = "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains";
 const MINIMAX_CONFIG_FILE = "config.yaml";
 const ANTHROPIC_OAUTH_USAGE_PATH = "/api/oauth/usage";
-/** Local CONNECT exit the xjp CLI rides (see /usr/local/bin/claude-xjp). */
-const XJP_PROXY_HOST = "127.0.0.1";
-const XJP_PROXY_PORT = 2080;
+/** Local mihomo CONNECT exit every provider instance rides; `HttpClient` has no proxy support. */
+const EGRESS_PROXY_HOST = "127.0.0.1";
+const EGRESS_PROXY_PORT = 7890;
 
 export class UsageQuotaProbeError extends Data.TaggedError("UsageQuotaProbeError")<{
   readonly probe: string;
@@ -87,8 +87,8 @@ const getJson = (
     Effect.mapError(probeError(probe)),
   );
 
-/** Reads one HTTPS JSON document through the local xjp CONNECT proxy. */
-const getJsonViaXjp = (
+/** Reads one HTTPS JSON document through the local egress CONNECT proxy. */
+const getJsonViaProxy = (
   probe: string,
   hostname: string,
   path: string,
@@ -100,13 +100,15 @@ const getJsonViaXjp = (
     try: () =>
       new Promise<unknown>((resolve, reject) => {
         const fail = (error: Error) => reject(error);
-        const proxySocket = NodeNet.connect(XJP_PROXY_PORT, XJP_PROXY_HOST);
+        const proxySocket = NodeNet.connect(EGRESS_PROXY_PORT, EGRESS_PROXY_HOST);
         proxySocket.setTimeout(10_000, () => {
           proxySocket.destroy();
-          fail(new Error("xjp proxy connect timed out"));
+          fail(new Error("egress proxy connect timed out"));
         });
         proxySocket.once("error", () =>
-          fail(new Error(`xjp proxy (${XJP_PROXY_HOST}:${XJP_PROXY_PORT}) is not reachable`)),
+          fail(
+            new Error(`egress proxy (${EGRESS_PROXY_HOST}:${EGRESS_PROXY_PORT}) is not reachable`),
+          ),
         );
         proxySocket.once("connect", () => {
           proxySocket.write(
@@ -123,7 +125,7 @@ const getJsonViaXjp = (
             const statusLine = handshake.slice(0, handshake.indexOf("\r\n"));
             if (!/^HTTP\/1\.[01] 200/.test(statusLine)) {
               proxySocket.destroy();
-              fail(new Error(`xjp proxy CONNECT failed: ${statusLine}`));
+              fail(new Error(`egress proxy CONNECT failed: ${statusLine}`));
               return;
             }
             const tlsSocket = NodeTls.connect({
@@ -332,101 +334,6 @@ const CLAUDE_WINDOW_LABELS: ReadonlyArray<{
   { key: "seven_day_sonnet", id: "seven_day_sonnet", kind: "weekly", label: "7 天（Sonnet）" },
 ];
 
-/**
- * Reads `/api/oauth/usage` through the local CONNECT proxy the xjp CLI rides.
- * The account is geo-restricted, so there is deliberately no direct-egress
- * fallback: when the proxy is down the probe fails and the page shows 探测失败.
- * The handshake is by hand because the shared `HttpClient` has no proxy support.
- */
-const readAnthropicUsageViaXjp = (
-  accessToken: string,
-): Effect.Effect<unknown, UsageQuotaProbeError> =>
-  Effect.tryPromise({
-    try: () =>
-      new Promise<unknown>((resolve, reject) => {
-        const fail = (error: Error) => reject(error);
-        const proxySocket = NodeNet.connect(XJP_PROXY_PORT, XJP_PROXY_HOST);
-        proxySocket.setTimeout(10_000, () => {
-          proxySocket.destroy();
-          fail(new Error("xjp proxy connect timed out"));
-        });
-        proxySocket.once("error", () =>
-          fail(new Error("xjp proxy (127.0.0.1:2080) is not reachable")),
-        );
-        proxySocket.once("connect", () => {
-          proxySocket.write(
-            `CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n`,
-          );
-          let handshake = "";
-          const onHandshakeData = (chunk: Buffer) => {
-            handshake += chunk.toString("latin1");
-            const headerEnd = handshake.indexOf("\r\n\r\n");
-            if (headerEnd === -1) return;
-            proxySocket.off("data", onHandshakeData);
-            const statusLine = handshake.slice(0, handshake.indexOf("\r\n"));
-            if (!/^HTTP\/1\.[01] 200/.test(statusLine)) {
-              proxySocket.destroy();
-              fail(new Error(`xjp proxy CONNECT failed: ${statusLine}`));
-              return;
-            }
-            const tlsSocket = NodeTls.connect({
-              socket: proxySocket,
-              servername: "api.anthropic.com",
-            });
-            tlsSocket.setTimeout(10_000, () => {
-              tlsSocket.destroy();
-              fail(new Error("anthropic usage read timed out"));
-            });
-            tlsSocket.once("error", fail);
-            tlsSocket.once("secureConnect", () => {
-              tlsSocket.write(
-                `GET ${ANTHROPIC_OAUTH_USAGE_PATH} HTTP/1.1\r\n` +
-                  `Host: api.anthropic.com\r\n` +
-                  `Authorization: Bearer ${accessToken}\r\n` +
-                  `anthropic-beta: oauth-2025-04-20\r\n` +
-                  `User-Agent: claude-cli/2.0.37 (external, cli)\r\n` +
-                  `Accept: application/json\r\n` +
-                  `Connection: close\r\n\r\n`,
-              );
-              let raw = "";
-              tlsSocket.on("data", (chunk: Buffer) => {
-                raw += chunk.toString("latin1");
-              });
-              tlsSocket.once("close", () => {
-                const bodyStart = raw.indexOf("\r\n\r\n");
-                const statusLine = raw.slice(0, raw.indexOf("\r\n"));
-                if (bodyStart === -1) {
-                  fail(new Error("anthropic usage response was empty"));
-                  return;
-                }
-                if (!/^HTTP\/1\.[01] 200/.test(statusLine)) {
-                  fail(new Error(`anthropic usage returned ${statusLine}`));
-                  return;
-                }
-                let body = raw.slice(bodyStart + 4);
-                if (/transfer-encoding:\s*chunked/i.test(raw.slice(0, bodyStart))) {
-                  // Chunk frames are hex-length CRLF payload; the trailer ends
-                  // with a zero-length chunk. JSON never carries bare CRLF at
-                  // frame boundaries, so dropping size lines is safe here.
-                  body = body
-                    .split("\r\n")
-                    .filter((line) => !/^[0-9a-fA-F]+$/.test(line) && line.length > 0)
-                    .join("");
-                }
-                try {
-                  resolve(JSON.parse(body) as unknown);
-                } catch {
-                  fail(new Error("anthropic usage response was not JSON"));
-                }
-              });
-            });
-          };
-          proxySocket.on("data", onHandshakeData);
-        });
-      }),
-    catch: probeError("claudeOAuth"),
-  });
-
 const claudeOauthProbe = Effect.fn("UsageQuotaProbe.claudeOauthProbe")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
@@ -448,7 +355,14 @@ const claudeOauthProbe = Effect.fn("UsageQuotaProbe.claudeOauthProbe")(function*
     return windowUnavailable(checkedAt, "OAuth 凭证为空，需要重新 claude auth login");
   }
 
-  const document = yield* readAnthropicUsageViaXjp(accessToken);
+  // Geo-restricted account: no direct-egress fallback when the proxy is down.
+  const document = yield* getJsonViaProxy(
+    "claudeOAuth",
+    "api.anthropic.com",
+    ANTHROPIC_OAUTH_USAGE_PATH,
+    accessToken,
+    { "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-cli/2.0.37 (external, cli)" },
+  );
 
   const windows: ServerProviderUsageWindow[] = [];
   if (typeof document === "object" && document !== null) {
@@ -838,7 +752,7 @@ const factoryProbe = Effect.fn("UsageQuotaProbe.factoryProbe")(function* (
   const key = yield* resolveEtcdKey(etcdKey, process.env.FACTORY_API_KEY);
   if (key.length === 0) return windowUnavailable(checkedAt, "factory 缺少可用的 API key");
 
-  const document = yield* getJsonViaXjp("factory", "api.factory.ai", "/api/billing/limits", key, {
+  const document = yield* getJsonViaProxy("factory", "api.factory.ai", "/api/billing/limits", key, {
     "User-Agent": "droid/0.233.0",
   });
   const limits =
@@ -1084,7 +998,7 @@ const antigravityGroupName = (displayName: string | undefined): string =>
  * Mirrors what the agent's `/usage` shows: `retrieveUserQuotaSummary` groups
  * (Gemini, Claude+GPT) with a 5-hour and a weekly bucket each. The token is
  * minted from the profile's stored refresh token and never persisted; both
- * calls ride the xjp exit the instance itself is configured to use.
+ * calls ride the mihomo exit the instance itself is configured to use.
  */
 const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function* (
   fileSystem: FileSystem.FileSystem,
@@ -1106,7 +1020,7 @@ const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function*
     return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
   }
 
-  const refreshed = yield* getJsonViaXjp(
+  const refreshed = yield* getJsonViaProxy(
     "antigravity",
     "oauth2.googleapis.com",
     "/token",
@@ -1133,7 +1047,7 @@ const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function*
   const projectBody = yield* encodeJsonBody(
     field("project_id").length > 0 ? { project: field("project_id") } : {},
   ).pipe(Effect.mapError(probeError("antigravity")));
-  const document = yield* getJsonViaXjp(
+  const document = yield* getJsonViaProxy(
     "antigravity",
     "cloudcode-pa.googleapis.com",
     "/v1internal:retrieveUserQuotaSummary",
