@@ -410,7 +410,7 @@ describe("acpRegistrySnapshotReadiness", () => {
         ),
       );
 
-      expect(receivedEnvironment).toBe(environment);
+      expect(receivedEnvironment).toEqual({ ...environment, MISE_OFFLINE: "1" });
       expect(snapshot).toMatchObject({
         auth: { status: "unknown" },
         models: [{ slug: "agent-model" }],
