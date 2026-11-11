@@ -16,6 +16,39 @@ import {
 
 const layers = Layer.merge(NodeServices.layer, FetchHttpClient.layer);
 
+/** HttpClient answering each request with the first route whose URL prefix
+ * matches, recording the URLs hit. */
+const stubClientByRoute = (
+  routes: ReadonlyArray<{
+    readonly prefix: string;
+    readonly body: unknown;
+    readonly status?: number;
+  }>,
+  requests: Array<{ url: string; authorization?: string | undefined; body?: unknown }>,
+) =>
+  Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        requests.push({
+          url: request.url,
+          authorization: request.headers.authorization,
+          body: request.body,
+        });
+        const route = routes.find((candidate) => request.url.startsWith(candidate.prefix));
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify(route?.body ?? {}), {
+              status: route?.status ?? (route === undefined ? 404 : 200),
+            }),
+          ),
+        );
+      }),
+    ),
+  );
+
 /** HttpClient answering every request with `body`, recording the URLs hit. */
 const stubClient = (
   body: unknown,
@@ -470,4 +503,176 @@ describe("usageQuotaProbe", () => {
       assert.include(limits?.unavailable?.message ?? "", "未登录");
     }).pipe(Effect.scoped, Effect.provide(layers)),
   );
+
+  // The glmuse dashboard indexes keys by their 28-char prefix; the probe must
+  // send exactly that and never the full key.
+  const glmCodingKey = "a".repeat(24) + "." + "b".repeat(24);
+  const requestBodyText = (body: unknown): string => {
+    if (typeof body === "string") return body;
+    if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+    const inner = (body as { body?: unknown } | null | undefined)?.body;
+    if (inner instanceof Uint8Array) return new TextDecoder().decode(inner);
+    return body === undefined || body === null ? "" : JSON.stringify(body);
+  };
+  const glmCodingHome = (fileSystem: FileSystem.FileSystem, path: Path.Path) =>
+    Effect.gen(function* () {
+      const home = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(
+        path.join(home, "settings.json"),
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: glmCodingKey } }),
+      );
+      return home;
+    });
+  const glmCodingSettings = (home: string) =>
+    ({
+      providerInstances: {
+        claude_glm_coding: { driver: "claudeAgent", config: { homePath: home } },
+      },
+    }) as never;
+
+  it.live("glm_coding probe merges Zhipu lanes with the glmuse plan window", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined; body?: unknown }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* glmCodingHome(fileSystem, path);
+      const limits = yield* readInstanceUsageLimits(glmCodingSettings(home), "claude_glm_coding");
+      assert.isUndefined(limits?.unavailable);
+      assert.strictEqual(limits?.windows.length, 3);
+      const [fiveHour, weekly, plan] = limits?.windows ?? [];
+      assert.strictEqual(fiveHour?.id, "five_hour");
+      assert.strictEqual(fiveHour?.usedPercent, 9);
+      assert.strictEqual(
+        fiveHour?.resetsAt,
+        DateTime.formatIso(DateTime.makeUnsafe(1794382349557)),
+      );
+      assert.strictEqual(weekly?.id, "weekly_tokens");
+      assert.strictEqual(weekly?.usedPercent, 1);
+      assert.strictEqual(plan?.id, "plan_allowance");
+      assert.strictEqual(plan?.usedPercent, 2.5);
+      assert.strictEqual(plan?.remaining, 974523495);
+      assert.strictEqual(plan?.remainingUnit, "tokens");
+      assert.include(plan?.label ?? "", "12月10日");
+
+      const bodyText = requests.map((request) => requestBodyText(request.body)).join("\n");
+      assert.notInclude(bodyText, "b".repeat(21));
+      assert.include(bodyText, glmCodingKey.slice(0, 28));
+      assert.deepStrictEqual(
+        requests.map((request) => request.url),
+        [
+          "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+          "http://glmuse.mlik.top/api/usage-by-key",
+        ],
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClientByRoute(
+          [
+            {
+              prefix: "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+              body: {
+                code: 200,
+                msg: "操作成功",
+                data: {
+                  limits: [
+                    {
+                      type: "TOKENS_LIMIT",
+                      unit: 3,
+                      number: 5,
+                      percentage: 9,
+                      nextResetTime: 1794382349557,
+                    },
+                    {
+                      type: "TOKENS_LIMIT",
+                      unit: 6,
+                      number: 1,
+                      percentage: 1,
+                      nextResetTime: 1794964259983,
+                    },
+                  ],
+                  level: "max",
+                },
+                success: true,
+              },
+            },
+            {
+              prefix: "http://glmuse.mlik.top/api/usage-by-key",
+              body: {
+                success: true,
+                data: {
+                  usageLimit: 1000000000,
+                  usageCount: 25906273,
+                  remaining: 974523495,
+                  expireAt: "2026-12-10T15:59:59.999Z",
+                },
+              },
+            },
+          ],
+          requests,
+        ),
+      ),
+    );
+  });
+
+  it.live("glm_coding probe keeps the lanes when the plan dashboard fails", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined; body?: unknown }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* glmCodingHome(fileSystem, path);
+      const limits = yield* readInstanceUsageLimits(glmCodingSettings(home), "claude_glm_coding");
+      assert.isUndefined(limits?.unavailable);
+      assert.deepStrictEqual(
+        limits?.windows.map((window) => window.id),
+        ["five_hour"],
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClientByRoute(
+          [
+            {
+              prefix: "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+              body: { data: { limits: [{ unit: 3, number: 5, percentage: 40 }] } },
+            },
+            { prefix: "http://glmuse.mlik.top/api/usage-by-key", body: {}, status: 500 },
+          ],
+          requests,
+        ),
+      ),
+    );
+  });
+
+  it.live("glm_coding probe degrades to probeFailed when both upstreams fail", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined; body?: unknown }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* glmCodingHome(fileSystem, path);
+      const limits = yield* readInstanceUsageLimits(glmCodingSettings(home), "claude_glm_coding");
+      assert.strictEqual(limits?.unavailable?.reason, "probeFailed");
+      assert.strictEqual(limits?.windows.length, 0);
+      assert.include(limits?.unavailable?.message ?? "", "官方额度接口");
+      assert.include(limits?.unavailable?.message ?? "", "用量面板");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClientByRoute(
+          [
+            {
+              prefix: "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+              body: {},
+              status: 500,
+            },
+            { prefix: "http://glmuse.mlik.top/api/usage-by-key", body: {}, status: 500 },
+          ],
+          requests,
+        ),
+      ),
+    );
+  });
 });
