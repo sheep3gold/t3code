@@ -41,6 +41,7 @@ const KIMI_CLI_CREDENTIALS_FILE = "credentials/kimi-code.json";
 /** Credits older than this are labelled stale rather than silently served. */
 const WORKBUDDY_CREDITS_STALE_MS = 24 * 60 * 60 * 1000;
 const GLM_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
+const GLM_CODING_USAGE_URL = "http://glmuse.mlik.top/api/usage-by-key";
 const KIMI_BALANCE_URL = "https://api.moonshot.cn/v1/users/me/balance";
 const KIMI_CODE_HOST = "api.kimi.com";
 const KIMI_CODE_USAGES_URL = "https://api.kimi.com/coding/v1/usages";
@@ -217,103 +218,6 @@ const windowUnavailable = (checkedAt: string, message: string): ServerProviderUs
 
 const isoFromEpochMs = (epochMs: number): string =>
   DateTime.formatIso(DateTime.makeUnsafe(epochMs));
-
-/* GLM (Zhipu BigModel anthropic-compatible subscription)              */
-
-interface GlmLimit {
-  readonly type?: string;
-  readonly unit?: number;
-  readonly number?: number;
-  readonly percentage?: number;
-  readonly nextResetTime?: number;
-}
-
-const glmProbe = Effect.fn("UsageQuotaProbe.glmProbe")(function* (
-  client: HttpClient.HttpClient,
-  fileSystem: FileSystem.FileSystem,
-  path: Path.Path,
-  home: string,
-) {
-  const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const settingsText = yield* fileSystem
-    .readFileString(path.join(home, CLAUDE_SETTINGS_FILE))
-    .pipe(Effect.mapError(probeError("glm")));
-  const settings = yield* decodeJson(settingsText).pipe(Effect.mapError(probeError("glm")));
-  const record =
-    typeof settings === "object" && settings !== null
-      ? (settings as { apiKeyHelper?: unknown; env?: Record<string, unknown> })
-      : {};
-  // `apiKeyHelper` is `<script> <etcd-key-path>`; the path is the argument.
-  const helperArg =
-    typeof record.apiKeyHelper === "string"
-      ? record.apiKeyHelper
-          .trim()
-          .split(/\s+/)
-          .findLast((part) => part.startsWith("/"))
-      : undefined;
-  const staticKey =
-    typeof record.env?.ANTHROPIC_AUTH_TOKEN === "string"
-      ? record.env.ANTHROPIC_AUTH_TOKEN
-      : undefined;
-  const token = yield* resolveEtcdKey(
-    helperArg !== undefined && helperArg.includes("appkey") ? helperArg : undefined,
-    staticKey,
-  );
-  if (token.length === 0) {
-    return windowUnavailable(checkedAt, "glm 缺少可用的 API key");
-  }
-
-  const document = yield* getJson(
-    client,
-    "glm",
-    HttpClientRequest.get(GLM_QUOTA_URL).pipe(
-      HttpClientRequest.setHeader("Authorization", token),
-      HttpClientRequest.acceptJson,
-    ),
-  );
-  const limits =
-    typeof document === "object" && document !== null
-      ? ((document as { data?: { limits?: GlmLimit[] } }).data?.limits ?? [])
-      : [];
-
-  const windows: ServerProviderUsageWindow[] = [];
-  for (const limit of limits) {
-    if (typeof limit.percentage !== "number") continue;
-    const base = {
-      usedPercent: Math.max(0, Math.min(100, limit.percentage)),
-      ...(typeof limit.nextResetTime === "number"
-        ? { resetsAt: isoFromEpochMs(limit.nextResetTime) }
-        : {}),
-    } as const;
-    // unit 3 = 5-hour MCP concurrent lane; unit 6 = weekly token quota.
-    if (limit.unit === 3) {
-      windows.push({
-        id: "five_hour",
-        kind: "session",
-        label: `5 小时并发（${limit.number ?? "?"} 路）`,
-        windowDurationMins: 300,
-        ...base,
-      });
-    } else if (limit.unit === 6) {
-      windows.push({
-        id: "weekly_tokens",
-        kind: "weekly",
-        label: "周 token 配额",
-        windowDurationMins: 7 * 24 * 60,
-        ...base,
-      });
-    } else {
-      windows.push({
-        id: `unit_${limit.unit ?? "other"}`,
-        kind: "other",
-        label: `配额窗口（unit ${limit.unit ?? "?"}）`,
-        ...base,
-      });
-    }
-  }
-  if (windows.length === 0) return windowUnavailable(checkedAt, "GLM 配额接口未返回窗口");
-  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
-});
 
 /* Claude OAuth (Pro/Max subscription, `claude /usage`)                 */
 
@@ -506,6 +410,173 @@ const readKimiCliOAuthToken = Effect.fn("UsageQuotaProbe.readKimiCliOAuthToken")
   const nowMs = yield* DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
   if (expiresAt * 1000 <= nowMs + 30_000) return "";
   return accessToken;
+});
+
+/* GLM (Zhipu BigModel anthropic-compatible subscription)              */
+
+interface GlmLimit {
+  readonly type?: string;
+  readonly unit?: number;
+  readonly number?: number;
+  readonly percentage?: number;
+  readonly nextResetTime?: number;
+}
+
+const glmLaneWindows = Effect.fn("UsageQuotaProbe.glmLaneWindows")(function* (
+  client: HttpClient.HttpClient,
+  token: string,
+) {
+  const document = yield* getJson(
+    client,
+    "glm",
+    HttpClientRequest.get(GLM_QUOTA_URL).pipe(
+      HttpClientRequest.setHeader("Authorization", token),
+      HttpClientRequest.acceptJson,
+    ),
+  );
+  const limits =
+    typeof document === "object" && document !== null
+      ? ((document as { data?: { limits?: GlmLimit[] } }).data?.limits ?? [])
+      : [];
+
+  const windows: ServerProviderUsageWindow[] = [];
+  for (const limit of limits) {
+    if (typeof limit.percentage !== "number") continue;
+    const base = {
+      usedPercent: Math.max(0, Math.min(100, limit.percentage)),
+      ...(typeof limit.nextResetTime === "number"
+        ? { resetsAt: isoFromEpochMs(limit.nextResetTime) }
+        : {}),
+    } as const;
+    // unit 3 = 5-hour MCP concurrent lane; unit 6 = weekly token quota.
+    if (limit.unit === 3) {
+      windows.push({
+        id: "five_hour",
+        kind: "session",
+        label: `5 小时并发（${limit.number ?? "?"} 路）`,
+        windowDurationMins: 300,
+        ...base,
+      });
+    } else if (limit.unit === 6) {
+      windows.push({
+        id: "weekly_tokens",
+        kind: "weekly",
+        label: "周 token 配额",
+        windowDurationMins: 7 * 24 * 60,
+        ...base,
+      });
+    } else {
+      windows.push({
+        id: `unit_${limit.unit ?? "other"}`,
+        kind: "other",
+        label: `配额窗口（unit ${limit.unit ?? "?"}）`,
+        ...base,
+      });
+    }
+  }
+  return windows;
+});
+
+const glmProbe = Effect.fn("UsageQuotaProbe.glmProbe")(function* (
+  client: HttpClient.HttpClient,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  home: string,
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const token = yield* readClaudeHomeApiKey(fileSystem, path, home, "glm");
+  if (token.length === 0) {
+    return windowUnavailable(checkedAt, "glm 缺少可用的 API key");
+  }
+  const windows = yield* glmLaneWindows(client, token);
+  if (windows.length === 0) return windowUnavailable(checkedAt, "GLM 配额接口未返回窗口");
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
+});
+
+/* GLM Coding Plan: the same lane endpoint, plus the member usage dashboard
+ * the key's query link lives on (glmuse) — its plan-level allowance and
+ * expiry exist nowhere in Zhipu's own API, and it indexes keys by the
+ * 28-char prefix, so the full key never leaves this machine. */
+
+interface GlmCodingPlanDoc {
+  readonly success?: boolean;
+  readonly data?: {
+    readonly usageLimit?: unknown;
+    readonly remaining?: unknown;
+    readonly expireAt?: unknown;
+  };
+}
+
+const glmCodingProbe = Effect.fn("UsageQuotaProbe.glmCodingProbe")(function* (
+  client: HttpClient.HttpClient,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  home: string,
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const token = yield* readClaudeHomeApiKey(fileSystem, path, home, "glmCoding");
+  if (token.length === 0) {
+    return windowUnavailable(checkedAt, "glmCoding 缺少可用的 API key");
+  }
+
+  const [lanes, plan] = yield* Effect.all(
+    [
+      glmLaneWindows(client, token).pipe(
+        Effect.map((windows) => ({ tag: "ok" as const, windows })),
+        Effect.catch((error) => Effect.succeed({ tag: "fail" as const, detail: error.detail })),
+      ),
+      getJson(
+        client,
+        "glmCoding",
+        HttpClientRequest.post(GLM_CODING_USAGE_URL).pipe(
+          HttpClientRequest.bodyJsonUnsafe({ apiKey: token.slice(0, 28) }),
+          HttpClientRequest.acceptJson,
+        ),
+      ).pipe(
+        Effect.map((document) => ({ tag: "ok" as const, document })),
+        Effect.catch((error) => Effect.succeed({ tag: "fail" as const, detail: error.detail })),
+      ),
+    ],
+    { concurrency: "unbounded" },
+  );
+
+  const windows: ServerProviderUsageWindow[] = lanes.tag === "ok" ? [...lanes.windows] : [];
+  if (plan.tag === "ok") {
+    const data = (plan.document as GlmCodingPlanDoc | null)?.data;
+    const usageLimit = Number(data?.usageLimit);
+    const remaining = Number(data?.remaining);
+    if (Number.isFinite(usageLimit) && usageLimit > 0 && Number.isFinite(remaining)) {
+      // expireAt is UTC; the dashboard renders it in Beijing time (+8h, read as UTC parts).
+      const expireMs = typeof data?.expireAt === "string" ? Date.parse(data.expireAt) : NaN;
+      const expireParts = Number.isFinite(expireMs)
+        ? DateTime.toParts(DateTime.add(DateTime.makeUnsafe(expireMs), { hours: 8 }))
+        : null;
+      windows.push({
+        id: "plan_allowance",
+        kind: "monthly",
+        label:
+          expireParts !== null
+            ? `总额度（${expireParts.month}月${expireParts.day}日 到期）`
+            : "Coding Plan 总额度",
+        usedPercent:
+          Math.round(
+            Math.max(0, Math.min(100, ((usageLimit - remaining) / usageLimit) * 100)) * 10,
+          ) / 10,
+        remaining: Math.max(0, Math.round(remaining)),
+        remainingUnit: "tokens",
+      });
+    }
+  }
+  if (windows.length === 0) {
+    const detail = [
+      lanes.tag === "fail" ? `官方额度接口：${lanes.detail}` : null,
+      plan.tag === "fail" ? `用量面板：${plan.detail}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join("；");
+    return windowUnavailable(checkedAt, detail.length > 0 ? detail : "GLM Coding 未返回额度窗口");
+  }
+  return { checkedAt, windows } satisfies ServerProviderUsageLimits;
 });
 
 /* Kimi (Moonshot prepaid balance, or the Kimi Code plan windows)       */
@@ -1089,6 +1160,7 @@ const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function*
 
 type ProbeKind =
   | "glm"
+  | "glmCoding"
   | "claudeOAuth"
   | "workbuddy"
   | "kimi"
@@ -1163,6 +1235,8 @@ const probeForInstance = (
   const instance = settings.providerInstances[instanceKey as never];
   if (instanceKey === "claude_glm")
     return { kind: "glm", home: instanceHome(settings, instanceKey) };
+  if (instanceKey === "claude_glm_coding")
+    return { kind: "glmCoding", home: instanceHome(settings, instanceKey) };
   if (instanceKey === "claude_xjp") {
     return { kind: "claudeOAuth", home: instanceHome(settings, instanceKey) };
   }
@@ -1272,12 +1346,14 @@ export const readInstanceUsageLimits = Effect.fn("usageQuotaProbe.readInstanceUs
                             probe.home !== null &&
                             probe.commandPath !== undefined
                           ? kiroProbe(client, probe.home, probe.commandPath)
-                          : Effect.fail(
-                              new UsageQuotaProbeError({
-                                probe: probe.kind,
-                                detail: "instance home could not be resolved",
-                              }),
-                            );
+                          : probe.kind === "glmCoding" && probe.home !== null
+                            ? glmCodingProbe(client, fileSystem, path, probe.home)
+                            : Effect.fail(
+                                new UsageQuotaProbeError({
+                                  probe: probe.kind,
+                                  detail: "instance home could not be resolved",
+                                }),
+                              );
 
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const limits = yield* run.pipe(
