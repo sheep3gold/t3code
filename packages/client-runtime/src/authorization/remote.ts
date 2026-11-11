@@ -101,9 +101,6 @@ export const appendClientConnectionParams = (
     if (clientMetadata.deviceModel) {
       url.searchParams.set("clientDeviceModel", clientMetadata.deviceModel);
     }
-    if (clientMetadata.installedAt) {
-      url.searchParams.set("clientInstalledAt", clientMetadata.installedAt);
-    }
   }
   if (connectionMethod) {
     url.searchParams.set("connectionMethod", connectionMethod);

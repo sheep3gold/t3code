@@ -427,9 +427,8 @@ export class SessionStore extends Context.Service<
       client: {
         readonly surface?: ClientSurface | undefined;
         readonly appVersion?: string | undefined;
-        readonly installedAt?: string | undefined;
       },
-    ) => Effect.Effect<{ readonly previousInstalledAt: string | null }, never>;
+    ) => Effect.Effect<void, never>;
   }
 >()("t3/auth/SessionStore") {}
 
@@ -627,22 +626,18 @@ const make = Effect.gen(function* () {
     sessionId,
     client,
   ) =>
-    client.surface === undefined &&
-    client.appVersion === undefined &&
-    client.installedAt === undefined
-      ? Effect.succeed({ previousInstalledAt: null })
+    client.surface === undefined && client.appVersion === undefined
+      ? Effect.void
       : authSessions
           .setClientConnection({
             sessionId,
             surface: client.surface ?? null,
             appVersion: client.appVersion ?? null,
-            installedAt: client.installedAt ?? null,
           })
           .pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("Failed to record session client connection metadata.").pipe(
                 Effect.annotateLogs({ sessionId, cause }),
-                Effect.as({ previousInstalledAt: null }),
               ),
             ),
             Effect.withSpan("SessionStore.recordClientConnection"),
