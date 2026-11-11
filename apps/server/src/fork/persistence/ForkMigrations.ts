@@ -10,7 +10,6 @@ import Artifacts from "./Migrations/005_Artifacts.ts";
 import ThreadWorkflows from "./Migrations/006_ThreadWorkflows.ts";
 import ThreadWorkflowDag from "./Migrations/007_ThreadWorkflowDag.ts";
 import ThreadScheduleCron from "./Migrations/008_ThreadScheduleCron.ts";
-import AuthSessionClientInstalledAt from "./Migrations/009_AuthSessionClientInstalledAt.ts";
 
 /**
  * Fork-only schema lives in its own migrations table. Upstream's migrator
@@ -29,7 +28,6 @@ export const forkMigrationEntries = [
   [6, "ThreadWorkflows", ThreadWorkflows],
   [7, "ThreadWorkflowDag", ThreadWorkflowDag],
   [8, "ThreadScheduleCron", ThreadScheduleCron],
-  [9, "AuthSessionClientInstalledAt", AuthSessionClientInstalledAt],
 ] as const;
 
 /**
@@ -48,6 +46,7 @@ const LEGACY_FORK_HISTORY: ReadonlyMap<number, string> = new Map([
   [60, "ThreadWorkflowDag"],
   [61, "ThreadScheduleCron"],
   [62, "ProjectionThreadsLastReadAt"],
+  // The install-anchor column is gone; keep the id so old histories still count as fork-owned.
   [63, "AuthSessionClientInstalledAt"],
   [64, "McpAppModelContext"],
 ]);
