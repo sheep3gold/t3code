@@ -301,9 +301,7 @@ function parseTimestampMs(isoDate: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** The active order shared by web and native: working rows, then the rest
-    by last activity, then the saved arrangement. */
-export function sortThreadsForListV2<
+function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
