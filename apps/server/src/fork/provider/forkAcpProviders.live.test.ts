@@ -33,6 +33,7 @@ import * as AntigravityInstallation from "../../provider/AntigravityInstallation
 import * as CodexInstallation from "../../provider/CodexInstallation.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ModelManifest from "../../provider/ModelManifest.ts";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistryHydration from "../../provider/ProviderInstanceRegistryHydration.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -172,7 +173,6 @@ const layerLive = Layer.mergeAll(
   RuntimeLayer.layerProjectService,
 ).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerServerConfig),
   Layer.provide(layerServerSettings),
@@ -191,6 +191,9 @@ const layerLive = Layer.mergeAll(
       invalidate: () => Effect.void,
     }),
   ),
+  Layer.provide(ProviderInstallationGate.layer),
+  Layer.provide(ModelManifest.layerTest),
+  Layer.provide(SqlitePersistence.layerMemory),
 );
 
 const waitForIdle = Effect.fn("AcpRegistryOrchestratorV2Live.waitForIdle")(function* (

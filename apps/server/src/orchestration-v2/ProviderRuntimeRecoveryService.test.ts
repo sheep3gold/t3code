@@ -318,7 +318,12 @@ it.effect.each(["startup", "shutdown"] as const)(
       assert.isFalse(
         changes.some((event) => event.type === "node.updated" && event.nodeId === nodeId),
       );
-      assert.isFalse(changes.some((event) => event.type === "turn-item.updated"));
+      // The cancelled run only gains the server-recovery notice; the question item is untouched.
+      assert.isFalse(
+        changes.some(
+          (event) => event.type === "turn-item.updated" && event.payload.type !== "system_notice",
+        ),
+      );
     }).pipe(Effect.provide(layer));
   },
 );
@@ -1217,6 +1222,7 @@ it.effect(
       assert.equal(summary.stoppedSessions, 1);
       assert.equal(summary.retiredEffects, 2);
       assert.deepEqual(committedInput?.cancelUnsettledEffects?.effectTypes, [
+        "provider-session.apply-model-selection",
         "provider-turn.start",
         "provider-turn.interrupt",
         "provider-turn.steer",
@@ -1239,6 +1245,7 @@ it.effect(
           ["turn-item.updated", "cancelled"],
           ["turn-item.updated", "cancelled"],
           ["turn-item.updated", "cancelled"],
+          ["turn-item.updated", "completed"],
           ["provider-thread.updated", "idle"],
           ["provider-session.updated", "stopped"],
         ],
