@@ -396,6 +396,7 @@ patchedDependencies:
   expo-audio@58.0.11: 93691f7f59edb30a3bb2c23b489e605e7ea35506b1212d4a2ebbd1fd79079483
   expo-modules-core@58.0.30: f0b0fd100550ed76e5c25b4d13eb7c9ff62825f8f197c53edf7bf447c50c9fb7
   expo-network@58.0.4: 159c2d760d1cd5102e95df51c20600111e7a72096ef0daea8215d50cae48bd98
+  expo-observe@58.0.18: 639f9eba3df9cda6d51003b1220016cf11ed2aad243e5ffb4081f57adf2c7555
   expo-sharing@58.0.22: 321a86e1471e34c53f1f2937fbb4304ea3f7b7a78ad9e4d35febc2b9e73e9688
   expo-video@58.0.13: e80ec3ef8c4af50a607beea1c0917e71ba679844efdb702b45d17a5f03cf466c
   expo-widgets@58.0.27: 7bc1f88ade1ef26bbc237a139d8c4b4b8aa96db4f94b5d14dd748e0b62d597ec
@@ -703,7 +704,7 @@ importers:
         version: 58.1.8(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)(supports-color@8.1.1)(typescript@6.0.3)
       expo-observe:
         specifier: ~58.0.18
-        version: 58.0.18(44167fcbb622a1246dd06560eb01ad42)
+        version: 58.0.18(patch_hash=639f9eba3df9cda6d51003b1220016cf11ed2aad243e5ffb4081f57adf2c7555)(44167fcbb622a1246dd06560eb01ad42)
       expo-paste-input:
         specifier: ^0.2.2
         version: 0.2.2(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)
@@ -18630,7 +18631,7 @@ snapshots:
       - supports-color
       - typescript
 
-  expo-observe@58.0.18(44167fcbb622a1246dd06560eb01ad42):
+  expo-observe@58.0.18(patch_hash=639f9eba3df9cda6d51003b1220016cf11ed2aad243e5ffb4081f57adf2c7555)(44167fcbb622a1246dd06560eb01ad42):
     dependencies:
       expo: 58.0.23(d226faf1ca90e630d8c56a2108dee32d)
       expo-app-metrics: 58.0.15(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)
