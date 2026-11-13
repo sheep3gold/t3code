@@ -9,6 +9,12 @@ export PATH="$HOME/portable-ruby/3.4.5/bin:$HOME/gem-ruby34/bin:$HOME/.nvm/versi
 export GEM_HOME="$HOME/gem-ruby34"
 export EXPO_TOKEN="$(cat "$HOME/.expo/expo_token")"
 export EXPO_NO_CAPABILITY_SYNC=1
+# react-native-enriched-markdown's postinstall downloads RaTeX.xcframework from
+# GitHub, reachable only through the hy2 proxy. pnpm caches the build result in
+# the store, so one offline run replays an empty ios/vendor until someone runs
+# `pnpm rebuild react-native-enriched-markdown` with the proxy set.
+export https_proxy=http://127.0.0.1:10809 HTTPS_PROXY=http://127.0.0.1:10809
+export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
 EAS="$HOME/.npm/_npx/49551ffe00939648/node_modules/.bin/eas"
 [ -x "$EAS" ] || EAS="$(command -v eas)"
 
