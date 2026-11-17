@@ -8,6 +8,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
@@ -98,7 +99,8 @@ const AddMemoryTool = Tool.make("memory_add", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const SearchMemoryTool = Tool.make("memory_search", {
   description:
@@ -117,7 +119,8 @@ const SearchMemoryTool = Tool.make("memory_search", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const RemoveMemoryTool = Tool.make("memory_remove", {
   description: "Permanently remove one explicit memory by id from this project or global scope.",
@@ -131,7 +134,8 @@ const RemoveMemoryTool = Tool.make("memory_remove", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const AgentMemoryToolkit = Toolkit.make(AddMemoryTool, SearchMemoryTool, RemoveMemoryTool);
 

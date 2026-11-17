@@ -1,9 +1,6 @@
 /**
- * `thread_ledger_*` MCP tools on the upstream base.
- *
- * Same tools and same tool names the V1 fork shipped, so threads and agents
- * that call them keep working. The thread check moves to the V2 projection
- * store; everything else is unchanged.
+ * `thread_ledger_*` MCP tools, same names the V1 fork shipped. The thread
+ * check lives in the V2 projection store.
  *
  * @module fork/ledger/ThreadLedgerToolkit
  */
@@ -12,6 +9,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
@@ -109,7 +107,8 @@ const ReadThreadLedgerTool = Tool.make("thread_ledger_read", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const RecordThreadLedgerTool = Tool.make("thread_ledger_record", {
   description:
@@ -124,7 +123,8 @@ const RecordThreadLedgerTool = Tool.make("thread_ledger_record", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const ThreadLedgerToolkit = Toolkit.make(ReadThreadLedgerTool, RecordThreadLedgerTool);
 
@@ -155,7 +155,7 @@ export function formatThreadLedgerContext(
   if (snapshot.state === null) return "";
   const state = snapshot.state;
   const lines = [
-    "[Persistent thread ledger — durable resume state]",
+    "[Persistent thread ledger: durable resume state]",
     ...(state.goal ? [`Goal: ${state.goal}`] : []),
     ...(state.phase ? [`Phase: ${state.phase}`] : []),
     ...(state.next ? [`Next: ${state.next}`] : []),

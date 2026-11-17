@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
@@ -138,7 +139,8 @@ const StartWorkflowTool = Tool.make("workflow_start", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ListWorkflowsTool = Tool.make("workflow_list", {
   description: "List persistent workflows owned by this thread.",
@@ -150,7 +152,8 @@ const ListWorkflowsTool = Tool.make("workflow_list", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const GetWorkflowTool = Tool.make("workflow_get", {
   description: "Read one workflow with all step attempts and results.",
@@ -163,7 +166,8 @@ const GetWorkflowTool = Tool.make("workflow_get", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const CompleteWorkflowStepTool = Tool.make("workflow_complete_step", {
   description:
@@ -177,7 +181,8 @@ const CompleteWorkflowStepTool = Tool.make("workflow_complete_step", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const FailWorkflowStepTool = Tool.make("workflow_fail_step", {
   description:
@@ -191,7 +196,8 @@ const FailWorkflowStepTool = Tool.make("workflow_fail_step", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const PauseWorkflowTool = Tool.make("workflow_pause", {
   description:
@@ -205,7 +211,8 @@ const PauseWorkflowTool = Tool.make("workflow_pause", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ResumeWorkflowTool = Tool.make("workflow_resume", {
   description: "Resume a paused workflow.",
@@ -218,7 +225,8 @@ const ResumeWorkflowTool = Tool.make("workflow_resume", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const RetryWorkflowTool = Tool.make("workflow_retry_step", {
   description: "Retry the current failed or orphaned workflow step, up to three attempts.",
@@ -231,7 +239,8 @@ const RetryWorkflowTool = Tool.make("workflow_retry_step", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const RestartWorkflowTool = Tool.make("workflow_restart_from", {
   description:
@@ -245,7 +254,8 @@ const RestartWorkflowTool = Tool.make("workflow_restart_from", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const CancelWorkflowTool = Tool.make("workflow_cancel", {
   description:
@@ -259,7 +269,8 @@ const CancelWorkflowTool = Tool.make("workflow_cancel", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const ThreadWorkflowToolkit = Toolkit.make(
   StartWorkflowTool,
