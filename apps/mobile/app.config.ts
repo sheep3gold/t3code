@@ -18,6 +18,8 @@ const runtimeVersionPolicy =
 
 const cloudBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 const cloudAppleTeamId = repoEnv.T3CODE_APPLE_TEAM_ID?.trim();
+// Self-hosted Clerk instances serve their own associated domain; unset keeps the hosted relay's.
+const clerkRelyingParty = repoEnv.T3CODE_CLERK_RELYING_PARTY?.trim();
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -269,8 +271,8 @@ const config: ExpoConfig = {
     // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
     appleTeamId: cloudAppleTeamId ?? "ARK85ZXQ4Z",
     associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
+      `applinks:${clerkRelyingParty ?? variant.relyingParty}`,
+      `webcredentials:${clerkRelyingParty ?? variant.relyingParty}`,
       `applinks:${HOSTED_APP_HOST}`,
     ],
     entitlements: {
