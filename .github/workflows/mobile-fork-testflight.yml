@@ -1,19 +1,10 @@
 name: Fork iOS TestFlight
 
+# Manual only. The EAS Free plan iOS build quota runs out early each month, so a
+# push trigger fails on every mobile commit; routine TestFlight builds run on
+# mac-home via scripts/local-testflight.sh instead.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - apps/mobile/**
-      - packages/**
-      - assets/**
-      - scripts/**
-      - patches/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - .github/workflows/mobile-fork-testflight.yml
 
 permissions:
   contents: read

@@ -33,6 +33,7 @@ import * as AntigravityInstallation from "../../provider/AntigravityInstallation
 import * as CodexInstallation from "../../provider/CodexInstallation.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ModelManifest from "../../provider/ModelManifest.ts";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistryHydration from "../../provider/ProviderInstanceRegistryHydration.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -122,7 +123,6 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
   Layer.provide(
     Layer.mergeAll(
       layerServerConfig.pipe(Layer.provide(layerPlatformTest)),
-      layerServerSettings,
       ServerSecretStore.layer.pipe(
         Layer.provide(layerServerConfig),
         Layer.provide(layerPlatformTest),
@@ -143,7 +143,6 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
       ProviderLatestVersions.layer,
-      ModelManifest.layerTest,
       AntigravityInstallation.AntigravityInstallation.layer.pipe(
         Layer.provide(layerServerConfig.pipe(Layer.provide(layerPlatformTest))),
         Layer.provide(FetchHttpClient.layer),
@@ -157,7 +156,7 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
           EnvironmentId.make("00000000-0000-4000-8000-000000000001"),
         ),
       }),
-    ),
+    ).pipe(Layer.provideMerge(ModelManifest.layerTest), Layer.provideMerge(layerServerSettings)),
   ),
 );
 
@@ -172,7 +171,6 @@ const layerLive = Layer.mergeAll(
   RuntimeLayer.layerProjectService,
 ).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerServerConfig),
   Layer.provide(layerServerSettings),
@@ -191,6 +189,9 @@ const layerLive = Layer.mergeAll(
       invalidate: () => Effect.void,
     }),
   ),
+  Layer.provide(ProviderInstallationGate.layer),
+  Layer.provide(ModelManifest.layerTest),
+  Layer.provide(SqlitePersistence.layerMemory),
 );
 
 const waitForIdle = Effect.fn("AcpRegistryOrchestratorV2Live.waitForIdle")(function* (

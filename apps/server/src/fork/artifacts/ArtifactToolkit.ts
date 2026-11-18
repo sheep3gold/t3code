@@ -12,6 +12,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
@@ -137,7 +138,8 @@ const SaveArtifactTool = Tool.make("artifact_save", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ListArtifactsTool = Tool.make("artifact_list", {
   description: "List versioned artifacts in this project without loading their content.",
@@ -150,7 +152,8 @@ const ListArtifactsTool = Tool.make("artifact_list", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const GetArtifactTool = Tool.make("artifact_get", {
   description: "Read the current or a specific historical version of an artifact by slug.",
@@ -164,7 +167,8 @@ const GetArtifactTool = Tool.make("artifact_get", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const UpdateArtifactTool = Tool.make("artifact_update", {
   description:
@@ -179,7 +183,8 @@ const UpdateArtifactTool = Tool.make("artifact_update", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ArtifactVersionsTool = Tool.make("artifact_versions", {
   description: "List an artifact's immutable version history without loading version content.",
@@ -202,7 +207,8 @@ const ArtifactVersionsTool = Tool.make("artifact_versions", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const RevertArtifactTool = Tool.make("artifact_revert", {
   description:
@@ -217,7 +223,8 @@ const RevertArtifactTool = Tool.make("artifact_revert", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const DeleteArtifactTool = Tool.make("artifact_delete", {
   description: "Permanently delete one artifact and all of its versions from this project.",
@@ -231,7 +238,8 @@ const DeleteArtifactTool = Tool.make("artifact_delete", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const ArtifactToolkit = Toolkit.make(
   SaveArtifactTool,

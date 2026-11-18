@@ -1,4 +1,4 @@
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { CommonActions, useNavigation, useRoute } from "@react-navigation/native";
 import { use, type ComponentProps } from "react";
 import { Platform } from "react-native";
 
@@ -37,7 +37,8 @@ export function SettingsRow(props: {
   const onPress = () => {
     if (props.target) {
       if (inList) openSettings(navigation, props.target);
-      else navigation.navigate(props.target);
+      // navigate() cannot resolve its overloads against the full target union.
+      else navigation.dispatch(CommonActions.navigate(props.target));
     } else if (props.fullScreenTarget) {
       navigation.navigate(props.fullScreenTarget);
     } else {

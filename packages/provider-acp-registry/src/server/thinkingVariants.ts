@@ -20,6 +20,7 @@ export interface CollapsedAcpModel {
   readonly id: string;
   readonly name: string;
   readonly thinking: ThinkingSupport;
+  readonly reasoningEffort?: AcpRegistryProbeModel["reasoningEffort"] | undefined;
 }
 
 const baseId = (id: string): string | undefined =>
@@ -39,7 +40,12 @@ export function collapseThinkingVariants(
         : THINKING_REQUIRED.test(model.id)
           ? "always"
           : "toggle";
-      collapsed.set(model.id, { id: model.id, name: model.name, thinking });
+      collapsed.set(model.id, {
+        id: model.id,
+        name: model.name,
+        thinking,
+        reasoningEffort: model.reasoningEffort,
+      });
       continue;
     }
     if (ids.has(base)) continue;
@@ -47,6 +53,7 @@ export function collapseThinkingVariants(
       id: base,
       name: model.name.replace(THINKING_NAME_SUFFIX, "") || base,
       thinking: "always",
+      reasoningEffort: model.reasoningEffort,
     });
   }
   return [...collapsed.values()];
