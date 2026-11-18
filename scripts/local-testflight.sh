@@ -13,7 +13,7 @@ export EXPO_NO_CAPABILITY_SYNC=1
 # GitHub, reachable only through the hy2 proxy. pnpm caches the build result in
 # the store, so one offline run replays an empty ios/vendor until someone runs
 # `pnpm rebuild react-native-enriched-markdown` with the proxy set.
-export https_proxy="${T3_BUILD_PROXY:-http://127.0.0.1:10809}" HTTPS_PROXY="${T3_BUILD_PROXY:-http://127.0.0.1:10809}"
+export https_proxy="${T3_BUILD_PROXY:-http://127.0.0.1:17890}" HTTPS_PROXY="${T3_BUILD_PROXY:-http://127.0.0.1:17890}"
 export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
 EAS="$HOME/.npm/_npx/49551ffe00939648/node_modules/.bin/eas"
 [ -x "$EAS" ] || EAS="$(command -v eas)"
@@ -35,6 +35,13 @@ if [ "$RC" != 0 ]; then
   exit 1
 fi
 echo "BUILD OK: $IPA (log $LOG)"
-"$EAS" submit -p ios --profile fork-testflight --path "$IPA" --non-interactive 2>&1 | tail -4
-sleep 5
-T3CODE_IOS_BUNDLE_ID=com.yangxin.t3code.fork "$EAS" submit:status -p ios --non-interactive 2>&1 | tr "\r" "\n" | grep -v "^$" | tail -6
+# EAS Submit's archive upload stalls at 0% from this network; upload straight to
+# ASC with the local key when ~/.t3code-asc.env defines ASC_KEY_ID/ASC_ISSUER_ID.
+if [ -f "$HOME/.t3code-asc.env" ]; then
+  . "$HOME/.t3code-asc.env"
+  xcrun altool --upload-package -f "$IPA" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tail -6
+else
+  "$EAS" submit -p ios --profile fork-testflight --path "$IPA" --non-interactive 2>&1 | tail -4
+  sleep 5
+  T3CODE_IOS_BUNDLE_ID=com.yangxin.t3code.fork "$EAS" submit:status -p ios --non-interactive 2>&1 | tr "\r" "\n" | grep -v "^$" | tail -6
+fi
