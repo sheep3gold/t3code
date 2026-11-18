@@ -1,5 +1,7 @@
 import type { ExpoConfig } from "expo/config";
 
+import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
+
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
@@ -18,8 +20,11 @@ const runtimeVersionPolicy =
 
 const cloudBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 const cloudAppleTeamId = repoEnv.T3CODE_APPLE_TEAM_ID?.trim();
-// Self-hosted Clerk instances serve their own associated domain; unset keeps the hosted relay's.
-const clerkRelyingParty = repoEnv.T3CODE_CLERK_RELYING_PARTY?.trim();
+// Self-hosted Clerk instances serve their own associated domain. The publishable
+// key encodes that domain, so derive it and keep the hosted relay's default.
+const clerkRelyingParty =
+  repoEnv.T3CODE_CLERK_RELYING_PARTY?.trim() ??
+  resolveClerkRelyingParty(repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -119,6 +124,17 @@ function resolveAppVariant(value: string | undefined): AppVariant {
       return "production";
     default:
       throw new Error("APP_VARIANT must be development, preview, or production.");
+  }
+}
+
+function resolveClerkRelyingParty(publishableKey: string | undefined): string | undefined {
+  if (!publishableKey?.trim()) return undefined;
+  try {
+    return clerkFrontendApiHostnameFromPublishableKey(publishableKey.trim());
+  } catch {
+    // A publishable key this build cannot decode still builds; the hosted
+    // associated domain is the fallback.
+    return undefined;
   }
 }
 
