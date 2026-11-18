@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { m } from "../../i18n/messages";
 import { resolveVoiceComposerPresentation } from "./voiceInputPresentation";
 
 describe("resolveVoiceComposerPresentation", () => {
@@ -8,6 +9,7 @@ describe("resolveVoiceComposerPresentation", () => {
       resolveVoiceComposerPresentation(
         { phase: "recording", error: null, errorAction: null },
         3,
+        m,
         true,
       ),
     ).toMatchObject({ trailingAction: "mic", statusLabel: null });
