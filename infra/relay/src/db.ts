@@ -8,8 +8,25 @@ import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 
 import { relayDatabaseMode } from "./dbConfig.ts";
+
+// Self-hosted deployments point at their own Postgres (e.g. Neon free tier)
+// instead of provisioning the shared PlanetScale cluster.
+export const externalDatabaseUrl = process.env.RELAY_DATABASE_URL?.trim();
+
+export function externalHyperdriveOrigin(urlText: string): Cloudflare.Hyperdrive.PublicOrigin {
+  const url = new URL(urlText);
+  return {
+    scheme: "postgres",
+    host: url.hostname,
+    ...(url.port ? { port: Number(url.port) } : {}),
+    database: url.pathname.replace(/^\//, ""),
+    user: decodeURIComponent(url.username),
+    password: Redacted.make(decodeURIComponent(url.password)),
+  };
+}
 
 export class RelayDb extends Context.Service<
   RelayDb,
@@ -74,9 +91,10 @@ export const PlanetscaleDatabase = Effect.gen(function* () {
 });
 
 export const RelayHyperdrive = Effect.gen(function* () {
-  const { runtimeRole } = yield* PlanetscaleDatabase;
   return yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
-    origin: runtimeRole.origin,
+    origin: externalDatabaseUrl
+      ? externalHyperdriveOrigin(externalDatabaseUrl)
+      : (yield* PlanetscaleDatabase).runtimeRole.origin,
     caching: {
       disabled: true,
     },

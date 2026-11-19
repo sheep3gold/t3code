@@ -23,14 +23,14 @@ export default Alchemy.Stack(
       Axiom.providers(),
       Cloudflare.providers(),
       Drizzle.providers(),
-      Planetscale.providers(),
+      ...(RelayDb.externalDatabaseUrl ? [] : [Planetscale.providers()]),
       PreviewTunnelSweepProvider(),
     ),
     state: Cloudflare.state(),
   },
   Effect.gen(function* () {
     const { stage } = yield* Alchemy.Stack;
-    const db = yield* RelayDb.PlanetscaleDatabase;
+    const db = RelayDb.externalDatabaseUrl ? null : yield* RelayDb.PlanetscaleDatabase;
     const hyperdrive = yield* RelayDb.RelayHyperdrive;
     const managedEndpointZone = yield* ManagedEndpointZone.pipe(Effect.orDie);
     const relayApiZone = yield* RelayApiZone.pipe(Effect.orDie);
@@ -60,8 +60,8 @@ export default Alchemy.Stack(
     });
 
     return {
-      databaseName: db.database.name,
-      databaseBranchName: db.branch?.name ?? "main",
+      databaseName: db?.database.name ?? "external-postgres",
+      databaseBranchName: db?.branch?.name ?? "main",
       hyperdriveName: hyperdrive.name,
       workerName: api.workerName,
       url: api.url,
