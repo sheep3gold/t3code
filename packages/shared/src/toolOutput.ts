@@ -59,6 +59,13 @@ interface CompactToolOutput {
   sentMessage?: string;
 }
 
+// Kiro reports an MCP call's result as `{ items: [{ Json: <result> }] }`.
+function kiroMcpResult(value: Record<PropertyKey, unknown>): unknown {
+  if (!Array.isArray(value.items)) return undefined;
+  const item = value.items.find((entry) => Predicate.isObject(entry) && entry.Json !== undefined);
+  return Predicate.isObject(item) ? item.Json : undefined;
+}
+
 function readResult(value: unknown, budget: ResultReadBudget, depth = 0): ResultEnvelope {
   if (depth > MAX_ENVELOPE_DEPTH || budget.remainingNodes-- <= 0) {
     budget.exceeded = true;
@@ -112,6 +119,7 @@ function readResult(value: unknown, budget: ResultReadBudget, depth = 0): Result
   const content =
     value.structuredContent ??
     value.content ??
+    kiroMcpResult(value) ??
     (marker === -1 ? undefined : terminal.slice(marker + TERMINAL_OUTPUT_MARKER.length));
   if (content !== undefined) {
     const nested = readResult(content, budget, depth + 1);
