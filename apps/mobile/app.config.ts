@@ -1,7 +1,5 @@
 import type { ExpoConfig } from "expo/config";
 
-import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
-
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
@@ -130,7 +128,11 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 function resolveClerkRelyingParty(publishableKey: string | undefined): string | undefined {
   if (!publishableKey?.trim()) return undefined;
   try {
-    return clerkFrontendApiHostnameFromPublishableKey(publishableKey.trim());
+    // Mirrors clerkFrontendApiHostnameFromPublishableKey in @t3tools/shared/relayAuth.
+    const encoded = publishableKey.trim().split("_").slice(2).join("_");
+    const frontendApi = globalThis.atob(encoded).replace(/\$$/u, "");
+    if (frontendApi.length === 0 || frontendApi.includes("/")) return undefined;
+    return new URL(`https://${frontendApi}`).hostname;
   } catch {
     // A publishable key this build cannot decode still builds; the hosted
     // associated domain is the fallback.

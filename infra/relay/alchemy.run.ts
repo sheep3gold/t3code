@@ -75,7 +75,7 @@ export default Alchemy.Stack(
       clientTracingToken: observability.clientIngestToken.token,
       mobileLogsDataset: observability.mobileLogs.name,
       mobileMetricsDataset: observability.mobileMetrics.name,
-      mobileSourceMapsBucket: observability.mobileSourceMaps.bucketName,
+      mobileSourceMapsBucket: observability.mobileSourceMaps?.bucketName,
       // The MOBILE_SOURCEMAPS_R2 secret for GitHub Actions and EAS Build.
       mobileSourceMapsUploadCredentials,
     };

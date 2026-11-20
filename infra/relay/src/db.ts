@@ -98,6 +98,7 @@ export const RelayHyperdrive = Effect.gen(function* () {
     caching: {
       disabled: true,
     },
-    originConnectionLimit: 40,
+    // Free Cloudflare plans cap Hyperdrive origins at 20 connections.
+    originConnectionLimit: externalDatabaseUrl ? 20 : 40,
   });
 });
