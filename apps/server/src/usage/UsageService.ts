@@ -80,7 +80,6 @@ const RATES_REFRESH_FLOOR_MS = 60 * 1000;
 const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-const CACHE_RETENTION_DAYS = 92;
 const STALE_TEMP_DIRECTORY_MS = 60 * 60 * 1000;
 
 const TRANSCRIPT_READ_CONCURRENCY = 4;
@@ -794,7 +793,7 @@ export const make = Effect.gen(function* () {
 
   const collectDirs = Effect.fn("UsageService.collectDirs")(function* (
     { dirs, pending }: Effect.Success<ReturnType<typeof resolveTranscriptDirs>>,
-    scanStartMs: number,
+    windowStartMs: number,
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
     awaitRefresh: boolean,
@@ -808,7 +807,7 @@ export const make = Effect.gen(function* () {
             reader.scan({
               instances,
               settings,
-              windowStartMs: scanStartMs,
+              windowStartMs,
               retentionCutoffMs,
               awaitRefresh,
             }),
@@ -840,7 +839,7 @@ export const make = Effect.gen(function* () {
 
     // Scan independent sources together, directories sequentially to bound open files; keep order, since the first copy decides a duplicate's bucket.
     const [transcripts, scanDirs] = yield* Effect.all(
-      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, scanStartMs, fromMemory)), scans],
+      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs, fromMemory)), scans],
       { concurrency: "unbounded" },
     );
     const scanned: readonly ScannedDir[] = [...transcripts, ...pending, ...scanDirs.flat()];
@@ -896,21 +895,22 @@ export const make = Effect.gen(function* () {
     const todayStartMs = Math.floor(startedAtMs / DAY_MS) * DAY_MS;
     const sinceDayStartMs = todayStartMs - (days - 1) * DAY_MS;
     const windowStartMs = sinceDayStartMs - MTIME_SLACK_MS;
-    const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const retentionCutoffMs =
+      settings.usageHistoryRetentionDays === "unlimited"
+        ? 0
+        : Math.max(0, startedAtMs - settings.usageHistoryRetentionDays * 24 * 60 * 60 * 1000);
     // All-time needs the whole retained history, so scan back to the retention
     // cutoff. Trailing figures are filtered by record timestamp, so the wider
     // scan never changes them.
     const historyStartMs = retentionCutoffMs;
+    const resolvedHistory = yield* resolveTranscriptDirs(settings, retentionCutoffMs, false).pipe(
+      Effect.provideContext(readerContext),
+    );
 
     const [, scannedDirs, dirOwners] = yield* Effect.all(
       [
         ensureRates(false),
-        resolveTranscriptDirs(settings, retentionCutoffMs, false).pipe(
-          Effect.provideContext(readerContext),
-          Effect.flatMap((resolved) =>
-            collectDirs(resolved, historyStartMs, settings, retentionCutoffMs, false, false),
-          ),
-        ),
+        collectDirs(resolvedHistory, historyStartMs, settings, retentionCutoffMs, false, false),
         instanceTranscriptDirs(settings),
       ],
       { concurrency: "unbounded" },

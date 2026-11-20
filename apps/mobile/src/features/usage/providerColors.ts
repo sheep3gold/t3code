@@ -8,10 +8,10 @@ export function providerColors(scheme: "light" | "dark"): Record<UsageProviderKi
     cursor: "#8b8b8b",
     opencode: "#5b9bbd",
     antigravity: "#8c7bd1",
-    pi: "#4d9f8a",
     kimi: "#6b7fd7",
     minimax: "#e0566b",
     kiro: "#7c5cbf",
+    pi: "#4d9f8a",
     muse: "#0866ff",
   };
 }

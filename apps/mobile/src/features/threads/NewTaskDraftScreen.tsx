@@ -1088,6 +1088,7 @@ export function NewTaskDraftScreen(props: {
         // A draft has no assistant turn yet, so it never offers [OPTIONS:] chips.
         onSendOption={async () => null}
         offersSideChat={false}
+        onSendCommand={async () => null}
         onReconnectEnvironment={() => onReconnectEnvironment(selectedProject.environmentId)}
         canSwitchThreadProvider
         onRespondToApproval={async () => {}}

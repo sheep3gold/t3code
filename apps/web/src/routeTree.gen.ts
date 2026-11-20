@@ -321,8 +321,8 @@ export interface FileRoutesByFullPath {
   '/pair': typeof PairRoute
   '/schedules': typeof SchedulesRoute
   '/welcome': typeof WelcomeRoute
-  '/issues': typeof ChatIssuesRoute
   '/workflows': typeof WorkflowsRoute
+  '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -370,8 +370,8 @@ export interface FileRoutesByTo {
   '/pair': typeof PairRoute
   '/schedules': typeof SchedulesRoute
   '/welcome': typeof WelcomeRoute
-  '/issues': typeof ChatIssuesRoute
   '/workflows': typeof WorkflowsRoute
+  '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -422,8 +422,8 @@ export interface FileRoutesById {
   '/pair': typeof PairRoute
   '/schedules': typeof SchedulesRoute
   '/welcome': typeof WelcomeRoute
-  '/_chat/issues': typeof ChatIssuesRoute
   '/workflows': typeof WorkflowsRoute
+  '/_chat/issues': typeof ChatIssuesRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
@@ -475,8 +475,8 @@ export interface FileRouteTypes {
     | '/pair'
     | '/schedules'
     | '/welcome'
-    | '/issues'
     | '/workflows'
+    | '/issues'
     | '/new'
     | '/pull-requests'
     | '/settings'
@@ -524,8 +524,8 @@ export interface FileRouteTypes {
     | '/pair'
     | '/schedules'
     | '/welcome'
-    | '/issues'
     | '/workflows'
+    | '/issues'
     | '/new'
     | '/pull-requests'
     | '/settings'
@@ -575,8 +575,8 @@ export interface FileRouteTypes {
     | '/pair'
     | '/schedules'
     | '/welcome'
-    | '/_chat/issues'
     | '/workflows'
+    | '/_chat/issues'
     | '/_chat/new'
     | '/_chat/pull-requests'
     | '/_chat/settings'

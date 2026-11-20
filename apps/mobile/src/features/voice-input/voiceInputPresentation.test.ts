@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { m } from "../../i18n/messages";
 import { resolveVoiceComposerPresentation } from "./voiceInputPresentation";
 

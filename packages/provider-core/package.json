@@ -19,6 +19,10 @@
       "types": "./src/server/attachmentPrompt.ts",
       "import": "./src/server/attachmentPrompt.ts"
     },
+    "./server/compatibility": {
+      "types": "./src/server/compatibility.ts",
+      "import": "./src/server/compatibility.ts"
+    },
     "./server/providerImageFit": {
       "types": "./src/server/providerImageFit.ts",
       "import": "./src/server/providerImageFit.ts"

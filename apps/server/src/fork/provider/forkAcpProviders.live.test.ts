@@ -173,7 +173,6 @@ const layerLive = Layer.mergeAll(
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerServerConfig),
-  Layer.provide(layerServerSettings),
   Layer.provide(layerProviderInstanceRegistry),
   Layer.provide(ResetCreditCoordinator.layer),
   Layer.provide(layerBackgroundPolicy),
@@ -181,6 +180,10 @@ const layerLive = Layer.mergeAll(
   Layer.provide(layerPlatformTest),
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(WorkspacePaths.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.provide(ModelManifest.layerTest),
+  Layer.provide(ProviderInstallationGate.layer),
+  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provide(layerServerSettings),
   Layer.provide(
     Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
       peek: () => Effect.succeed(noEnrichment),

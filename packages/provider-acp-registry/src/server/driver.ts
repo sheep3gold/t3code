@@ -396,10 +396,11 @@ export function applyAcpRegistryLiveConfiguration(
   const useLiveCatalog =
     configuration.models.length > 1 ||
     (configuration.models.length === 1 && !liveCatalogIsProvisional);
+  const collapsedCurrent =
+    configuration.currentModelId === null ? null : collapsedModelId(configuration.currentModelId);
   const selectedProbedModelId =
-    configuration.currentModelId !== null &&
-    probedModels.some((model) => model.slug === configuration.currentModelId)
-      ? configuration.currentModelId
+    collapsedCurrent !== null && probedModels.some((model) => model.slug === collapsedCurrent)
+      ? collapsedCurrent
       : (probedModels.find((model) => model.isDefault)?.slug ?? null);
   const discovery = useLiveCatalog
     ? configuration

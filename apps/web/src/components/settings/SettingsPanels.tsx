@@ -553,7 +553,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? [gt("Snooze until limits reset")]
       : []),
     ...(settings.autoRetryFailedThreads !== DEFAULT_UNIFIED_SETTINGS.autoRetryFailedThreads
-      ? ["Auto-retry failed threads"]
+      ? [gt("Auto-retry failed threads")]
       : []),
     ...(!Equal.equals(settings.snoozePresets, DEFAULT_UNIFIED_SETTINGS.snoozePresets)
       ? [gt("Snooze options")]
@@ -838,6 +838,7 @@ function FallbackModelPicker({
   selection: ModelSelection | null;
   onChange: (value: ModelSelection | null) => void;
 }) {
+  const gt = useGT();
   const { scope, environment, target } = useSettingsScope();
   const settings = useScopedSettings();
   const navigate = useNavigate();
@@ -2110,7 +2111,7 @@ export function ThreadsSettingsPanel() {
           resetAction={
             settings.usageLimitFallbackModelSelection !== null ? (
               <SettingResetButton
-                label={gt("usage limit fallback model")}
+                ariaLabel={gt("Reset usage limit fallback model to default")}
                 onClick={() => updateSettings({ usageLimitFallbackModelSelection: null })}
               />
             ) : null

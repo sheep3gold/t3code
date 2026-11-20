@@ -5103,6 +5103,74 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       }),
   );
 
+  it.effect("commit_push_pr publishes the default branch to the push remote's fork", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const originDir = yield* createBareRemote();
+      const forkDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+      yield* runGit(repoDir, ["push", "origin", "main"]);
+      yield* runGit(repoDir, ["remote", "add", "fork", forkDir]);
+      yield* runGit(repoDir, ["push", "fork", "main"]);
+      yield* runGit(repoDir, ["config", "remote.pushDefault", "fork"]);
+      yield* configureVisibleRemoteUrlWithLocalRewrite(
+        repoDir,
+        "origin",
+        "git@github.com:pingdotgg/codething-mvp.git",
+        originDir,
+      );
+      yield* configureVisibleRemoteUrlWithLocalRewrite(
+        repoDir,
+        "fork",
+        "git@github.com:octocat/codething-mvp.git",
+        forkDir,
+      );
+      const readOriginMain = runGit(repoDir, ["ls-remote", "origin", "refs/heads/main"]).pipe(
+        Effect.map((output) => output.stdout),
+      );
+      const originBefore = yield* readOriginMain;
+      NodeFS.writeFileSync(NodePath.join(repoDir, "change.txt"), "change\n");
+
+      const { manager, providerCalls } = yield* makeManager({
+        providerScenario: {
+          defaultBranch: "main",
+          prListSequenceByHeadSelector: {
+            "octocat:main": [
+              [],
+              [
+                {
+                  number: 189,
+                  title: "Contribute from main",
+                  url: "https://github.com/pingdotgg/codething-mvp/pull/189",
+                  baseRefName: "main",
+                  headRefName: "main",
+                  state: "open",
+                  isCrossRepository: true,
+                  headRepositoryNameWithOwner: "octocat/codething-mvp",
+                  headRepositoryOwnerLogin: "octocat",
+                },
+              ],
+            ],
+          },
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      expect(yield* readOriginMain).toBe(originBefore);
+      expect(
+        created(providerCalls).some(
+          (call) => call.baseRefName === "main" && call.headSelector === "octocat:main",
+        ),
+      ).toBe(true);
+    }),
+  );
+
   it.effect("rejects push/pr actions from detached HEAD", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

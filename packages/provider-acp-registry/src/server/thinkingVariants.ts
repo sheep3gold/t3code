@@ -1,4 +1,8 @@
-import type { AcpRegistryProbeModel, ProviderOptionSelection } from "@t3tools/contracts";
+import type {
+  AcpRegistryProbeModel,
+  ProviderOptionDescriptor,
+  ProviderOptionSelection,
+} from "@t3tools/contracts";
 
 /**
  * Kimi CLI has no thinking config option over ACP. It doubles every model in
@@ -20,7 +24,7 @@ export interface CollapsedAcpModel {
   readonly id: string;
   readonly name: string;
   readonly thinking: ThinkingSupport;
-  readonly reasoningEffort?: AcpRegistryProbeModel["reasoningEffort"] | undefined;
+  readonly reasoningEffort?: ProviderOptionDescriptor | null;
 }
 
 const baseId = (id: string): string | undefined =>
@@ -44,7 +48,7 @@ export function collapseThinkingVariants(
         id: model.id,
         name: model.name,
         thinking,
-        reasoningEffort: model.reasoningEffort,
+        ...(model.reasoningEffort !== undefined ? { reasoningEffort: model.reasoningEffort } : {}),
       });
       continue;
     }
@@ -53,7 +57,7 @@ export function collapseThinkingVariants(
       id: base,
       name: model.name.replace(THINKING_NAME_SUFFIX, "") || base,
       thinking: "always",
-      reasoningEffort: model.reasoningEffort,
+      ...(model.reasoningEffort !== undefined ? { reasoningEffort: model.reasoningEffort } : {}),
     });
   }
   return [...collapsed.values()];

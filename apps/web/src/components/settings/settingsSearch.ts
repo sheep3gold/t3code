@@ -487,13 +487,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "auto-retry-failed-threads",
     title: msg("Auto-retry failed threads"),
     to: "/settings/threads",
-    searchTerms: ["error failure retry transient provider connection api continue"],
+    searchTerms: [msg("error failure retry transient provider connection api continue")],
   },
   {
     id: "usage-limit-fallback-model",
     title: msg("Usage limit fallback model"),
     to: "/settings/threads",
-    searchTerms: ["usage quota rate limit switch model fallback auto continue"],
+    searchTerms: [msg("usage quota rate limit switch model fallback auto continue")],
   },
   {
     id: "working-shelf",
@@ -1404,6 +1404,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "connections-environment",
     searchTerms: [msg("mobile push notifications live activities cloud tunnel")],
     cloudOnly: true,
+  },
+  {
+    id: "preview-tunnel",
+    title: msg("Preview tunnel"),
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      msg("localhost loopback port forwarding open on this device browser tabs stream security"),
+    ],
   },
   {
     id: "connections-environment",

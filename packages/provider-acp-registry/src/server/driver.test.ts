@@ -341,8 +341,7 @@ describe("acpRegistrySnapshotReadiness", () => {
       ]);
     },
   );
-
-  it("overlays live configuration keeps per-model options across sessions", () => {
+  it("overlays live configuration without dropping probe-owned session capabilities", () => {
     const provider = buildCheckedAcpRegistrySnapshot({
       ...identity,
       settings: decodeSettings({ agentId: "test-agent" }),

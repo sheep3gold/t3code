@@ -261,6 +261,18 @@ it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
 );
 
 it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
+  "notifies again when a new %s request replaces the pending one in the same run",
+  async (flag) => {
+    await using app = setup();
+    app.start();
+    state.shells.set("one", shell({ [flag]: true, pendingRequestId: "request-1" }));
+    state.shells.set("one", shell({ [flag]: true, pendingRequestId: "request-2" }));
+    const title = flag === "hasPendingApprovals" ? "Approval needed" : "Input needed";
+    expect(TestNotification.sent.map(({ title }) => title)).toEqual([title, title]);
+  },
+);
+
+it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
   "notifies once per %s request, not again as queued runs start behind it",
   async (flag) => {
     await using app = setup();
