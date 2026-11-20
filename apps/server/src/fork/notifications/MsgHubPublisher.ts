@@ -8,13 +8,13 @@ const MAX_ATTEMPTS = 3;
 export type MsgHubEnvironment = Readonly<Record<string, string | undefined>>;
 export type MsgHubFetch = typeof globalThis.fetch;
 
-export interface MsgHubPublisherConfig {
+interface MsgHubPublisherConfig {
   readonly baseUrl: string;
   readonly token: string;
   readonly hostLabel: string;
 }
 
-export interface MsgHubPublishRequest {
+interface MsgHubPublishRequest {
   readonly url: string;
   readonly headers: Record<string, string>;
   readonly body: string;
