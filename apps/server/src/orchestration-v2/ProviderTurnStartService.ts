@@ -290,10 +290,10 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
-    const forkTurnContext = yield* Effect.serviceOption(ForkTurnContext.ForkTurnContext);
-    const serverSettings = yield* ServerSettings.ServerSettingsService;
     const restoreMissingWorktree = yield* makeRestoreMissingWorktree;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const forkTurnContext = yield* Effect.serviceOption(ForkTurnContext.ForkTurnContext);
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
 
     // Build draining callbacks outside startup scope so they cannot retain full thread history.
     const makeRunControls = (input: {

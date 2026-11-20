@@ -11703,7 +11703,6 @@ it.layer(makeLayerTest(false, false))("queue hold across process loss", (it) => 
   );
 });
 
-
 it.layer(makeLayerTest(true))("auto-retry with queued messages", (it) => {
   it.effect.each([false, true])(
     "finishes the failed turn before the queue, recovered=%s",

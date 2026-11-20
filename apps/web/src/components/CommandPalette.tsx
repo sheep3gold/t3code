@@ -1728,7 +1728,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:schedules",
     searchTerms: ["schedules", "scheduled tasks", "cron", "recurring", "automation"],
-    title: "Open schedules",
+    title: gt("Open schedules"),
     icon: <CalendarClockIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/schedules" });
@@ -1739,7 +1739,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:workflows",
     searchTerms: ["workflows", "steps", "automation", "retry", "durable"],
-    title: "Open workflows",
+    title: gt("Open workflows"),
     icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/workflows" });
@@ -1750,7 +1750,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:memory",
     searchTerms: ["memory", "memories", "lessons", "ledger", "resume state"],
-    title: "Open memory and ledgers",
+    title: gt("Open memory and ledgers"),
     icon: <BrainIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/memory" });

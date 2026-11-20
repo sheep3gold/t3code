@@ -286,11 +286,11 @@ export function layerWithRegistry<Error>(
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly settingsOverrides?: DeepPartial<ServerSettingsSchema>;
     /** Lets a test hold a projection read open to order concurrent dispatches. */
     readonly wrapProjectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
     ) => ProjectionStore.ProjectionStoreV2Shape;
-    readonly settingsOverrides?: DeepPartial<ServerSettingsSchema>;
     readonly managedPolicy?: ManagedPolicyDocument;
   } = {},
 ): Layer.Layer<

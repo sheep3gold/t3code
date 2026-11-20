@@ -8,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
@@ -81,7 +82,8 @@ const SendNotificationTool = Tool.make("send_notification", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const AgentNotificationToolkit = Toolkit.make(SendNotificationTool);
 

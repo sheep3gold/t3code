@@ -123,7 +123,6 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
   Layer.provide(
     Layer.mergeAll(
       layerServerConfig.pipe(Layer.provide(layerPlatformTest)),
-      layerServerSettings,
       ServerSecretStore.layer.pipe(
         Layer.provide(layerServerConfig),
         Layer.provide(layerPlatformTest),
@@ -144,7 +143,6 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
       ProviderLatestVersions.layer,
-      ModelManifest.layerTest,
       AntigravityInstallation.AntigravityInstallation.layer.pipe(
         Layer.provide(layerServerConfig.pipe(Layer.provide(layerPlatformTest))),
         Layer.provide(FetchHttpClient.layer),
@@ -158,7 +156,7 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
           EnvironmentId.make("00000000-0000-4000-8000-000000000001"),
         ),
       }),
-    ),
+    ).pipe(Layer.provideMerge(ModelManifest.layerTest), Layer.provideMerge(layerServerSettings)),
   ),
 );
 
@@ -194,6 +192,9 @@ const layerLive = Layer.mergeAll(
       invalidate: () => Effect.void,
     }),
   ),
+  Layer.provide(ProviderInstallationGate.layer),
+  Layer.provide(ModelManifest.layerTest),
+  Layer.provide(SqlitePersistence.layerMemory),
 );
 
 const waitForIdle = Effect.fn("AcpRegistryOrchestratorV2Live.waitForIdle")(function* (

@@ -472,6 +472,8 @@ export interface AcpAdapterV2Flavor {
     readonly modelSelection: ModelSelection;
     /** Fork: `null` hands the selection to the default model protocol. */
   }) => Effect.Effect<string | undefined | null, EffectAcpErrors.AcpError>;
+  /** Fork: check the session model list even though `applyModelSelection` is set. */
+  readonly validatesListedModels?: boolean;
   /**
    * Model-selection option ids `applyModelSelection` sets itself under a
    * native id, which the generic option loop then skips (Kiro's
@@ -7990,6 +7992,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ) {
           const model = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
           if (
+            (flavor.applyModelSelection !== undefined && flavor.validatesListedModels !== true) ||
             model.length === 0 ||
             model === "default" ||
             model === "auto" ||

@@ -319,7 +319,12 @@ it.effect.each(["startup", "shutdown"] as const)(
       assert.isFalse(
         changes.some((event) => event.type === "node.updated" && event.nodeId === nodeId),
       );
-      assert.isFalse(changes.some((event) => event.type === "turn-item.updated"));
+      // The cancelled run only gains the server-recovery notice; the question item is untouched.
+      assert.isFalse(
+        changes.some(
+          (event) => event.type === "turn-item.updated" && event.payload.type !== "system_notice",
+        ),
+      );
     }).pipe(Effect.provide(layer));
   },
 );

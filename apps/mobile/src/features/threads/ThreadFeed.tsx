@@ -85,6 +85,7 @@ import {
 } from "@t3tools/contracts";
 import type { ToolCallVisibility } from "@t3tools/contracts/settings";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
+import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { hostedThreadLink, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
 import {
@@ -1559,6 +1560,7 @@ const MessageTranslateButton = memo(function MessageTranslateButton(props: {
   readonly translation: MessageTranslationState;
   readonly tintColor: string | ColorValue;
 }) {
+  const gt = useGT();
   const { translation } = props;
   if (!translation.available) return null;
   if (translation.translationFor(props.messageId, props.sourceText) !== undefined) return null;
@@ -1566,7 +1568,7 @@ const MessageTranslateButton = memo(function MessageTranslateButton(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={pending ? "翻译中" : "翻译为中文"}
+      accessibilityLabel={pending ? gt("翻译中") : gt("翻译为中文")}
       disabled={pending}
       hitSlop={8}
       onPress={() => translation.translateMessage(props.messageId, props.sourceText)}
@@ -2348,7 +2350,7 @@ function renderFeedEntry(
       message.role === "assistant" && !message.streaming
         ? parseAssistantOptions(presentation.text)
         : null;
-    const renderedText = parsedOptions?.body ?? presentation.text;
+    const renderedText = renderAssistantCitationsAsText(parsedOptions?.body ?? presentation.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = props.formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];

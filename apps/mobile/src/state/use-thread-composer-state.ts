@@ -1003,8 +1003,8 @@ export function useThreadComposerState(input: {
       createdAt: metadata.createdAt,
     }).catch((error: unknown) => {
       Dialog.alert(
-        "Could not send",
-        error instanceof Error ? error.message : "Failed to save the queued option.",
+        m(msg("Could not send")),
+        error instanceof Error ? error.message : m(msg("Failed to save the queued option.")),
       );
     });
     return messageId;

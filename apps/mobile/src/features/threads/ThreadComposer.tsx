@@ -1041,7 +1041,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   onStart={voiceInput.start}
                   onCancel={voiceInput.cancel}
                   holdGesture={holdToTalk.gesture}
-                  accessibilityHint="Hold to talk, release to transcribe."
+                  accessibilityHint={gt("Hold to talk, release to transcribe.")}
                 />
                 {showStopAction ? (
                   <ComposerActionButton

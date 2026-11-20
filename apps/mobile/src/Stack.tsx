@@ -352,17 +352,17 @@ const SETTINGS_SCREENS = {
   SettingsArtifacts: createNativeStackScreen({
     screen: SettingsArtifactsRouteScreen,
     linking: "settings/artifacts",
-    options: settingsPage("Artifacts"),
+    options: settingsPage(),
   }),
   SettingsArtifactDetail: createNativeStackScreen({
     screen: SettingsArtifactDetailRouteScreen,
     linking: "settings/artifacts/:slug",
-    options: settingsPage("Artifact"),
+    options: settingsPage(),
   }),
   SettingsSchedules: createNativeStackScreen({
     screen: SettingsSchedulesRouteScreen,
     linking: "settings/schedules",
-    options: settingsPage("Schedules"),
+    options: settingsPage(),
   }),
   SettingsKeyboard: createNativeStackScreen({
     screen: SettingsKeyboardRouteScreen,

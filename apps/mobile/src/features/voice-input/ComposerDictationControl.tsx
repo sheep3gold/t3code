@@ -443,7 +443,7 @@ export function ComposerDictationPrimaryAction(props: {
   return (
     <ComposerDictationStartAction
       {...props}
-      accessibilityHint="Hold to talk, release to transcribe. Double-tap to toggle dictation."
+      accessibilityHint={gt("Hold to talk, release to transcribe. Double-tap to toggle dictation.")}
     />
   );
 }

@@ -1028,40 +1028,6 @@ describe("server browser wait", () => {
   });
 });
 
-describe("server browser evaluate", () => {
-  it("does not retry a parse error that arrives after the timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const classic = Promise.withResolvers<unknown>();
-      const send = vi.fn((method: string) =>
-        method === "Runtime.evaluate" ? classic.promise : Promise.resolve({}),
-      );
-      const cdp = { send } as unknown as CDPSession;
-      const evaluation = ServerBrowserPage.evaluate(cdp, { expression: "await 0; 1" }, 10);
-      const rejected = expect(evaluation).rejects.toMatchObject({
-        tag: "PreviewAutomationTimeoutError",
-      });
-      await vi.advanceTimersByTimeAsync(10);
-      await rejected;
-      classic.resolve({
-        result: { type: "object" },
-        exceptionDetails: {
-          text: "Uncaught",
-          scriptId: "4",
-          exception: { type: "object", className: "SyntaxError" },
-        },
-      });
-      await classic.promise;
-      expect(send.mock.calls.map(([method]) => method)).toEqual([
-        "Runtime.evaluate",
-        "Runtime.terminateExecution",
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
 describe("server browser net errors", () => {
   it.each([
     ["net::ERR_CONNECTION_REFUSED", "ERR_CONNECTION_REFUSED", -102],

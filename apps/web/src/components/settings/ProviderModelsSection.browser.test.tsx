@@ -39,7 +39,12 @@ it("lists a favorite the provider no longer reports so it can be unstarred", asy
 it("keeps custom model drafts until they save, so a failed save can be retried", async () => {
   const saves: Array<(saved: boolean) => void> = [];
   const onChange = () => new Promise<boolean>((resolve) => saves.push(resolve));
-  const kept = { slug: "kept-model", name: "kept-model", capabilities: null };
+  const kept = {
+    slug: "kept-model",
+    name: "kept-model",
+    capabilities: null,
+    contextWindowTokens: null,
+  };
   await using screen = await render(
     section({ onChange, models: [{ ...kept, isCustom: true }], customModels: [kept] }),
   );
@@ -82,7 +87,12 @@ it("keeps custom model drafts until they save, so a failed save can be retried",
 it("keeps changes typed while an earlier save succeeds", async () => {
   const saves: Array<(saved: boolean) => void> = [];
   const onChange = () => new Promise<boolean>((resolve) => saves.push(resolve));
-  const kept = { slug: "kept-model", name: "kept-model", capabilities: null };
+  const kept = {
+    slug: "kept-model",
+    name: "kept-model",
+    capabilities: null,
+    contextWindowTokens: null,
+  };
   await using screen = await render(
     section({ onChange, models: [{ ...kept, isCustom: true }], customModels: [kept] }),
   );

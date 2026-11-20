@@ -248,6 +248,21 @@ index 285136b3774e531b35c1a3e832506f93f61654be..d36eac46f435a78afda1724d92d685f3
      }
  
      Class("LiveActivity", LiveActivity.self) {
+diff --git a/scripts/build-layout-registry.mjs b/scripts/build-layout-registry.mjs
+index d5fc1c8c396d652be23256129978cbd9cb7355a5..2d83c3211f0aea4e4ec590f79d8e3ccf5262c963 100644
+--- a/scripts/build-layout-registry.mjs
++++ b/scripts/build-layout-registry.mjs
+@@ -19,7 +19,9 @@ const registryEntryPath = path.join(__dirname, '../bundle/layout-registry-entry.
+ const registryMetroConfigPath = path.join(__dirname, '../layout-registry.metro.config.js');
+ 
+ async function main() {
+-  const projectRoot = path.resolve(possibleProjectRoot);
++  // Canonicalize so generated absolute imports match the realpath-normalized
++  // module graph of Metro under macOS /var symlinked TMPDIRs.
++  const projectRoot = fs.realpathSync(path.resolve(possibleProjectRoot));
+   const outputPath = path.resolve(projectRoot, registryOutput ?? defaultOutputPath);
+   const defaultConfigPath =
+     platform === 'android'
 diff --git a/src/ExpoWidgets.ts b/src/ExpoWidgets.ts
 index db1500090738cca841ded2967078b8c594bac738..6863dc94a3bb61196920489e3f10f21b77c0cce9 100644
 --- a/src/ExpoWidgets.ts

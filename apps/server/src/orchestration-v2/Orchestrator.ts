@@ -82,8 +82,8 @@ import {
   TrimmedNonEmptyString,
   managedRuntimeModeCeilingMessage,
 } from "@t3tools/contracts";
-import { modelSelectionsEqual, readCustomModelEntries } from "@t3tools/shared/model";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import { modelSelectionsEqual, readCustomModelEntries } from "@t3tools/shared/model";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { modelSwitchSince } from "./modelSwitch.ts";
 import { contextBoundaryOrdinal, isScheduledFreshRun } from "./contextBoundary.ts";

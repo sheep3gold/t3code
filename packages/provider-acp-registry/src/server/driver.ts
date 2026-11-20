@@ -36,6 +36,7 @@ import {
   ACP_THINKING_OPTION_ID,
   collapseThinkingVariants,
   collapsedModelId,
+  type CollapsedAcpModel,
 } from "./thinkingVariants.ts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
@@ -183,34 +184,36 @@ function modelsFromDiscovery(
     configOptions.length === 0
       ? EMPTY_CAPABILITIES
       : createModelCapabilities({ optionDescriptors: configOptions });
-  const thinkingCapabilities = createModelCapabilities({
-    optionDescriptors: [...configOptions, THINKING_TOGGLE].slice(0, 16),
-  });
   const currentModelId =
     discovery?.currentModelId == null ? null : collapsedModelId(discovery.currentModelId);
   // Model-specific options describe only the session's current model; other
   // models keep the shared ones plus what an earlier session reported for them.
   const modelOptionIds = new Set(discovery?.modelOptionIds ?? []);
-  const shared = (discovery?.configOptions ?? []).filter(
-    (descriptor) => !modelOptionIds.has(descriptor.id),
-  );
+  const shared = configOptions.filter((descriptor) => !modelOptionIds.has(descriptor.id));
   const sharedIds = new Set(shared.map((descriptor) => descriptor.id));
-  const capabilitiesFor = ({
-    id: slug,
-    reasoningEffort,
-  }: Pick<AcpRegistryProbeModel, "id" | "reasoningEffort">) => {
-    if (slug === currentModelId) return capabilities;
+  const descriptorsFor = (
+    slug: string,
+    reasoningEffort: AcpRegistryProbeModel["reasoningEffort"],
+  ) => {
+    if (slug === currentModelId) return configOptions;
     // The levels a model advertises replace the ones an earlier session reported.
     const own = (
       previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ?? []
     ).filter(
       (descriptor) =>
         !sharedIds.has(descriptor.id) &&
+        descriptor.id !== ACP_THINKING_OPTION_ID &&
         (reasoningEffort === undefined ||
           descriptor.type !== "select" ||
           descriptor.role !== "reasoning"),
     );
-    const optionDescriptors = [...shared, ...own, ...(reasoningEffort ? [reasoningEffort] : [])];
+    return [...shared, ...own, ...(reasoningEffort ? [reasoningEffort] : [])];
+  };
+  const capabilitiesFor = (model: CollapsedAcpModel) => {
+    const optionDescriptors =
+      model.thinking === "toggle"
+        ? [...descriptorsFor(model.id, model.reasoningEffort), THINKING_TOGGLE].slice(0, 16)
+        : descriptorsFor(model.id, model.reasoningEffort);
     return optionDescriptors.length === 0
       ? EMPTY_CAPABILITIES
       : createModelCapabilities({ optionDescriptors });
@@ -231,7 +234,7 @@ function modelsFromDiscovery(
           name: model.name,
           isCustom: false,
           ...(model.id === currentModelId ? { isDefault: true } : {}),
-          capabilities: model.thinking === "toggle" ? thinkingCapabilities : capabilitiesFor(model),
+          capabilities: capabilitiesFor(model),
         }));
   return providerModelsFromSettings(builtInModels, customModels, capabilities);
 }

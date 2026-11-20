@@ -2004,7 +2004,6 @@ describe("orchestration v2 provider switching", () => {
     importedNativeSessionScenario("resume-fails"),
   );
 
-
   it.live.each(["native", "legacy"] as const)(
     "starts a replacement native thread as new after the resume fallback with %s attempts",
     (attempts) =>

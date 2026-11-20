@@ -10941,8 +10941,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (event.type === "message_start") {
               reasoning.messageId = event.message.id;
               reasoning.streamBlocks.clear();
-              context.assistant.streamBlocks.clear();
               yield* noteServedModel(context, event.message.model);
+              context.assistant.streamBlocks.clear();
               const usage: ClaudeMessageUsage | undefined = event.message.usage;
               context.streamUsage =
                 usage === undefined ? null : { messageId: event.message.id, usage };

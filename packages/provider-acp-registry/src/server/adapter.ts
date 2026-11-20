@@ -351,6 +351,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           alwaysSetModel: true,
         }),
     applyModelSelection: applyAcpRegistryModelSelection,
+    validatesListedModels: true,
     mcpOverHttp: useHttpMcpServers,
     makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(runtimeOptions, catalog),
     ...(runtimeCoordinator === undefined

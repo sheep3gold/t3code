@@ -18,6 +18,11 @@ const runtimeVersionPolicy =
 
 const cloudBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 const cloudAppleTeamId = repoEnv.T3CODE_APPLE_TEAM_ID?.trim();
+// Self-hosted Clerk instances serve their own associated domain. The publishable
+// key encodes that domain, so derive it and keep the hosted relay's default.
+const clerkRelyingParty =
+  repoEnv.T3CODE_CLERK_RELYING_PARTY?.trim() ??
+  resolveClerkRelyingParty(repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -117,6 +122,21 @@ function resolveAppVariant(value: string | undefined): AppVariant {
       return "production";
     default:
       throw new Error("APP_VARIANT must be development, preview, or production.");
+  }
+}
+
+function resolveClerkRelyingParty(publishableKey: string | undefined): string | undefined {
+  if (!publishableKey?.trim()) return undefined;
+  try {
+    // Mirrors clerkFrontendApiHostnameFromPublishableKey in @t3tools/shared/relayAuth.
+    const encoded = publishableKey.trim().split("_").slice(2).join("_");
+    const frontendApi = globalThis.atob(encoded).replace(/\$$/u, "");
+    if (frontendApi.length === 0 || frontendApi.includes("/")) return undefined;
+    return new URL(`https://${frontendApi}`).hostname;
+  } catch {
+    // A publishable key this build cannot decode still builds; the hosted
+    // associated domain is the fallback.
+    return undefined;
   }
 }
 
@@ -269,8 +289,8 @@ const config: ExpoConfig = {
     // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
     appleTeamId: cloudAppleTeamId ?? "ARK85ZXQ4Z",
     associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
+      `applinks:${clerkRelyingParty ?? variant.relyingParty}`,
+      `webcredentials:${clerkRelyingParty ?? variant.relyingParty}`,
       `applinks:${HOSTED_APP_HOST}`,
     ],
     entitlements: {

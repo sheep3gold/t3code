@@ -331,20 +331,24 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ) : null}
           <SidebarUtilityItem
             icon={<LibraryBigIcon />}
-            label="Artifacts"
+            label={gt("Artifacts")}
             onClick={handleArtifactsClick}
           />
           <SidebarUtilityItem
             icon={<CalendarClockIcon />}
-            label="Schedules"
+            label={gt("Schedules")}
             onClick={handleSchedulesClick}
           />
           <SidebarUtilityItem
             icon={<WorkflowIcon />}
-            label="Workflows"
+            label={gt("Workflows")}
             onClick={handleWorkflowsClick}
           />
-          <SidebarUtilityItem icon={<BrainIcon />} label="Memory" onClick={handleMemoryClick} />
+          <SidebarUtilityItem
+            icon={<BrainIcon />}
+            label={gt("Memory")}
+            onClick={handleMemoryClick}
+          />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label={gt("Usage")}

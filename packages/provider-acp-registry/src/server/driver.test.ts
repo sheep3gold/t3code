@@ -113,8 +113,8 @@ describe("acpRegistrySnapshotReadiness", () => {
           toCustomModelSetting({
             slug: "gateway/my-model",
             name: "My model",
-            capabilities: { optionDescriptors: [fastMode] },
             contextWindowTokens: null,
+            capabilities: { optionDescriptors: [fastMode] },
           }),
         ],
       }),
