@@ -6,6 +6,7 @@ import * as Axiom from "@alchemy.run/axiom";
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Output from "alchemy/Output";
 import * as Cause from "effect/Cause";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -16,6 +17,12 @@ import * as Tracer from "effect/Tracer";
 import { relayResourceNameForStage } from "./deploymentConfig.ts";
 import { MobileMonitoring } from "./mobileTelemetry/monitoring.ts";
 import { RelayMonitoring } from "./monitoring.ts";
+
+// Self-hosted deployments on accounts without R2 (it requires billing details)
+// skip the mobile source-map bucket and its upload token entirely.
+export const sourceMapsEnabled = Config.Boolean("R2_SOURCEMAPS_ENABLED").pipe(
+  Config.withDefault(true),
+);
 
 const relayRecentSpansQuery = (dataset: string) =>
   [
@@ -87,11 +94,13 @@ export const RelayObservability = Effect.gen(function* () {
     ),
   });
 
-  const mobileSourceMaps = yield* Cloudflare.R2.Bucket("MobileSourceMapsBucket", {
-    name: mobileSourceMapsBucketName(stage),
-    // R2 refuses to delete a non-empty bucket, which would half tear down every non-prod stage.
-    forceDestroy: stage !== "prod",
-  });
+  const mobileSourceMaps = (yield* sourceMapsEnabled)
+    ? yield* Cloudflare.R2.Bucket("MobileSourceMapsBucket", {
+        name: mobileSourceMapsBucketName(stage),
+        // R2 refuses to delete a non-empty bucket, which would half tear down every non-prod stage.
+        forceDestroy: stage !== "prod",
+      })
+    : undefined;
 
   yield* Axiom.View("RelayRecentSpansView", {
     name: relayResourceNameForStage("t3-code-relay-recent-spans", stage),
@@ -123,6 +132,9 @@ const mobileSourceMapsBucketName = (stage: string) =>
  * R2's S3 access key id is the API token's id and the secret the SHA-256 of its value.
  */
 export const MobileSourceMapsUploadCredentials = Effect.gen(function* () {
+  if (!(yield* sourceMapsEnabled)) {
+    return undefined;
+  }
   const { stage } = yield* Alchemy.Stack;
   const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
   const bucketName = mobileSourceMapsBucketName(stage);

@@ -216,7 +216,9 @@ export const layer = Api.make(
         period: MobileTelemetry.MOBILE_TELEMETRY_RATE_LIMIT.periodSeconds,
       },
     });
-    const mobileSourceMaps = yield* Cloudflare.R2.ReadBucket(observability.mobileSourceMaps);
+    const mobileSourceMaps = observability.mobileSourceMaps
+      ? yield* Cloudflare.R2.ReadBucket(observability.mobileSourceMaps)
+      : undefined;
     const mobileTelemetryToken = yield* observability.mobileTelemetryIngestToken.token;
     const mobileTracesUrl = yield* observability.traces.otelTracesEndpoint;
     const mobileTracesDataset = yield* observability.traces.name;
@@ -378,23 +380,27 @@ export const layer = Api.make(
       Effect.provide(MobileTelemetry.layerSourceMaps),
       Effect.provideService(MobileTelemetry.SourceMapObjects, {
         get: (key) =>
-          mobileSourceMaps.get(key).pipe(
-            Effect.map((object) =>
-              object === null
-                ? undefined
-                : {
-                    size: object.size,
-                    text: object.text().pipe(
-                      Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-                      Effect.mapError(
-                        (cause) => new MobileTelemetry.SourceMapObjectError({ key, cause }),
-                      ),
-                    ),
-                  },
-            ),
-            Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            Effect.mapError((cause) => new MobileTelemetry.SourceMapObjectError({ key, cause })),
-          ),
+          mobileSourceMaps === undefined
+            ? Effect.undefined
+            : mobileSourceMaps.get(key).pipe(
+                Effect.map((object) =>
+                  object === null
+                    ? undefined
+                    : {
+                        size: object.size,
+                        text: object.text().pipe(
+                          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                          Effect.mapError(
+                            (cause) => new MobileTelemetry.SourceMapObjectError({ key, cause }),
+                          ),
+                        ),
+                      },
+                ),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                Effect.mapError(
+                  (cause) => new MobileTelemetry.SourceMapObjectError({ key, cause }),
+                ),
+              ),
       }),
     );
     const layerMobileTelemetry = MobileTelemetry.layer.pipe(
