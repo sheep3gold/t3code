@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
@@ -143,7 +144,8 @@ const ScheduleThreadTaskTool = Tool.make("schedule_thread_task", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ListThreadSchedulesTool = Tool.make("list_thread_schedules", {
   description:
@@ -156,7 +158,8 @@ const ListThreadSchedulesTool = Tool.make("list_thread_schedules", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const PauseThreadScheduleTool = Tool.make("pause_thread_schedule", {
   description: "Pause an active schedule owned by this thread.",
@@ -169,7 +172,8 @@ const PauseThreadScheduleTool = Tool.make("pause_thread_schedule", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ResumeThreadScheduleTool = Tool.make("resume_thread_schedule", {
   description:
@@ -183,7 +187,8 @@ const ResumeThreadScheduleTool = Tool.make("resume_thread_schedule", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const DeleteThreadScheduleTool = Tool.make("delete_thread_schedule", {
   description: "Permanently delete a schedule owned by this thread.",
@@ -196,7 +201,8 @@ const DeleteThreadScheduleTool = Tool.make("delete_thread_schedule", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const ThreadScheduleToolkit = Toolkit.make(
   ScheduleThreadTaskTool,

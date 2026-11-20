@@ -1,0 +1,16 @@
+diff --git a/ios/ObserveModule.swift b/ios/ObserveModule.swift
+index 35a0766c3d2c4bded57ce0e154ffa86f8e3e05eb..32ad1016deb51844ba41dec4cd85586744e501a4 100644
+--- a/ios/ObserveModule.swift
++++ b/ios/ObserveModule.swift
+@@ -64,7 +64,10 @@ public final class ObserveModule: Module {
+ 
+       // Broadcast the integrations config so integration libraries (e.g. expo-image) can activate.
+       self.lastIntegrations = config.integrations ?? [:]
+-      self.emit(event: "configure", payload: ["integrations": self.lastIntegrations])
++      // ExpoModulesCore 58.0.30 declares emit(payload: sending P); a dict holding
++      // actor-isolated Any values is not provably disjoint, so opt out locally.
++      nonisolated(unsafe) let configurePayload: [String: [String: Any]] = ["integrations": self.lastIntegrations]
++      self.emit(event: "configure", payload: configurePayload)
+     }
+ 
+     Function("getIntegrations") {
