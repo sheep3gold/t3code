@@ -1,11 +1,5 @@
-/**
- * Every fork-only service enters the upstream server through the layers
- * here, so an upstream merge touches a handful of one-line hooks:
- *   persistence/Sqlite.ts           fork migrations
- *   server.ts                       layerForkRepositories, layerForkRuntime, layerForkBackground
- *   mcp/McpHttpServer.ts            fork toolkit registrations
- *   orchestration-v2/ProviderTurnStartService.ts  ForkTurnContext
- */
+// Fork services enter upstream only through these layers, keeping merges to one-line hooks in
+// persistence/Sqlite.ts, server.ts, mcp/McpHttpServer.ts and ProviderTurnStartService.ts.
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -15,7 +9,6 @@ import * as ThreadWorkflowRepository from "./workflows/ThreadWorkflows.ts";
 import * as ThreadLedgerRepository from "./ledger/ThreadLedger.ts";
 import * as AgentMemories from "./memory/AgentMemories.ts";
 import { startMemorySync } from "./memory/MemorySync.ts";
-import { startMsgHubNotifications } from "./notifications/MsgHubNotificationReactor.ts";
 import { startFailedRunAutoRetry } from "./retry/FailedRunAutoRetry.ts";
 import * as ThreadScheduleRunner from "./schedules/ThreadScheduleToolkit.ts";
 import * as ThreadWorkflowRunner from "./workflows/ThreadWorkflowToolkit.ts";
@@ -37,7 +30,6 @@ export const layerForkRuntime = ForkTurnContext.layer;
 export const layerForkBackground = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* startMemorySync;
-    yield* startMsgHubNotifications;
     yield* startFailedRunAutoRetry;
     yield* ThreadScheduleRunner.startThreadScheduleRunner;
     yield* ThreadWorkflowRunner.startThreadWorkflowRunner;
