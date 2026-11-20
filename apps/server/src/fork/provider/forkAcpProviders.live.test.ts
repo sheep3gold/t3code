@@ -33,6 +33,7 @@ import * as AntigravityInstallation from "../../provider/AntigravityInstallation
 import * as CodexInstallation from "../../provider/CodexInstallation.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ModelManifest from "../../provider/ModelManifest.ts";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistryHydration from "../../provider/ProviderInstanceRegistryHydration.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -172,10 +173,8 @@ const layerLive = Layer.mergeAll(
   RuntimeLayer.layerProjectService,
 ).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerServerConfig),
-  Layer.provide(layerServerSettings),
   Layer.provide(layerProviderInstanceRegistry),
   Layer.provide(ResetCreditCoordinator.layer),
   Layer.provide(layerBackgroundPolicy),
@@ -183,6 +182,10 @@ const layerLive = Layer.mergeAll(
   Layer.provide(layerPlatformTest),
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(WorkspacePaths.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.provide(ModelManifest.layerTest),
+  Layer.provide(ProviderInstallationGate.layer),
+  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provide(layerServerSettings),
   Layer.provide(
     Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
       peek: () => Effect.succeed(noEnrichment),

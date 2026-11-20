@@ -8,6 +8,7 @@ describe("resolveVoiceComposerPresentation", () => {
       resolveVoiceComposerPresentation(
         { phase: "recording", error: null, errorAction: null },
         3,
+        (key) => key,
         true,
       ),
     ).toMatchObject({ trailingAction: "mic", statusLabel: null });

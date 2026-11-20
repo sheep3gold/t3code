@@ -37,7 +37,6 @@ function header(title: string) {
         onOpenThread={() => {}}
         rightPanelOpen={false}
         onNewThreadInProject={() => {}}
-        servedModel={null}
       />
       <div tabIndex={0}>Outside rename</div>
     </>
@@ -80,4 +79,27 @@ it("opens the thread menu on a desktop title click without waiting", async () =>
   await using screen = await render(header("New thread"));
   await screen.getByRole("button", { name: "Thread actions for New thread" }).click();
   expect(openMenu).toHaveBeenCalledOnce();
+});
+
+it("keeps the Escape that cancels a rename from also reaching window shortcuts", async () => {
+  persisted.title = "New thread";
+  await using screen = await render(header(persisted.title));
+  await screen.getByRole("button", { name: "Thread actions for New thread" }).dblClick();
+  const input = screen.getByRole("textbox", { name: "Thread title" });
+  await input.fill("Unsaved title");
+
+  // The thread find bar closes from a window keydown listener that skips handled events.
+  const windowEscapes: boolean[] = [];
+  const recordEscape = (event: KeyboardEvent) => {
+    if (event.key === "Escape") windowEscapes.push(event.defaultPrevented);
+  };
+  window.addEventListener("keydown", recordEscape);
+  using _listener = {
+    [Symbol.dispose]: () => window.removeEventListener("keydown", recordEscape),
+  };
+  await userEvent.keyboard("{Escape}");
+
+  await expect.element(input).not.toBeInTheDocument();
+  expect(persisted.title).toBe("New thread");
+  expect(windowEscapes).toEqual([true]);
 });
