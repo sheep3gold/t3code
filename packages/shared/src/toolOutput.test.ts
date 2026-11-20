@@ -19,6 +19,7 @@ describe("compactDynamicToolOutput", () => {
       { structuredContent: JSON.parse(json), content: "Ignored alternative body" },
       [{ type: "text", text: json }],
       { content: [{ text: { text: json } }], isError: false },
+      { items: [{ Json: { content: [{ type: "text", text: json }], isError: false } }] },
       json,
     ]) {
       expect(compactDynamicToolOutput(value)).toEqual(metadata);
