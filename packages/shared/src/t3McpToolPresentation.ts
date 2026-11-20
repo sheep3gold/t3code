@@ -443,8 +443,12 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
 
 export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));
 
+// Kiro titles every MCP call `Running: @<server>/<tool>`, and keeps that title once it completes.
 function normalizeT3McpToolLabel(value: string): string {
-  return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
+  return value
+    .replace(/\s+(?:complete|completed)\s*$/i, "")
+    .trim()
+    .replace(/^Running:\s*@(?=\S+\/)/i, "");
 }
 
 // Timelines resolve every work row's tool name on each update; names repeat across updates.

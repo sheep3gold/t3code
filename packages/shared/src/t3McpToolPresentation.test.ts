@@ -24,12 +24,14 @@ describe("resolveT3McpToolPresentation", () => {
         "mcp_t3-code_",
         "T3 Code ",
         "t3-code · ",
+        "Running: @t3-code/",
       ]) {
         expect(resolveT3McpToolPresentation(`${prefix}${tool} completed`), tool).toEqual(
           presentation,
         );
       }
       expect(resolveT3McpToolPresentation(`mcp__another-server__${tool}`), tool).toBeNull();
+      expect(resolveT3McpToolPresentation(`Running: @milvus/${tool}`), tool).toBeNull();
     }
   });
 
