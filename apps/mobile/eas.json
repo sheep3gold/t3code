@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 18.4.0",
-    "appVersionSource": "remote",
+    "appVersionSource": "local",
     "promptToConfigurePushNotifications": false
   },
   "build": {
@@ -88,7 +88,8 @@
         "T3CODE_IOS_PERSONAL_TEAM": "0",
         "T3CODE_IOS_BUNDLE_ID": "com.yangxin.t3code.fork",
         "T3CODE_APPLE_TEAM_ID": "Q6768H569J",
-        "EXPO_NO_CAPABILITY_SYNC": "1"
+        "EXPO_NO_CAPABILITY_SYNC": "1",
+        "T3CODE_IOS_BUILD_NUMBER": "75"
       }
     }
   },

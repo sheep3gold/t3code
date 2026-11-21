@@ -286,6 +286,7 @@ const config: ExpoConfig = {
     supportsTablet: true,
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
+    buildNumber: process.env.T3CODE_IOS_BUILD_NUMBER,
     // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
     appleTeamId: cloudAppleTeamId ?? "ARK85ZXQ4Z",
     associatedDomains: [
