@@ -82,6 +82,7 @@
     },
     "fork-testflight": {
       "extends": "production",
+      "autoIncrement": false,
       "distribution": "store",
       "channel": "fork-testflight",
       "env": {
