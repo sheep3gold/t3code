@@ -51,3 +51,6 @@ node_modules/
 .pnpm-store/
 
 /packages/ssh/.ssh-launcher-test-*/
+
+# Local TestFlight build artifacts (archived to ~/ipa-archive, never tracked)
+/t3code-*.ipa
