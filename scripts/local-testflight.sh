@@ -24,6 +24,18 @@ cd "$REPO" || exit 9
 rm -rf node_modules
 pnpm install --prefer-offline >>"$LOG" 2>&1 || { echo "EXIT:1 (pnpm install)" >>"$LOG"; tail -5 "$LOG"; exit 1; }
 
+# The relay chain (EAS Workflows) shares this ASC app and consumes build
+# numbers too, so a static number in eas.json collides sooner or later. Query
+# ASC for max+1 every build; a failed query aborts rather than risking the
+# altool silent-rejection (-19232 prints "No errors").
+NEXT_BUILD="$(python3 "$REPO/scripts/asc-next-build-number.py" 2>/dev/null || true)"
+if [[ ! "$NEXT_BUILD" =~ ^[0-9]+$ ]]; then
+  echo "BUILD FAILED: ASC build-number query failed (network or credentials), log: $LOG"
+  exit 1
+fi
+export T3CODE_IOS_BUILD_NUMBER="$NEXT_BUILD"
+echo "build number: $NEXT_BUILD (ASC max+1)" >>"$LOG"
+
 cd "$REPO/apps/mobile" || exit 9
 IPA="$REPO/$NAME.ipa"
 "$EAS" build --platform ios --profile fork-testflight --local --non-interactive --output "$IPA" >>"$LOG" 2>&1
