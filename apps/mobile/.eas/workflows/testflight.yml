@@ -1,8 +1,11 @@
 name: Fork iOS TestFlight
-# Auto-triggers on push to main via Expo GitHub App.
+# Manual only. The automatic push trigger is gone on purpose: the local
+# build pipeline (scripts/local-testflight.sh) is the release path, and every
+# push to main used to spend Expo build quota plus an App Store Connect
+# build number shared with the relay chain. Run this from the Expo dashboard
+# when a cloud build is genuinely needed.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch: {}
 jobs:
   build_ios:
     type: build
