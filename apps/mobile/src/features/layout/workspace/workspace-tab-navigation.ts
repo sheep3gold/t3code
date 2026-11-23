@@ -26,15 +26,10 @@ export function workspaceTabColumns(
   return columns && (platform === "ios" || (platform === "android" && tab === "settings"));
 }
 
-// Pages a Settings row opens, minus the project-scoped pages (overview, artifacts, schedules):
-// they show the project chosen in the Settings scope, which resets whenever Settings closes.
-const PROJECT_SCOPED_SETTINGS_PAGES: ReadonlySet<string> = new Set([
-  "SettingsProjectOverview",
-  "SettingsArtifacts",
-  "SettingsSchedules",
-]);
+// Pages a Settings row opens, minus Project overview: it shows the project chosen in the
+// Settings scope, which resets whenever Settings closes.
 const REMEMBERED_SETTINGS_PAGES: ReadonlySet<string> = new Set(
-  SETTINGS_PAGE_TARGETS.filter((page) => !PROJECT_SCOPED_SETTINGS_PAGES.has(page)),
+  SETTINGS_PAGE_TARGETS.filter((page) => page !== "SettingsProjectOverview"),
 );
 
 export function rememberedSettingsPage(selections: WorkspaceSelections): SettingsPageTarget {
@@ -288,7 +283,7 @@ export function workspaceTabNavigationState<
   }
   const home = state.routes.find((route) => route.name === "Home") ?? { name: "Home" };
   const detail =
-    options.columns && tab !== "usage"
+    options.columns && (tab === "threads" || tab === "pullRequests")
       ? detailRoute(state, tab, selections, options.check, options.seedPullRequest)
       : undefined;
   const routes = [keyed(home), ...(detail ? [keyedPage(detail)] : []), ...overlays];
