@@ -60,7 +60,9 @@ import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { latestServedModel } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { freshSessionBannerItem } from "./chat/ComposerFreshSession";
+import { heldComposerSendBannerItem } from "./chat/ComposerHeldSendBanner";
 import { armFreshSession, disarmFreshSession, useFreshSessionArmed } from "./chat/freshSessionArms";
+import { cancelHeldComposerSend, useComposerSendHeld } from "./chat/preparingComposerImages";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
 import { useChatShortcuts } from "./chat/useChatShortcuts";
@@ -105,10 +107,9 @@ import {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   getUserQueuedThreadRuns,
-  threadSteersDuringCompaction,
+  threadCanSteer,
   threadSupportsProviderHandoff,
 } from "@t3tools/client-runtime/state/thread-workflows";
-import { compactionBlocksSteering } from "@t3tools/client-runtime/state/composer-dispatch";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
@@ -262,6 +263,7 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  composerTargetKey,
   useComposerDraftStore,
   DraftId,
 } from "../composerDraftStore";
@@ -339,6 +341,7 @@ import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
+  offersWorkspaceModes,
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
   shouldShowComposerContextStrip,
@@ -982,6 +985,20 @@ export default function ChatView(props: ChatViewProps) {
         },
       };
     }
+    // An agent step of a workflow run leads back to the run, which is where its work is read.
+    const workflowRun = activeThread?.workflowRun ?? null;
+    if (workflowRun !== null) {
+      return {
+        title: `${workflowRun.workflow} · ${workflowRun.step}`,
+        relation: { label: gt("Step of the workflow run"), actionLabel: gt("Open run") },
+        open: (): void => {
+          void navigate({
+            to: "/workflows",
+            search: { env: workflowRun.environmentId, run: workflowRun.runId },
+          });
+        },
+      };
+    }
     if (delegatedFrom === null || delegatedFromRef === null) return null;
     const parentRef = delegatedFromRef;
     return {
@@ -1093,6 +1110,11 @@ export default function ChatView(props: ChatViewProps) {
     recovery: activeThreadShell?.limitRecovery,
     snoozedUntil: activeThreadShell?.snoozedUntil,
   });
+  // The run whose limit rows client-runtime hides (deriveUsageLimitNoticeRows).
+  const usageLimitRunId =
+    serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
+      ? (serverLatestRun?.runId ?? null)
+      : null;
   const timelineThreadError =
     limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
       ? null
@@ -1552,12 +1574,10 @@ export default function ChatView(props: ChatViewProps) {
   const isCompacting =
     (isSendBusy || phase === "connecting" || phase === "running") &&
     (compactionRunning || compactCommandIsActive);
-  const compactionBlocksSteer = compactionBlocksSteering({
+  const canSteer = threadCanSteer(serverProjection, {
     compactCommandIsActive,
     compactionRunning,
-    steersDuringCompaction: threadSteersDuringCompaction(serverProjection),
-    run: serverProjection?.runs.find((run) => run.id === activeRuntime?.activeRunId),
-    messages: serverProjection?.messages,
+    activeRunId: activeRuntime?.activeRunId,
   });
   const isWorking = deriveTimelineWorking({
     phase,
@@ -1713,7 +1733,6 @@ export default function ChatView(props: ChatViewProps) {
     const current = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
     store.setPrompt(composerDraftTarget, toggleOptionInPrompt(current, label));
   };
-
   const displayedThreadRef = parseScopedThreadKey(displayedTimelineKey);
   const {
     worktreeSetup,
@@ -2415,6 +2434,11 @@ export default function ChatView(props: ChatViewProps) {
         activeProjectSettings.settings.newWorktreesStartFromOrigin)
       : false;
   const worktreeRepositoryChoices = useWorktreeRepositoryChoices(activeProject);
+  const workspaceModesOffered = offersWorkspaceModes({
+    isScratchProject: activeProjectIsScratch,
+    isGitRepo,
+    tracksGitRepositories: worktreeRepositoryChoices.tracksGitRepositories,
+  });
   const rememberedWorktreeRepositories = useRememberedWorktreeRepositories(activeProject ?? null);
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
@@ -2729,7 +2753,16 @@ export default function ChatView(props: ChatViewProps) {
   // While a question or approval owns the composer, its text answers that, not the agent.
   const freshSessionCommandAvailable =
     freshSessionAvailable && activePendingApproval === null && pendingUserInputs.length === 0;
-  const toggleKeepFullHistory = () => setKeepFullHistory(routeThreadKey, !keepFullHistory);
+  const composerDraftTargetKey = composerTargetKey(composerDraftTarget);
+  const composerSendHeld = useComposerSendHeld(composerDraftTargetKey);
+  const cancelHeldSendStable = useStableCallback(() => {
+    cancelHeldComposerSend(composerDraftTargetKey);
+    focusComposerStable();
+  });
+  const toggleKeepFullHistory = () => {
+    cancelHeldComposerSend(composerDraftTargetKey);
+    setKeepFullHistory(routeThreadKey, !keepFullHistory);
+  };
   const toggleKeepFullHistoryStable = useStableCallback(toggleKeepFullHistory);
   const armFreshSessionStable = useStableCallback(() => armFreshSession(routeThreadKey));
   const handleRestoreThreadBranch = () => {
@@ -2840,6 +2873,14 @@ export default function ChatView(props: ChatViewProps) {
       freshSessionPending && activePendingApproval === null
         ? [freshSessionBannerItem(() => disarmFreshSession(routeThreadKey), messages)]
         : [];
+    const heldSendItems = composerSendHeld
+      ? [
+          heldComposerSendBannerItem(
+            { draftTarget: composerDraftTarget, onCancel: cancelHeldSendStable },
+            messages,
+          ),
+        ]
+      : [];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
         ...feedbackBannerItems,
@@ -2849,6 +2890,7 @@ export default function ChatView(props: ChatViewProps) {
         ...usageLimitsItems,
         ...projectCloneItems,
         ...freshSessionItems,
+        ...heldSendItems,
         ...systemComposerBannerItems,
       ];
     }
@@ -2860,6 +2902,7 @@ export default function ChatView(props: ChatViewProps) {
       ...usageLimitsItems,
       ...projectCloneItems,
       ...freshSessionItems,
+      ...heldSendItems,
       ...systemComposerBannerItems,
       branchMismatchBannerItem(
         {
@@ -3125,7 +3168,7 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     setThreadError,
   });
-  const { onSend } = useComposerSend({
+  const { onSend, captureDetachedSend } = useComposerSend({
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -3691,6 +3734,11 @@ export default function ChatView(props: ChatViewProps) {
                       ? messages(activeActivityRun.providerStartingLabelMsg)
                       : null
                   }
+                  providerStarting={
+                    activeActivityRun?.providerStartingLabelMsg
+                      ? (activeActivityRun.providerStarting ?? null)
+                      : null
+                  }
                   worktreeSetup={worktreeSetup}
                   onCancelWorktreeSetup={onCancelWorktreeSetupStable}
                   retryableWorkspacePreparationRunIds={retryableWorkspacePreparationRunIds}
@@ -3704,6 +3752,7 @@ export default function ChatView(props: ChatViewProps) {
                   listRef={legendListRef}
                   runs={serverProjection?.runs ?? []}
                   latestRun={activeActivityRun}
+                  usageLimitRunId={usageLimitRunId}
                   announcedRun={announcedRun(activeActivityRun, serverProjection?.runs ?? [])}
                   detailBehindShell={isDetailBehindShell(
                     activeLatestRun,
@@ -3891,7 +3940,7 @@ export default function ChatView(props: ChatViewProps) {
                                   isLocalDraftThread && activeProject === null
                                 }
                                 phase={phase}
-                                canSteer={!compactionBlocksSteer}
+                                canSteer={canSteer}
                                 canInterrupt={canInterruptRunningThread}
                                 isSendBusy={
                                   (isSendBusy && !sendQueuesBehindSetup) ||
@@ -3986,6 +4035,7 @@ export default function ChatView(props: ChatViewProps) {
                                 onPageScrollRelease={onComposerPageScrollReleaseStable}
                                 onCompactContext={onComposerCompactContextStable}
                                 onSend={onComposerSendStable}
+                                captureDetachedSend={captureDetachedSend}
                                 onResume={onComposerResumeStable}
                                 onInterrupt={onInterruptStable}
                                 onSelectActivePendingUserInputOption={
@@ -4011,8 +4061,14 @@ export default function ChatView(props: ChatViewProps) {
                                 onExpandImage={onExpandTimelineImageStable}
                                 onFileOpen={openFileAttachmentStable}
                                 editingQueuedAttachments={queuedRunEdit.editingAttachments}
+                                removedEditingQueuedAttachments={
+                                  queuedRunEdit.removedEditingAttachments
+                                }
                                 onRemoveEditingQueuedAttachment={
                                   queuedRunEdit.removeEditingAttachment
+                                }
+                                onRestoreEditingQueuedAttachment={
+                                  queuedRunEdit.restoreEditingAttachment
                                 }
                               />
                             )}
@@ -4033,9 +4089,7 @@ export default function ChatView(props: ChatViewProps) {
                                   projectId={activeThread.projectId}
                                   worktreePath={activeThread.worktreePath}
                                   isServerThread={isServerThread}
-                                  showGitControls={
-                                    isGitRepo || worktreeRepositoryChoices.tracksGitRepositories
-                                  }
+                                  showGitControls={workspaceModesOffered}
                                   showBranchControls={isGitRepo}
                                   {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                   onEnvModeChange={onEnvModeChangeStable}
@@ -4154,6 +4208,7 @@ export default function ChatView(props: ChatViewProps) {
                   gitCwd={gitCwd}
                   workspaceMutationId={workspaceRevision.revision}
                   isGitRepo={isGitRepo}
+                  offersWorkspaceModes={workspaceModesOffered}
                   envLocked={envLocked}
                   availableEnvironments={logicalProjectEnvironments}
                   autoEnvironmentLabel={autoEnvironmentLabel}
