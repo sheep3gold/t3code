@@ -285,6 +285,7 @@ overrides:
   '@clerk/expo-native-components': 0.4.8
   '@cursor/sdk': 1.5.0
   expo-sharing: 58.0.23
+  expo-modules-jsi: 58.0.23
   expo-widgets: 58.0.29
   '@ff-labs/fff-node': 0.11.0
   '@legendapp/list': 3.9.0
@@ -385,6 +386,7 @@ patchedDependencies:
   electron-updater@6.8.9: 91b5648a7eed42761523ef542ebb7e548b037eda41d66533c8152ac65ac72155
   expo-audio@58.0.12: ba2ac6874680097b41e03051641696887cc84e875ca157075aa7aeb33e200cb2
   expo-modules-core@58.1.0: a1d407e9a9fbf41ad92315579865ee611f2dd5d1c3c7f80526a54bcacec408f0
+  expo-modules-jsi@58.0.23: d5eb9e1d73b8b343710fc7d4f38e146d939e02d46e5cabfd2aed64ef488bf6d3
   expo-network@58.0.5: 159c2d760d1cd5102e95df51c20600111e7a72096ef0daea8215d50cae48bd98
   expo-observe@58.0.19: 639f9eba3df9cda6d51003b1220016cf11ed2aad243e5ffb4081f57adf2c7555
   expo-sharing@58.0.23: bde74fcd671c701e96c5e94796f2dc8847da1578e3e8bd963c65559dbf1aae97
@@ -19923,7 +19925,7 @@ snapshots:
 
   expo-modules-core@58.1.0(patch_hash=a1d407e9a9fbf41ad92315579865ee611f2dd5d1c3c7f80526a54bcacec408f0)(react-native-worklets@0.14.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)(supports-color@8.1.1))(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0):
     dependencies:
-      expo-modules-jsi: 58.0.23(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))
+      expo-modules-jsi: 58.0.23(patch_hash=d5eb9e1d73b8b343710fc7d4f38e146d939e02d46e5cabfd2aed64ef488bf6d3)(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))
       expo-modules-macros: 0.33.0
       invariant: 2.2.4
       react: 19.3.0
@@ -19931,7 +19933,7 @@ snapshots:
     optionalDependencies:
       react-native-worklets: 0.14.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)(supports-color@8.1.1)
 
-  expo-modules-jsi@58.0.23(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6)):
+  expo-modules-jsi@58.0.23(patch_hash=d5eb9e1d73b8b343710fc7d4f38e146d939e02d46e5cabfd2aed64ef488bf6d3)(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6)):
     dependencies:
       react-native: 0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6)
 
