@@ -114,6 +114,7 @@ overrides:
   "@clerk/expo-native-components": 0.4.8
   "@cursor/sdk": 1.5.0
   expo-sharing: 58.0.23
+  expo-modules-jsi: 58.0.23
   expo-widgets: 58.0.29
   "@ff-labs/fff-node": 0.11.0
   "@legendapp/list": 3.9.0
@@ -285,6 +286,7 @@ patchedDependencies:
   # Android: double-tap zoom no longer cancels itself, and taps near a link open it.
   react-native-pdf-jsi@6.1.0: patches/react-native-pdf-jsi@6.1.0.patch
   expo-observe@58.0.19: patches/expo-observe@58.0.19.patch
+  expo-modules-jsi@58.0.23: patches/expo-modules-jsi@58.0.23.patch
   # Android: a language change applies at once instead of reading back the old locale
   # before the async native write lands.
   gt-react-native@11.4.18: patches/gt-react-native@11.4.18.patch
