@@ -1141,6 +1141,7 @@ function ThreadRouteContent(
         onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
         onResumeQueue={composer.canResume ? handleResumeQueue : null}
         onSendMessage={composer.onSendMessage}
+        onSendOption={composer.onSendOption}
         offersSideChat={composer.sideChatUnavailableReason === null}
         onSendCommand={composer.onSendCommand}
         onReconnectEnvironment={handleReconnectEnvironment}
