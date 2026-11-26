@@ -420,25 +420,14 @@ interface GlmLimit {
   readonly number?: number;
   readonly percentage?: number;
   readonly nextResetTime?: number;
+  readonly usage?: number;
+  readonly currentValue?: number;
 }
 
-const glmLaneWindows = Effect.fn("UsageQuotaProbe.glmLaneWindows")(function* (
-  client: HttpClient.HttpClient,
-  token: string,
-) {
-  const document = yield* getJson(
-    client,
-    "glm",
-    HttpClientRequest.get(GLM_QUOTA_URL).pipe(
-      HttpClientRequest.setHeader("Authorization", token),
-      HttpClientRequest.acceptJson,
-    ),
-  );
-  const limits =
-    typeof document === "object" && document !== null
-      ? ((document as { data?: { limits?: GlmLimit[] } }).data?.limits ?? [])
-      : [];
-
+// `unit` is the window's time unit and `number` its length: unit 3 + number 5
+// is the rolling 5-hour token window, unit 6 the week, TIME_LIMIT unit 5 the
+// monthly MCP call allowance.
+const glmLimitWindows = (limits: ReadonlyArray<GlmLimit>): ServerProviderUsageWindow[] => {
   const windows: ServerProviderUsageWindow[] = [];
   for (const limit of limits) {
     if (typeof limit.percentage !== "number") continue;
@@ -448,13 +437,22 @@ const glmLaneWindows = Effect.fn("UsageQuotaProbe.glmLaneWindows")(function* (
         ? { resetsAt: isoFromEpochMs(limit.nextResetTime) }
         : {}),
     } as const;
-    // unit 3 = 5-hour MCP concurrent lane; unit 6 = weekly token quota.
-    if (limit.unit === 3) {
+    if (limit.type === "TIME_LIMIT") {
+      windows.push({
+        id: "mcp_calls",
+        kind: "monthly",
+        label:
+          typeof limit.currentValue === "number" && typeof limit.usage === "number"
+            ? `MCP 调用（${limit.currentValue}/${limit.usage} 次）`
+            : "MCP 调用额度",
+        ...base,
+      });
+    } else if (limit.unit === 3) {
       windows.push({
         id: "five_hour",
         kind: "session",
-        label: `5 小时并发（${limit.number ?? "?"} 路）`,
-        windowDurationMins: 300,
+        label: `${limit.number ?? 5} 小时窗口`,
+        windowDurationMins: (limit.number ?? 5) * 60,
         ...base,
       });
     } else if (limit.unit === 6) {
@@ -475,6 +473,25 @@ const glmLaneWindows = Effect.fn("UsageQuotaProbe.glmLaneWindows")(function* (
     }
   }
   return windows;
+};
+
+const glmLaneWindows = Effect.fn("UsageQuotaProbe.glmLaneWindows")(function* (
+  client: HttpClient.HttpClient,
+  token: string,
+) {
+  const document = yield* getJson(
+    client,
+    "glm",
+    HttpClientRequest.get(GLM_QUOTA_URL).pipe(
+      HttpClientRequest.setHeader("Authorization", token),
+      HttpClientRequest.acceptJson,
+    ),
+  );
+  return glmLimitWindows(
+    typeof document === "object" && document !== null
+      ? ((document as { data?: { limits?: GlmLimit[] } }).data?.limits ?? [])
+      : [],
+  );
 });
 
 const glmProbe = Effect.fn("UsageQuotaProbe.glmProbe")(function* (
@@ -493,19 +510,44 @@ const glmProbe = Effect.fn("UsageQuotaProbe.glmProbe")(function* (
   return { checkedAt, windows } satisfies ServerProviderUsageLimits;
 });
 
-/* GLM Coding Plan: the same lane endpoint, plus the member usage dashboard
- * the key's query link lives on (glmuse) — its plan-level allowance and
- * expiry exist nowhere in Zhipu's own API, and it indexes keys by the
- * 28-char prefix, so the full key never leaves this machine. */
+/* GLM Coding Plan: the glmuse member dashboard is the source of record (plan
+ * allowance and expiry exist nowhere in Zhipu's API); Zhipu's lane endpoint is
+ * only a fallback. glmuse indexes keys by their 28-char prefix, so the full key
+ * never leaves this machine. */
 
 interface GlmCodingPlanDoc {
   readonly success?: boolean;
   readonly data?: {
     readonly usageLimit?: unknown;
-    readonly remaining?: unknown;
+    readonly usageCount?: unknown;
+    readonly totalUsageCount?: unknown;
+    readonly settleUsageCount?: unknown;
+    readonly settleMonthCount?: unknown;
+    readonly rate?: unknown;
     readonly expireAt?: unknown;
+    readonly quotaData?: { readonly limits?: unknown };
   };
 }
+
+/** Tokens charged against the plan, as the dashboard computes them: the
+ * settled (peak-weighted) count once a month has settled, else the raw
+ * cumulative count times the key's rate. Its `remaining` field ignores
+ * settlement and overstates what is left. */
+const glmCodingUsedTokens = (data: NonNullable<GlmCodingPlanDoc["data"]>): number | null => {
+  const settled = Number(data.settleUsageCount);
+  if (
+    Number(data.settleMonthCount) > 0 &&
+    data.settleUsageCount != null &&
+    Number.isFinite(settled)
+  )
+    return Math.round(settled);
+  const raw = Number(
+    Object.hasOwn(data, "totalUsageCount") ? data.totalUsageCount : data.usageCount,
+  );
+  if (data.totalUsageCount === null || !Number.isFinite(raw)) return null;
+  const rate = Number(data.rate);
+  return Math.round(raw * (Number.isFinite(rate) && rate > 0 ? rate : 1));
+};
 
 const glmCodingProbe = Effect.fn("UsageQuotaProbe.glmCodingProbe")(function* (
   client: HttpClient.HttpClient,
@@ -519,35 +561,36 @@ const glmCodingProbe = Effect.fn("UsageQuotaProbe.glmCodingProbe")(function* (
     return windowUnavailable(checkedAt, "glmCoding 缺少可用的 API key");
   }
 
-  const [lanes, plan] = yield* Effect.all(
-    [
-      glmLaneWindows(client, token).pipe(
-        Effect.map((windows) => ({ tag: "ok" as const, windows })),
-        Effect.catch((error) => Effect.succeed({ tag: "fail" as const, detail: error.detail })),
-      ),
-      getJson(
-        client,
-        "glmCoding",
-        HttpClientRequest.post(GLM_CODING_USAGE_URL).pipe(
-          HttpClientRequest.bodyJsonUnsafe({ apiKey: token.slice(0, 28) }),
-          HttpClientRequest.acceptJson,
-        ),
-      ).pipe(
-        Effect.map((document) => ({ tag: "ok" as const, document })),
-        Effect.catch((error) => Effect.succeed({ tag: "fail" as const, detail: error.detail })),
-      ),
-    ],
-    { concurrency: "unbounded" },
+  const plan = yield* getJson(
+    client,
+    "glmCoding",
+    HttpClientRequest.post(GLM_CODING_USAGE_URL).pipe(
+      HttpClientRequest.bodyJsonUnsafe({ apiKey: token.slice(0, 28) }),
+      HttpClientRequest.acceptJson,
+    ),
+  ).pipe(
+    Effect.map((document) => ({ tag: "ok" as const, document })),
+    Effect.catch((error) => Effect.succeed({ tag: "fail" as const, detail: error.detail })),
   );
+  const data = plan.tag === "ok" ? (plan.document as GlmCodingPlanDoc | null)?.data : undefined;
+  const planLimits = data?.quotaData?.limits;
+  const planLanes = Array.isArray(planLimits) ? glmLimitWindows(planLimits as GlmLimit[]) : [];
+  const lanes =
+    planLanes.length > 0
+      ? { tag: "ok" as const, windows: planLanes }
+      : yield* glmLaneWindows(client, token).pipe(
+          Effect.map((windows) => ({ tag: "ok" as const, windows })),
+          Effect.catch((error) => Effect.succeed({ tag: "fail" as const, detail: error.detail })),
+        );
 
   const windows: ServerProviderUsageWindow[] = lanes.tag === "ok" ? [...lanes.windows] : [];
-  if (plan.tag === "ok") {
-    const data = (plan.document as GlmCodingPlanDoc | null)?.data;
-    const usageLimit = Number(data?.usageLimit);
-    const remaining = Number(data?.remaining);
-    if (Number.isFinite(usageLimit) && usageLimit > 0 && Number.isFinite(remaining)) {
+  if (data !== undefined) {
+    const usageLimit = Number(data.usageLimit);
+    const used = glmCodingUsedTokens(data);
+    if (Number.isFinite(usageLimit) && usageLimit > 0 && used !== null) {
+      const remaining = Math.max(0, usageLimit - used);
       // expireAt is UTC; the dashboard renders it in Beijing time (+8h, read as UTC parts).
-      const expireMs = typeof data?.expireAt === "string" ? Date.parse(data.expireAt) : NaN;
+      const expireMs = typeof data.expireAt === "string" ? Date.parse(data.expireAt) : NaN;
       const expireParts = Number.isFinite(expireMs)
         ? DateTime.toParts(DateTime.add(DateTime.makeUnsafe(expireMs), { hours: 8 }))
         : null;
@@ -558,11 +601,8 @@ const glmCodingProbe = Effect.fn("UsageQuotaProbe.glmCodingProbe")(function* (
           expireParts !== null
             ? `总额度（${expireParts.month}月${expireParts.day}日 到期）`
             : "Coding Plan 总额度",
-        usedPercent:
-          Math.round(
-            Math.max(0, Math.min(100, ((usageLimit - remaining) / usageLimit) * 100)) * 10,
-          ) / 10,
-        remaining: Math.max(0, Math.round(remaining)),
+        usedPercent: Math.round(Math.max(0, Math.min(100, (used / usageLimit) * 100)) * 10) / 10,
+        remaining: Math.round(remaining),
         remainingUnit: "tokens",
       });
     }
