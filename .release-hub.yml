@@ -6,6 +6,10 @@ deploy:
   host: local
   workdir: /opt/t3code
   unit: t3code-deploy
+  # 每次合上游都会删几十个文件（.repos 里换掉的参考源码、上游移走的源码、旧 patch、
+  # 重新打包的 .tgz）。/opt/t3code 只是构建用的发布副本，残骸没有任何东西靠着它：
+  # 备份之后直接删，不再拦下发布等人手删（2026-11 一个月拦了 13 次）。
+  prune_retired: true
   units:
     - deploy/t3code-deploy.service
   exclude:
@@ -26,3 +30,22 @@ deploy:
     kind: http
     url: http://127.0.0.1:3773/
     expect_status: 200
+
+# 发布后的独立验收。没有这一段时每次发布都是 inconclusive（110 次里 106 次）：
+# 验收会话找不到仓库声明的检查，T3 的日志又只在 journald 里。
+verification:
+  checks:
+    - name: t3code web
+      kind: http
+      host: local
+      url: http://127.0.0.1:3773/
+      expect_status: 200
+    - name: t3code environment
+      kind: http
+      host: local
+      url: http://127.0.0.1:3773/.well-known/t3/environment
+      expect_status: 200
+      contains: '"environmentId"'
+  logs:
+    required: false
+    reason: "T3 服务器日志只在 journald（t3code.service），未接入 OpenObserve applog"
