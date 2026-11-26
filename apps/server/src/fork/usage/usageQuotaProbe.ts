@@ -1016,6 +1016,9 @@ interface AntigravityQuotaGroup {
 }
 
 const ANTIGRAVITY_TOKEN_FILE = "antigravity-acp/acp_token.json";
+/** The 1.5 CLI keeps its sign-in here when file storage is forced; it stores no
+ * OAuth client, so the access token can only be used as-is until it expires. */
+const ANTIGRAVITY_CLI_TOKEN_FILE = "antigravity-acp/antigravity-oauth-token";
 /** Code Assist rejects quota reads without a client user agent (403 SUBSCRIPTION_REQUIRED). */
 const ANTIGRAVITY_USER_AGENT = "antigravity/1.1.1 linux/amd64";
 
@@ -1107,9 +1110,9 @@ const antigravityGroupName = (displayName: string | undefined): string =>
 
 /**
  * Mirrors what the agent's `/usage` shows: `retrieveUserQuotaSummary` groups
- * (Gemini, Claude+GPT) with a 5-hour and a weekly bucket each. The token is
- * minted from the profile's stored refresh token and never persisted; both
- * calls ride the mihomo exit the instance itself is configured to use.
+ * (Gemini, Claude+GPT) with a 5-hour and a weekly bucket each. The access
+ * token comes from the legacy refresh-token file or the 1.5 CLI's token file
+ * and is never persisted; the calls ride the mihomo exit the instance uses.
  */
 const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function* (
   fileSystem: FileSystem.FileSystem,
@@ -1117,46 +1120,77 @@ const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function*
   profileDirectory: string,
 ) {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const tokenText = yield* fileSystem
-    .readFileString(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))
-    .pipe(Effect.mapError(probeError("antigravity")));
-  const stored = yield* decodeJson(tokenText).pipe(Effect.mapError(probeError("antigravity")));
-  const credentials =
-    typeof stored === "object" && stored !== null
-      ? (stored as Record<string, unknown>)
-      : ({} as Record<string, unknown>);
-  const field = (name: string) =>
-    typeof credentials[name] === "string" ? (credentials[name] as string) : "";
-  if (field("refresh_token").length === 0 || field("client_id").length === 0) {
-    return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
-  }
+  let accessToken: string;
+  let projectId = "";
+  if (yield* fileSystem.exists(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))) {
+    const tokenText = yield* fileSystem
+      .readFileString(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))
+      .pipe(Effect.mapError(probeError("antigravity")));
+    const stored = yield* decodeJson(tokenText).pipe(Effect.mapError(probeError("antigravity")));
+    const credentials =
+      typeof stored === "object" && stored !== null
+        ? (stored as Record<string, unknown>)
+        : ({} as Record<string, unknown>);
+    const field = (name: string) =>
+      typeof credentials[name] === "string" ? (credentials[name] as string) : "";
+    if (field("refresh_token").length === 0 || field("client_id").length === 0) {
+      return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
+    }
 
-  const refreshed = yield* getJsonViaProxy(
-    "antigravity",
-    "oauth2.googleapis.com",
-    "/token",
-    "",
-    {},
-    {
-      contentType: "application/x-www-form-urlencoded",
-      body: new URLSearchParams({
-        client_id: field("client_id"),
-        client_secret: field("client_secret"),
-        refresh_token: field("refresh_token"),
-        grant_type: "refresh_token",
-      }).toString(),
-    },
-  );
-  const accessToken =
-    typeof refreshed === "object" && refreshed !== null
-      ? (refreshed as { access_token?: unknown }).access_token
-      : undefined;
-  if (typeof accessToken !== "string" || accessToken.length === 0) {
-    return windowUnavailable(checkedAt, "Antigravity 刷新 Google 凭证失败");
+    const refreshed = yield* getJsonViaProxy(
+      "antigravity",
+      "oauth2.googleapis.com",
+      "/token",
+      "",
+      {},
+      {
+        contentType: "application/x-www-form-urlencoded",
+        body: new URLSearchParams({
+          client_id: field("client_id"),
+          client_secret: field("client_secret"),
+          refresh_token: field("refresh_token"),
+          grant_type: "refresh_token",
+        }).toString(),
+      },
+    );
+    const refreshedAccess =
+      typeof refreshed === "object" && refreshed !== null
+        ? (refreshed as { access_token?: unknown }).access_token
+        : undefined;
+    if (typeof refreshedAccess !== "string" || refreshedAccess.length === 0) {
+      return windowUnavailable(checkedAt, "Antigravity 刷新 Google 凭证失败");
+    }
+    accessToken = refreshedAccess;
+    projectId = field("project_id");
+  } else {
+    if (!(yield* fileSystem.exists(path.join(profileDirectory, ANTIGRAVITY_CLI_TOKEN_FILE)))) {
+      return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
+    }
+    const cliText = yield* fileSystem
+      .readFileString(path.join(profileDirectory, ANTIGRAVITY_CLI_TOKEN_FILE))
+      .pipe(Effect.mapError(probeError("antigravity")));
+    const cliStored = yield* decodeJson(cliText).pipe(Effect.mapError(probeError("antigravity")));
+    const token =
+      typeof cliStored === "object" && cliStored !== null
+        ? ((cliStored as { token?: unknown }).token as Record<string, unknown> | undefined)
+        : undefined;
+    const access = typeof token?.access_token === "string" ? token.access_token : "";
+    if (access.length === 0) {
+      return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
+    }
+    const nowMillis = DateTime.toEpochMillis(yield* DateTime.now);
+    const expiry = typeof token?.expiry === "string" ? token.expiry : "";
+    if (!(Date.parse(expiry) > nowMillis + 60_000)) {
+      return windowUnavailable(
+        checkedAt,
+        "Antigravity 登录已过期，先启动一次 Antigravity 会话续期后刷新",
+      );
+    }
+    accessToken = access;
   }
 
   const projectBody = yield* encodeJsonBody(
-    field("project_id").length > 0 ? { project: field("project_id") } : {},
+    projectId.length > 0 ? { project: projectId } : {},
   ).pipe(Effect.mapError(probeError("antigravity")));
   const document = yield* getJsonViaProxy(
     "antigravity",

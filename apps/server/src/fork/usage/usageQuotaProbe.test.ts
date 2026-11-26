@@ -469,6 +469,23 @@ describe("usageQuotaProbe", () => {
       const signedOut = yield* readInstanceUsageLimits(settings, "antigravity", { stateDir });
       assert.strictEqual(signedOut?.unavailable?.reason, "probeFailed");
       assert.include(signedOut?.unavailable?.message ?? "", "未登录");
+
+      // No token file at all (fresh profile): signed out, not a probe crash.
+      clearUsageQuotaProbeCache();
+      yield* fileSystem.remove(path.join(profile, "antigravity-acp", "acp_token.json"));
+      const noToken = yield* readInstanceUsageLimits(settings, "antigravity", { stateDir });
+      assert.strictEqual(noToken?.unavailable?.reason, "probeFailed");
+      assert.include(noToken?.unavailable?.message ?? "", "未登录");
+
+      // The 1.5 CLI's token file with an expired access token.
+      clearUsageQuotaProbeCache();
+      yield* fileSystem.writeFileString(
+        path.join(profile, "antigravity-acp", "antigravity-oauth-token"),
+        '{"token":{"access_token":"ya29.stale","expiry":"2026-01-01T00:00:00Z"}}',
+      );
+      const expired = yield* readInstanceUsageLimits(settings, "antigravity", { stateDir });
+      assert.strictEqual(expired?.unavailable?.reason, "probeFailed");
+      assert.include(expired?.unavailable?.message ?? "", "已过期");
     }).pipe(Effect.scoped, Effect.provide(layers)),
   );
 
