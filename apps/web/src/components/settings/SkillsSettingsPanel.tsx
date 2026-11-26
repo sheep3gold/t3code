@@ -32,14 +32,10 @@ import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 /**
- * One switch per discovered skill, stored globally in the environment's
- * `disabledSkills`. Turning a skill off removes it from every provider
- * snapshot the server publishes: the `$` menu stops offering it and a
- * hand-typed `$name` mention is sent as literal text instead of dispatching.
- *
- * Claude user-scope skills can also be edited and deleted here: those write
- * the SKILL.md under the instance's config dir on the server, which is the
- * same file `discoverClaudeSkills` scans, so the `$` menu follows the edit.
+ * One switch per skill, stored in the environment's `disabledSkills`: off
+ * removes it from every provider snapshot, so the `$` menu stops offering it
+ * and Claude sends `$name` mentions as literal text. Claude user-scope skills
+ * are editable here; the edit lands in every project's `$` menu.
  */
 export function SkillsSettingsPanel({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const settings = useEnvironmentSettings(environmentId);
@@ -137,17 +133,12 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
     const disabled = disabledSkillNames.has(row.name.trim().toLowerCase());
     const rowKey = row.name.trim().toLowerCase();
     const open = openName === rowKey;
-    const detailText = [
-      row.description,
-      row.providerLabels.length > 0
-        ? `From ${row.providerLabels.join(", ")}`
-        : "Not discovered by any provider right now",
-      row.editableInstanceId === undefined && row.providerLabels.length > 0
-        ? "Read-only: only Claude user skills can be edited here."
-        : undefined,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const fromText =
+      row.providerLabels.length === 0
+        ? "Not discovered by any provider right now"
+        : row.providerLabels.length === 1
+          ? `From ${row.providerLabels[0]}`
+          : `From ${row.providerLabels.length} providers: ${row.providerLabels.join(", ")}`;
     return (
       <Collapsible
         key={rowKey}
@@ -164,7 +155,16 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
                 aria-hidden
                 className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-90"
               />
-              <span className="truncate font-medium text-foreground">{row.name}</span>
+              <span
+                className={`min-w-0 truncate font-medium sm:w-64 sm:shrink-0 ${
+                  disabled ? "text-muted-foreground" : "text-foreground"
+                }`}
+              >
+                {row.name}
+              </span>
+              <span className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground/80 group-data-panel-open:hidden sm:block">
+                {row.description ?? "No description"}
+              </span>
             </CollapsibleTrigger>
             <div className="me-3 shrink-0 sm:me-4">
               <Switch
@@ -178,8 +178,16 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
           <CollapsiblePanel>
             {open ? (
               <div className="px-9 pt-1 pb-4 sm:px-10">
-                <p className="max-w-[72ch] whitespace-pre-wrap text-sm text-muted-foreground">
-                  {detailText}
+                {row.description ? (
+                  <p className="max-w-[72ch] whitespace-pre-wrap text-sm text-muted-foreground">
+                    {row.description}
+                  </p>
+                ) : null}
+                <p className="mt-1.5 text-xs text-muted-foreground/80">
+                  {fromText}
+                  {row.editableInstanceId === undefined && row.providerLabels.length > 0
+                    ? " · Read-only: only Claude user skills can be edited here."
+                    : ""}
                 </p>
                 {row.editableInstanceId !== undefined ? (
                   <div className="mt-3 flex items-center gap-2">
@@ -264,7 +272,7 @@ export function SkillsSettingsPanel({ environmentId }: { readonly environmentId:
         {filteredRows.length === 0 && filteredUndiscovered.length === 0 ? (
           <p className="px-3 py-6 text-sm text-muted-foreground sm:px-4">
             {skillRows.length === 0 && undiscoveredDisabled.length === 0
-              ? "No skills discovered yet. Skills appear here once a provider reports them — open a project's composer and type `$` to trigger a workspace scan."
+              ? "No skills discovered yet. Skills appear here once a provider reports them (open a project's composer and type `$` to trigger a workspace scan)."
               : `No skills match "${query.trim()}".`}
           </p>
         ) : (
