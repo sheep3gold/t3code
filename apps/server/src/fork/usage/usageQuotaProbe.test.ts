@@ -530,7 +530,7 @@ describe("usageQuotaProbe", () => {
       },
     }) as never;
 
-  it.live("glm_coding probe merges Zhipu lanes with the glmuse plan window", () => {
+  it.live("glm_coding probe reads lanes and the settled plan allowance from glmuse", () => {
     const requests: Array<{ url: string; authorization?: string | undefined; body?: unknown }> = [];
     return Effect.gen(function* () {
       clearUsageQuotaProbeCache();
@@ -539,31 +539,31 @@ describe("usageQuotaProbe", () => {
       const home = yield* glmCodingHome(fileSystem, path);
       const limits = yield* readInstanceUsageLimits(glmCodingSettings(home), "claude_glm_coding");
       assert.isUndefined(limits?.unavailable);
-      assert.strictEqual(limits?.windows.length, 3);
-      const [fiveHour, weekly, plan] = limits?.windows ?? [];
-      assert.strictEqual(fiveHour?.id, "five_hour");
-      assert.strictEqual(fiveHour?.usedPercent, 9);
+      assert.deepStrictEqual(
+        limits?.windows.map((window) => [window.id, window.label, window.usedPercent]),
+        [
+          ["five_hour", "5 小时窗口", 7],
+          ["weekly_tokens", "周 token 配额", 76],
+          ["mcp_calls", "MCP 调用（91/4000 次）", 2],
+          ["plan_allowance", "总额度（12月10日 到期）", 37.4],
+        ],
+      );
+      const [fiveHour, , , plan] = limits?.windows ?? [];
+      assert.strictEqual(fiveHour?.windowDurationMins, 300);
       assert.strictEqual(
         fiveHour?.resetsAt,
-        DateTime.formatIso(DateTime.makeUnsafe(1794382349557)),
+        DateTime.formatIso(DateTime.makeUnsafe(1795680974673)),
       );
-      assert.strictEqual(weekly?.id, "weekly_tokens");
-      assert.strictEqual(weekly?.usedPercent, 1);
-      assert.strictEqual(plan?.id, "plan_allowance");
-      assert.strictEqual(plan?.usedPercent, 2.5);
-      assert.strictEqual(plan?.remaining, 974523495);
+      // The dashboard's own `remaining` (361194650) ignores settlement.
+      assert.strictEqual(plan?.remaining, 361238987 - 135012109);
       assert.strictEqual(plan?.remainingUnit, "tokens");
-      assert.include(plan?.label ?? "", "12月10日");
 
       const bodyText = requests.map((request) => requestBodyText(request.body)).join("\n");
       assert.notInclude(bodyText, "b".repeat(21));
       assert.include(bodyText, glmCodingKey.slice(0, 28));
       assert.deepStrictEqual(
         requests.map((request) => request.url),
-        [
-          "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
-          "http://glmuse.mlik.top/api/usage-by-key",
-        ],
+        ["http://glmuse.mlik.top/api/usage-by-key"],
       );
     }).pipe(
       Effect.scoped,
@@ -571,41 +571,46 @@ describe("usageQuotaProbe", () => {
         stubClientByRoute(
           [
             {
-              prefix: "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
-              body: {
-                code: 200,
-                msg: "操作成功",
-                data: {
-                  limits: [
-                    {
-                      type: "TOKENS_LIMIT",
-                      unit: 3,
-                      number: 5,
-                      percentage: 9,
-                      nextResetTime: 1794382349557,
-                    },
-                    {
-                      type: "TOKENS_LIMIT",
-                      unit: 6,
-                      number: 1,
-                      percentage: 1,
-                      nextResetTime: 1794964259983,
-                    },
-                  ],
-                  level: "max",
-                },
-                success: true,
-              },
-            },
-            {
               prefix: "http://glmuse.mlik.top/api/usage-by-key",
               body: {
                 success: true,
                 data: {
-                  usageLimit: 1000000000,
-                  usageCount: 25906273,
-                  remaining: 974523495,
+                  usageLimit: 361238987,
                   expireAt: "2026-12-10T15:59:59.999Z",
+                  usageCount: 178641053,
+                  totalUsageCount: 44337,
+                  settleUsageCount: 135012109,
+                  settleMonthCount: 1,
+                  remaining: 361194650,
+                  rate: 1,
+                  quotaData: {
+                    limits: [
+                      {
+                        type: "TOKENS_LIMIT",
+                        unit: 3,
+                        number: 5,
+                        percentage: 7,
+                        nextResetTime: 1795680974673,
+                      },
+                      {
+                        type: "TOKENS_LIMIT",
+                        unit: 6,
+                        number: 1,
+                        percentage: 76,
+                        nextResetTime: 1796175068984,
+                      },
+                      {
+                        type: "TIME_LIMIT",
+                        unit: 5,
+                        number: 1,
+                        usage: 4000,
+                        currentValue: 91,
+                        remaining: 3909,
+                        percentage: 2,
+                        nextResetTime: 1797326260984,
+                      },
+                    ],
+                  },
                 },
               },
             },
@@ -616,7 +621,44 @@ describe("usageQuotaProbe", () => {
     );
   });
 
-  it.live("glm_coding probe keeps the lanes when the plan dashboard fails", () => {
+  it.live("glm_coding probe charges unsettled usage at the key's rate", () => {
+    const requests: Array<{ url: string; authorization?: string | undefined; body?: unknown }> = [];
+    return Effect.gen(function* () {
+      clearUsageQuotaProbeCache();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* glmCodingHome(fileSystem, path);
+      const limits = yield* readInstanceUsageLimits(glmCodingSettings(home), "claude_glm_coding");
+      const plan = limits?.windows.find((window) => window.id === "plan_allowance");
+      assert.strictEqual(plan?.remaining, 1000000000 - 50000000);
+      assert.strictEqual(plan?.usedPercent, 5);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        stubClientByRoute(
+          [
+            {
+              prefix: "http://glmuse.mlik.top/api/usage-by-key",
+              body: {
+                success: true,
+                data: {
+                  usageLimit: 1000000000,
+                  usageCount: 999,
+                  totalUsageCount: 20000000,
+                  settleMonthCount: 0,
+                  rate: 2.5,
+                  quotaData: { limits: [{ type: "TOKENS_LIMIT", unit: 3, percentage: 1 }] },
+                },
+              },
+            },
+          ],
+          requests,
+        ),
+      ),
+    );
+  });
+
+  it.live("glm_coding probe falls back to Zhipu lanes when the dashboard has none", () => {
     const requests: Array<{ url: string; authorization?: string | undefined; body?: unknown }> = [];
     return Effect.gen(function* () {
       clearUsageQuotaProbeCache();
@@ -628,6 +670,13 @@ describe("usageQuotaProbe", () => {
       assert.deepStrictEqual(
         limits?.windows.map((window) => window.id),
         ["five_hour"],
+      );
+      assert.deepStrictEqual(
+        requests.map((request) => request.url),
+        [
+          "http://glmuse.mlik.top/api/usage-by-key",
+          "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+        ],
       );
     }).pipe(
       Effect.scoped,
