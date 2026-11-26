@@ -15,6 +15,9 @@ export EXPO_NO_CAPABILITY_SYNC=1
 # `pnpm rebuild react-native-enriched-markdown` with the proxy set.
 export https_proxy="${T3_BUILD_PROXY:-http://127.0.0.1:17890}" HTTPS_PROXY="${T3_BUILD_PROXY:-http://127.0.0.1:17890}"
 export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
+# The same postinstall vendors tree-sitter + grammars via Node fetch (undici),
+# which ignores the proxy env unless NODE_USE_ENV_PROXY=1 (Node >= 24).
+export NODE_USE_ENV_PROXY=1
 EAS="$HOME/.npm/_npx/49551ffe00939648/node_modules/.bin/eas"
 [ -x "$EAS" ] || EAS="$(command -v eas)"
 
