@@ -1120,9 +1120,11 @@ const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function*
   profileDirectory: string,
 ) {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const tokenExists = (file: string) =>
+    fileSystem.exists(file).pipe(Effect.mapError(probeError("antigravity")));
   let accessToken: string;
   let projectId = "";
-  if (yield* fileSystem.exists(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))) {
+  if (yield* tokenExists(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))) {
     const tokenText = yield* fileSystem
       .readFileString(path.join(profileDirectory, ANTIGRAVITY_TOKEN_FILE))
       .pipe(Effect.mapError(probeError("antigravity")));
@@ -1163,7 +1165,7 @@ const antigravityProbe = Effect.fn("UsageQuotaProbe.antigravityProbe")(function*
     accessToken = refreshedAccess;
     projectId = field("project_id");
   } else {
-    if (!(yield* fileSystem.exists(path.join(profileDirectory, ANTIGRAVITY_CLI_TOKEN_FILE)))) {
+    if (!(yield* tokenExists(path.join(profileDirectory, ANTIGRAVITY_CLI_TOKEN_FILE)))) {
       return windowUnavailable(checkedAt, "Antigravity 未登录 Google 账号");
     }
     const cliText = yield* fileSystem
