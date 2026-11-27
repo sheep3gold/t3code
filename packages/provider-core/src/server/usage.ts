@@ -27,6 +27,8 @@ export interface UsageRecord {
    */
   readonly credits?: number | null;
   readonly speed: UsageSpeed;
+  /** Number of underlying model requests summed into a turn summary when > 1. */
+  readonly modelCalls?: number;
   readonly unresolvedServiceTierTurnId?: string;
   readonly dedupeKey: string | null;
 }
