@@ -89,7 +89,10 @@
         "T3CODE_IOS_PERSONAL_TEAM": "0",
         "T3CODE_IOS_BUNDLE_ID": "com.yangxin.t3code.fork",
         "T3CODE_APPLE_TEAM_ID": "Q6768H569J",
-        "EXPO_NO_CAPABILITY_SYNC": "1"
+        "EXPO_NO_CAPABILITY_SYNC": "1",
+        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_live_Y2xlcmsubGlzdG15YmxvZy5jbiQ",
+        "EXPO_PUBLIC_CLERK_JWT_TEMPLATE": "t3-relay",
+        "T3CODE_RELAY_URL": "https://relay.listmyblog.cn"
       }
     }
   },

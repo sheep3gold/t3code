@@ -50,6 +50,17 @@ if [ "$RC" != 0 ]; then
   exit 1
 fi
 echo "BUILD OK: $IPA (log $LOG)"
+# Without Clerk + relay config the app hides T3 Account and Notifications, so push and
+# Live Activities silently stop working. Refuse to upload such a build.
+if ! unzip -p "$IPA" "Payload/*.app/EXConstants.bundle/app.config" | python3 -c '
+import json, sys
+extra = json.load(sys.stdin).get("extra", {})
+values = [extra.get("clerk", {}).get("publishableKey"), extra.get("clerk", {}).get("jwtTemplate"), extra.get("relay", {}).get("url")]
+sys.exit(0 if all(isinstance(v, str) and v.strip() for v in values) else 1)
+'; then
+  echo "BUILD REJECTED: $IPA lacks Clerk/relay config (check eas.json fork-testflight env); not uploading"
+  exit 1
+fi
 # EAS Submit's archive upload stalls at 0% from this network; upload straight to
 # ASC with the local key when ~/.t3code-asc.env defines ASC_KEY_ID/ASC_ISSUER_ID.
 if [ -f "$HOME/.t3code-asc.env" ]; then
