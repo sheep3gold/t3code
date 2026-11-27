@@ -7,7 +7,7 @@ MERGE="${1:-HEAD}"
 git rev-parse --verify "$MERGE^{commit}" >/dev/null
 
 UPSTREAM_HEAD="$(git rev-parse "$MERGE^2")"
-PREV_MERGE="$(git log --merges --format=%H --skip=1 -1 "$MERGE" || true)"
+PREV_MERGE="$(git log --merges --format=%H --grep="Merge upstream/main into main" --skip=1 -1 "$MERGE" || true)"
 PREV_UPSTREAM=""
 if [ -n "$PREV_MERGE" ]; then
   PREV_UPSTREAM="$(git rev-parse "$PREV_MERGE^2")"
